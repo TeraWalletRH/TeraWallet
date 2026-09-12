@@ -1,0 +1,74 @@
+/* Original section geometry, textures and backgrounds remain in the retained runtime. */
+[data-framer-name="Oberon logo"]{gap:9px!important;overflow:visible!important;width:max-content!important}
+[data-framer-name="Oberon logo"]>[data-framer-component-type="SVG"]{display:none!important}
+.tera-brand-mark{width:30px;height:30px;object-fit:contain;flex:none}
+[data-framer-name="Oberon logo"] p{white-space:nowrap;font-size:19px!important}
+a[href*="lemonsqueezy"],#__framer-badge-container,[data-framer-name="Buy template"],[data-framer-name="Delete me!"],a[href*="facebook.com"],a[href*="framer.link"],a[href*="onetwoframe.com"],img[alt="creator ava"],img[alt="onetwoframe.com"]{display:none!important}
+.tera-social{display:inline-flex!important;width:24px;height:24px;align-items:center;justify-content:center}
+.tera-social svg{width:19px;height:19px;fill:currentColor}
+.tera-demo-entry{width:100%;display:grid;gap:20px;font:14px/1.5 'IBM Plex Mono',monospace;text-transform:uppercase}
+.tera-demo-entry a{display:flex;justify-content:space-between;border:1px solid #89917a;padding:17px 20px;color:inherit;text-decoration:none}
+.tera-demo-entry a:hover{color:#768143}
+.tera-demo-entry p{font:inherit;color:inherit}
+.tera-dialog{color:#18251e;border:1px solid #7f895d;padding:40px;max-width:480px;width:calc(100% - 36px);box-sizing:border-box;background:#f2f0ee;font-family:Inter,Arial,sans-serif}
+.tera-dialog::backdrop{background:rgba(20,32,24,.55);backdrop-filter:blur(5px)}
+.tera-dialog h2{font-size:40px;line-height:1.05;letter-spacing:-2px;font-weight:500;margin:25px 0 18px}
+.tera-dialog p{font-size:16px;line-height:1.6;margin:0 0 26px}
+.tera-dialog button,.tera-dialog a{font:13px/1.3 monospace;text-transform:uppercase;border:1px solid #89917a;padding:14px 18px;background:#243c2d;color:#f2f0ee;cursor:pointer;text-decoration:none}
+.tera-dialog .close{position:absolute;right:12px;top:10px;padding:6px 9px;background:transparent;color:#18251e;border:0;font-size:22px}
+.tera-dialog small{font:12px monospace;text-transform:uppercase}
+.tera-extra-nav{display:flex;flex-direction:column;gap:12px;margin-top:14px}.tera-extra-nav a{color:inherit;font:14px monospace;text-transform:uppercase;text-decoration:none}.tera-extra-nav a:hover{text-decoration:underline}
+a:focus-visible,button:focus-visible{outline:2px solid #768143;outline-offset:5px}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto!important}}
+.tera-brand-mark{transform:scale(1.5)}
+img[alt="your logo"],img[alt="your logo 2"]{object-fit:contain!important;transform:scale(1.5)}
+/* Remove only the old logo overlay inside the retained hero/stack logo slot. */
+[data-framer-name="Logo"]:has(> [data-framer-background-image-wrapper] img[src="/tera/logo.png"]) > [data-framer-component-type="SVG"]{visibility:hidden!important}
+
+ul [data-framer-name^="Logo "]>[data-framer-component-type="SVG"]{visibility:hidden!important} .tera-standard{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;white-space:nowrap;font-family:inherit;font-size:18px;font-weight:500;letter-spacing:-.5px;color:inherit}
+
+/* Typography has room for complete glyphs without altering section artwork. */
+[data-framer-name="Remove Me"]{display:none!important}
+#main h1,#main h2{line-height:1.08!important;--framer-line-height:1.08!important;text-wrap:balance}
+#main h3{line-height:1.25!important;--framer-line-height:1.25!important}
+#main [data-framer-component-type="RichTextContainer"]{overflow:visible!important;min-width:0}
+#main p{overflow-wrap:break-word}
+#main h1>span,#main h2>span,#main h3>span{max-width:100%}
+#main h1>span{vertical-align:baseline}
+footer nav a{line-height:1.5!important}
+footer [data-framer-name="Oberon logo"] p{font-size:16px!important}
+@media(max-width:809px){#main h1{line-height:1.12!important;--framer-line-height:1.12!important;letter-spacing:-.045em!important}#main h2{line-height:1.13!important;--framer-line-height:1.13!important}#main [data-framer-component-type="RichTextContainer"]{max-width:100%}footer .tera-demo-entry a{padding:15px 14px;font-size:12px}.tera-standard{font-size:15px}.tera-dialog{padding:28px}.tera-dialog h2{font-size:34px}}
+@media(max-width:359px){#main h1{font-size:34px!important;--framer-font-size:34px!important}#main h2{font-size:29px!important;--framer-font-size:29px!important}}
+/* Workflow names reserve a separate date column, including long labels. */
+a[data-framer-name^="Case "]:has(> [data-framer-component-type="RichTextContainer"]){align-items:flex-start!important;height:auto!important;min-height:32px}
+a[data-framer-name^="Case "]:has(> [data-framer-component-type="RichTextContainer"]) > [data-framer-component-type="RichTextContainer"]:first-child{flex:1 1 0!important;width:0!important;min-width:0!important;margin-right:16px!important}
+a[data-framer-name^="Case "]:has(> [data-framer-component-type="RichTextContainer"]) > [data-framer-component-type="RichTextContainer"]:not(:first-child){flex:0 0 auto!important;padding-top:4px}
+a[data-framer-name^="Case "] p{line-height:1.2!important;--framer-line-height:1.2!important}
+
+.tera-is-home #home h1{max-width:100%!important;text-wrap:wrap!important}
+
+/* Labels remain present in the original entrance variants and on anchor jumps. */
+.framer-fSAj6 .framer-o6g4ji{min-width:0;max-width:100%}
+.framer-fSAj6 p{white-space:normal!important;line-height:1.35!important;--framer-line-height:1.35!important;text-align:center}
+[data-framer-name="Darkone - Start"] .framer-o6g4ji p,[data-framer-name="Orangeone - Start"] .framer-o6g4ji p{color:#f2f0ee!important;--framer-text-color:#f2f0ee!important}
+footer [data-framer-name="Powered by"]{display:none!important}
+
+.tera-obsolete-link{display:none!important}.tera-extra-nav a{font:14px/1.5 'IBM Plex Mono',monospace;color:#1d2b23}.tera-extra-nav{gap:10px;margin-top:10px}
+/* Privacy image labels must wrap inside the image, not crop at the old name width. */
+#principles .framer-sHOYF .framer-1jrfleg{left:66px!important;right:14px!important;width:auto!important;max-width:none!important;overflow:visible!important}
+#principles .framer-sHOYF .framer-1a96hkp{width:100%!important;white-space:normal!important;min-width:0!important}
+#principles .framer-sHOYF .framer-1a96hkp p{white-space:normal!important;overflow-wrap:break-word;line-height:1.3!important;--framer-line-height:1.3!important;text-wrap:pretty}
+@media(max-width:809px){#principles .framer-sHOYF .framer-1jrfleg{left:54px!important;right:12px!important;bottom:24px!important}#principles .framer-sHOYF .framer-1a96hkp p{font-size:16px!important;--framer-font-size:16px!important}}
+/* Give entrance-state CTA labels their full available line width. */
+.framer-fSAj6 .framer-1bvuks0{width:calc(100% - 32px)!important;max-width:calc(100% - 32px)!important;min-width:0!important;justify-content:center!important}
+.framer-fSAj6 .framer-o6g4ji{width:max-content!important;max-width:100%!important;flex:0 1 auto!important}
+
+/* Let the two-line stack heading reserve its full height below the section label. */
+@media (min-width: 1200px) {
+  #allstack .framer-1akvk5g { gap: 24px; }
+  #allstack .framer-1kp6v2u {
+    position: relative !important;
+    top: auto !important;
+    transform: none !important;
+  }
+}
