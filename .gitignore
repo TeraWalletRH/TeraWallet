@@ -1,0 +1,50 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+backend/.env
+*.local
+.dev.vars
+
+# Dependencies
+node_modules/
+bun.lockb
+
+# Build outputs
+dist/
+dist-ssr/
+build/
+out/
+.next/
+.output/
+.vinxi/
+.tanstack/**
+.nitro/
+.vercel/
+.wrangler/
+
+# Contracts
+contracts/out/
+contracts/cache/
+contracts/lib/
+contracts/broadcast/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# OS & Editor files
+.DS_Store
+*.pem
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?

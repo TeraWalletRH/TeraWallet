@@ -1,0 +1,17 @@
+(()=>{'use strict';
+const key='tera-preloader-v1',replay=new URLSearchParams(location.search).get('intro')==='1';try{if(sessionStorage.getItem(key)&&!replay)return}catch{}
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches,start=Date.now();
+let finished=false,progress=0;
+const overlay=document.createElement('div');overlay.id='tera-preloader';overlay.className='tera-preloader';overlay.setAttribute('role','status');overlay.setAttribute('aria-label','Preparing Tera Wallet');
+overlay.innerHTML=`<div class="tera-load-shutters" aria-hidden="true">${Array.from({length:5},(_,i)=>`<i style="--i:${i}"></i>`).join('')}</div><div class="tera-load-top"><span class="tera-load-brand">TERA WALLET</span><span class="tera-load-edition">Private by default / Owner approved</span></div><div class="tera-load-center"><div class="tera-load-mark"><img src="/tera/logo.png" alt="" decoding="async"></div><div class="tera-load-title" aria-hidden="true">${[...'TERA'].map((c,i)=>`<span style="--i:${i}">${c}</span>`).join('')}</div><p class="tera-load-subtitle">Your assets. Your rules. Your authority.</p><div class="tera-load-track" aria-hidden="true">${'<i></i>'.repeat(5)}</div><div class="tera-load-readout"><span class="tera-load-stage">Opening workspace</span><span class="tera-load-percent" aria-hidden="true">00 / 100</span></div></div><div class="tera-load-bottom"><span>Permission starts with you.</span><button class="tera-load-skip">Enter site ↗</button></div>`;
+document.documentElement.classList.add('tera-loading');document.documentElement.append(overlay);
+const update=(value,label)=>{if(finished||value<progress)return;progress=value;overlay.querySelector('.tera-load-stage').textContent=label;overlay.querySelector('.tera-load-percent').textContent=String(value).padStart(2,'0')+' / 100';overlay.querySelectorAll('.tera-load-track i').forEach((e,i)=>e.dataset.active=String(value>=(i+1)*20))};
+function finish(){if(finished)return;finished=true;clearTimeout(deadline);try{sessionStorage.setItem(key,'1')}catch{}document.documentElement.classList.remove('tera-loading');overlay.classList.add('is-exiting');document.removeEventListener('keydown',keys,true);setTimeout(()=>overlay.remove(),reduced?0:950)}
+function keys(e){if(e.key==='Escape'){e.preventDefault();finish()}else if(e.key==='Tab'){e.preventDefault();overlay.querySelector('button').focus()}}
+document.addEventListener('keydown',keys,true);overlay.querySelector('button').onclick=finish;
+const deadline=setTimeout(finish,6000);
+const dom=new Promise(resolve=>{if(document.readyState!=='loading')resolve();else document.addEventListener('DOMContentLoaded',resolve,{once:true})});
+const timeout=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+(async()=>{await dom;if(finished)return;document.body.prepend(overlay);update(20,'Document ready');await Promise.race([document.fonts.ready,timeout(2000)]);update(40,'Typography');await Promise.race([overlay.querySelector('img').decode().catch(()=>{}),timeout(1500)]);update(60,'Brand');await Promise.race([new Promise(resolve=>{function check(){if(finished||document.getElementById('tera-header')||document.getElementById('wallet-content'))resolve();else requestAnimationFrame(check)}check()}),timeout(1800)]);update(80,'Interface');await timeout(Math.max(0,(reduced?0:1250)-(Date.now()-start)));if(finished)return;update(100,'Welcome to Tera');await timeout(reduced?0:200);finish()})().catch(finish);
+addEventListener('pagehide',()=>{if(!finished)finish()},{once:true});
+})();
