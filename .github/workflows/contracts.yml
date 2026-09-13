@@ -26,8 +26,11 @@ jobs:
       - name: Install Foundry
         uses: foundry-rs/foundry-toolchain@v1
 
-      - name: Install dependencies
-        run: forge install OpenZeppelin/openzeppelin-contracts forge-rs/forge-std
+      - name: Clone Foundry dependencies
+        run: |
+          mkdir -p lib
+          git clone --depth 1 https://github.com/foundry-rs/forge-std lib/forge-std
+          git clone --depth 1 --branch v5.1.0 https://github.com/OpenZeppelin/openzeppelin-contracts lib/openzeppelin-contracts
 
       - name: Build contracts
         run: forge build --sizes
