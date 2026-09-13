@@ -11,7 +11,8 @@
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "viem": "^2.56.5"
   },
   "devDependencies": {
     "@types/express": "^5.0.0",
