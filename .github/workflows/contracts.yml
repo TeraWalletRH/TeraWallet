@@ -27,7 +27,7 @@ jobs:
         uses: foundry-rs/foundry-toolchain@v1
 
       - name: Install dependencies
-        run: forge install
+        run: forge install OpenZeppelin/openzeppelin-contracts forge-rs/forge-std
 
       - name: Build contracts
         run: forge build --sizes
