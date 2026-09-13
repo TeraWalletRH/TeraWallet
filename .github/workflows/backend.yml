@@ -1,13 +1,13 @@
-name: Backend CI/CD
+name: backend
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     paths:
       - "backend/**"
       - ".github/workflows/backend.yml"
   pull_request:
-    branches: [main, master]
+    branches: [main]
     paths:
       - "backend/**"
       - ".github/workflows/backend.yml"
@@ -33,7 +33,7 @@ jobs:
           bun-version: latest
 
       - name: Install dependencies
-        run: bun install --frozen-lockfile || bun install
+        run: bun install
 
       - name: Type check
         run: bun run check
@@ -50,6 +50,9 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -57,8 +60,9 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Resolve lowercase repository name
+        id: meta
+        run: echo "repo=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push backend image
         uses: docker/build-push-action@v6
@@ -67,8 +71,8 @@ jobs:
           file: ./backend/Dockerfile
           push: true
           tags: |
-            ghcr.io/${{ github.repository }}/backend:latest
-            ghcr.io/${{ github.repository }}/backend:${{ github.sha }}
+            ghcr.io/${{ steps.meta.outputs.repo }}-backend:latest
+            ghcr.io/${{ steps.meta.outputs.repo }}-backend:${{ github.sha }}
 
   release:
     name: Create Release
@@ -82,23 +86,21 @@ jobs:
           fetch-depth: 0
 
       - name: Generate release tag
-        id: vars
-        run: |
-          TAG="backend-$(date +'%Y%m%d%H%M')-${GITHUB_SHA::7}"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+        id: tag
+        run: echo "name=backend-$(date -u +%Y%m%d%H%M)-$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Push release tag
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ steps.vars.outputs.tag }}
-          git push origin ${{ steps.vars.outputs.tag }}
+          git tag "${{ steps.tag.outputs.name }}"
+          git push origin "${{ steps.tag.outputs.name }}"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.vars.outputs.tag }}
-          name: Backend Release ${{ steps.vars.outputs.tag }}
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: Backend Release ${{ steps.tag.outputs.name }}
           generate_release_notes: true
 
   deploy:
@@ -107,12 +109,13 @@ jobs:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Render Deploy Hook
+      - name: Trigger deploy hook
+        env:
+          DEPLOY_HOOK_URL: ${{ secrets.RENDER_DEPLOY_HOOK_URL || secrets.DEPLOY_HOOK_URL }}
         run: |
-          if [ -z "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" ]; then
-            echo "RENDER_DEPLOY_HOOK_URL secret is not configured; skipping deployment trigger."
+          if [ -z "$DEPLOY_HOOK_URL" ]; then
+            echo "Deploy hook is not configured; skipping deploy."
             exit 0
           fi
-
-          echo "Triggering Render deploy hook..."
-          curl -fsS -X POST "${{ secrets.RENDER_DEPLOY_HOOK_URL }}" || echo "Deploy hook request finished with non-fatal status."
+          echo "Triggering deploy hook..."
+          curl -fsSL -X POST "$DEPLOY_HOOK_URL" || echo "Deploy hook finished with non-fatal status."
