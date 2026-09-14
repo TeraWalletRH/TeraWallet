@@ -111,13 +111,30 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
       }
 
       let action: "BUY" | "SELL" | "TRANSFER" | "CLAIM_YIELD" = "BUY";
-      if (lowerPrompt.includes("sell") || lowerPrompt.includes("liquidate") || lowerPrompt.includes("exit")) {
+      if (
+        lowerPrompt.includes("buy") ||
+        lowerPrompt.includes("invest") ||
+        lowerPrompt.includes("allocate") ||
+        lowerPrompt.includes("purchase")
+      ) {
+        action = "BUY";
+      } else if (
+        lowerPrompt.includes("sell") ||
+        lowerPrompt.includes("liquidate") ||
+        lowerPrompt.includes("exit")
+      ) {
         action = "SELL";
-      } else if (lowerPrompt.includes("yield") || lowerPrompt.includes("claim") || lowerPrompt.includes("dividend")) {
+      } else if (
+        lowerPrompt.includes("claim") ||
+        lowerPrompt.includes("harvest") ||
+        lowerPrompt.includes("collect") ||
+        lowerPrompt.includes("dividend")
+      ) {
         action = "CLAIM_YIELD";
       } else if (lowerPrompt.includes("send") || lowerPrompt.includes("transfer")) {
         action = "TRANSFER";
       }
+
 
       const matchNum = prompt.match(/\$?(\d+(\.\d+)?)/);
       const parsedDollars = matchNum ? parseFloat(matchNum[1]) : 100;

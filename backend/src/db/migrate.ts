@@ -3,6 +3,10 @@ import path from "node:path";
 import pool from "./index";
 
 export async function migrate(): Promise<void> {
+  if (!pool) {
+    console.warn("No DATABASE_URL configured, skipping database migration.");
+    return;
+  }
   const client = await pool.connect();
 
   try {

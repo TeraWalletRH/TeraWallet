@@ -48,3 +48,6 @@ pnpm-debug.log*
 *.njsproj
 *.sln
 *.sw?
+
+# Documentation
+technical-docs/
