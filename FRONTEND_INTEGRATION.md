@@ -1,49 +1,51 @@
 # Tera Wallet · Frontend Integration Guide
 
-> **Base URL (Production / Render)**: `https://terrawallet-backend-latest.onrender.com`  
-> **Base URL (Local)**: `http://localhost:3001`  
+> **Base URL (Production)**: `https://api.terawallet.app`  
+> **Render Fallback URL**: `https://terrawallet-backend-latest.onrender.com`  
+> **Local Development URL**: `http://localhost:3001`  
 > **Robinhood Chain Mainnet ID**: `4663` (`https://rpc.mainnet.chain.robinhood.com`)  
-> **Robinhood Chain Testnet ID**: `46630` (`https://testnet-rpc.robinhood.com`)  
 > **Block Explorer**: [https://robinhoodchain.blockscout.com](https://robinhoodchain.blockscout.com)
 
 ---
 
 ## 1. Core Architecture & Mental Model
 
-Tera Wallet uses the **Prepared Transaction Pattern** for supervised Real-World Asset (RWA) actions on Robinhood Chain:
+Tera Wallet uses the **Prepared Transaction Pattern** for supervised Real-World Asset (RWA) and tokenized equity actions on Robinhood Chain:
 
-1. **AI Agent or User initiates an intent**:
-   - Natural language via `POST /api/agent/propose` (e.g. *"Invest $250 into SpaceX stock"*), OR
-   - Direct typed payload via `POST /api/intent/prepare`.
-2. **Backend runs 5 deterministic security gates**:
-   - Gate 1: **Asset Registry** (is asset approved and not paused?)
-   - Gate 2: **Eligibility Preflight** (transfer verification & compliance)
-   - Gate 3: **Policy Vault** (private spend limits, e.g. daily/single trade caps)
-   - Gate 4: **Risk Engine** (slippage, non-zero amount, price impact)
-   - Gate 5: **Approval Controller** (requires owner EOA signature)
-3. **Backend returns `preparedTransaction`**:
-   - A pre-encoded transaction `{ to, data, value, chainId, actionHash }`.
-4. **User wallet pops up & signs**:
-   - The frontend calls `sendTransaction({ to, data, value })` using standard wallet providers (MetaMask, Rainbow, Coinbase Wallet, Robinhood Wallet).
-   - The user pays gas directly. **No bundlers, no UserOps, and no relayer fees required.**
-5. **Receipt recorded**:
-   - Frontend posts the resulting `txHash` to `POST /api/intent/receipt` for tamper-proof audit trails.
+1. **Zero Custom Contract Deployments Needed**:
+   - The user connects their standard wallet (MetaMask, Rainbow, Robinhood Wallet).
+   - Execution targets the **canonical on-chain contracts already deployed on Robinhood Chain** (Uniswap V4 Universal Router for swaps, official token contracts for transfers).
+2. **Backend Signs Nothing that Costs Gas**:
+   - The backend has **zero private keys with gas funds** and never submits transactions to the chain.
+   - The backend acts as a deterministic compiler & security gatekeeper.
+3. **5 Deterministic Security Gates**:
+   - Gate 1: **Asset Registry** (is the token verified in the approved Robinhood catalog?)
+   - Gate 2: **Eligibility Preflight** (token transferability check)
+   - Gate 3: **Policy Vault** (private spend limits, daily and single trade caps stored in DB)
+   - Gate 4: **Risk Engine** (slippage verification, price bounds, non-zero amount)
+   - Gate 5: **Approval Controller** (prompts user wallet signature)
+4. **User Approves & Pays Gas Directly**:
+   - Backend returns `preparedTransaction` (`{ to, data, value, chainId, actionHash }`).
+   - The frontend calls standard Wagmi/Viem `sendTransaction({ to, data, value })`.
+   - The user's wallet pops up, they confirm, and pay gas directly.
+5. **Receipt Recorded in Audit Trail**:
+   - Frontend calls `POST /api/intent/receipt` with `{ actionHash, txHash, recipient }` to record confirmed execution.
 
 ```
-┌─────────────────┐       ┌──────────────────────┐       ┌────────────────────────┐
-│  Frontend / UI  │ ────► │ Backend (5 Gates API)│ ────► │ User Wallet (Metamask) │
-│ (TanStack/Wagmi)│ ◄──── │ (Prepared Tx Calldata│ ◄──── │ (Owner signs & pays gas│
-└────────┬────────┘       └──────────────────────┘       └───────────┬────────────┘
-         │                                                           │
-         │                        txHash                             │
-         └───────────────────────────────────────────────────────────┘
+┌─────────────────────────┐         ┌──────────────────────────────┐         ┌────────────────────────┐
+│      Frontend / UI      │ ──────► │   Backend (api.terawallet)   │ ──────► │ User Wallet (Metamask) │
+│ (TanStack Start / Wagmi)│ ◄────── │(5 Gates → Prepared Tx Calldata) ◄────── │ (Owner signs & pays gas│
+└────────────┬────────────┘         └──────────────────────────────┘         └───────────┬────────────┘
+             │                                                                           │
+             │                           txHash                                          │
+             └───────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## 2. Supported Robinhood Chain Assets (Chain ID: 4663)
 
-All assets below are canonical on Robinhood Chain Mainnet:
+All assets below are live on Robinhood Chain Mainnet:
 
 | Symbol | Name | Contract Address | Decimals | Category |
 |---|---|---|---|---|
@@ -69,7 +71,7 @@ All assets below are canonical on Robinhood Chain Mainnet:
 ## 3. API Reference & Payloads
 
 ### 1. AI Agent Proposal (Natural Language Intent)
-Translates user conversational input into a verified 5-gate prepared transaction in a single round-trip.
+Translates user conversational input into a structured intent and evaluates all 5 gates.
 
 * **Endpoint**: `POST /api/agent/propose`
 * **Request Body**:
@@ -77,7 +79,7 @@ Translates user conversational input into a verified 5-gate prepared transaction
 {
   "prompt": "Buy $250 worth of SpaceX stock on Robinhood Chain",
   "ownerAddress": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
-  "accountAddress": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" // optional, defaults to owner
+  "accountAddress": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8" // optional, defaults to ownerAddress
 }
 ```
 * **Success Response (`200 OK`)**:
@@ -101,7 +103,7 @@ Translates user conversational input into a verified 5-gate prepared transaction
     { "gate": "approval_controller", "passed": true, "details": { "requiresOwnerSignature": true } }
   ],
   "preparedTransaction": {
-    "to": "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
+    "to": "0x8876789976decbfcbbbe364623c63652db8c0904", // Canonical Universal Router
     "data": "0x...",
     "value": "0x0",
     "chainId": 4663,
@@ -141,7 +143,7 @@ Translates user conversational input into a verified 5-gate prepared transaction
 ---
 
 ### 3. Record Broadcast Receipt
-Call this right after the user signs and broadcasts the transaction in their wallet.
+Call this after the user signs and broadcasts the transaction in their wallet.
 
 * **Endpoint**: `POST /api/intent/receipt`
 * **Request Body**:
@@ -179,39 +181,34 @@ Call this right after the user signs and broadcasts the transaction in their wal
 ---
 
 ### 5. Session Keys Management
-Allow users to create scoped session keys for low-risk actions (e.g. daily yield claims):
+Allow users to create and manage scoped session keys:
 
-* **Prepare On-Chain Registration**: `POST /api/session/prepare-register`
+* **Store Active Session**: `POST /api/session/register`
+* **List Account Sessions**: `GET /api/session/:accountAddress`
+* **Instant One-Tap Revocation in DB**: `POST /api/session/revoke`
 ```json
 {
   "accountAddress": "0x7099...",
-  "sessionKeyAddress": "0x90F7...",
-  "validUntil": 1750000000,
-  "dailyLimitUsdCents": 50000,
-  "allowedTargets": ["0x8876789976decbfcbbbe364623c63652db8c0904"]
+  "sessionKeyAddress": "0x90F7..."
 }
 ```
-* **Store Active Session**: `POST /api/session/register`
-* **List Account Sessions**: `GET /api/session/:accountAddress`
-* **Instant One-Tap Revocation Calldata**: `POST /api/session/prepare-revoke`
-* **Update DB Revocation**: `POST /api/session/revoke`
 
 ---
 
 ### 6. Account & Audit History
 * **Register Account**: `POST /api/account/register` (`{ ownerAddress, accountAddress }`)
-* **Account Stats & Status**: `GET /api/account/:address`
-* **Full Audit History**: `GET /api/account/:address/history`
+* **Account Stats & Overview**: `GET /api/account/:address`
+* **Full Intent & Receipt History**: `GET /api/account/:address/history`
 
 ---
 
-## 4. Frontend Code Integration Example (Wagmi / React)
+## 4. Frontend Code Integration Example (React / Wagmi)
 
 ```tsx
 import React, { useState } from "react";
 import { useAccount, useSendTransaction } from "wagmi";
 
-const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://terrawallet-backend-latest.onrender.com";
+const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://api.terawallet.app";
 
 export function AgentTradeProposal() {
   const { address } = useAccount();
@@ -255,14 +252,14 @@ export function AgentTradeProposal() {
     try {
       const tx = proposal.preparedTransaction;
 
-      // 2. User wallet popup to sign and broadcast tx directly
+      // 2. User wallet popup to sign and broadcast tx directly (User pays gas)
       const hash = await sendTransactionAsync({
         to: tx.to,
         data: tx.data,
         value: BigInt(tx.value || 0),
       });
 
-      // 3. Record receipt in audit history
+      // 3. Record confirmed receipt in audit history
       await fetch(`${BACKEND_URL}/api/intent/receipt`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -295,7 +292,7 @@ export function AgentTradeProposal() {
 
       {proposal && (
         <div className="p-4 bg-gray-50 dark:bg-zinc-900 rounded space-y-2">
-          <p className="text-sm">{proposal.explanation}</p>
+          <p className="text-sm font-medium">{proposal.explanation}</p>
           <div className="flex gap-2">
             {proposal.gates.map((g: any) => (
               <span key={g.gate} className="text-xs px-2 py-1 bg-green-100 text-green-800 rounded">
@@ -315,10 +312,9 @@ export function AgentTradeProposal() {
 
 ---
 
-## 5. What Unblocks the Full Pipeline
+## 5. Summary for Frontend Developer
 
-1. **CORS**: Permissive CORS (`Access-Control-Allow-Origin: *`) is pre-configured on all routes in `backend/src/app.ts`, so browser fetches from `localhost:3000` or production Vercel domains will never fail preflights.
-2. **Environment Variable for Frontend**:
-   Set `VITE_BACKEND_URL=https://terrawallet-backend-latest.onrender.com` in your frontend environment.
-3. **Smart Contracts Deployment (Optional)**:
-   The backend works out of the box with counterfactual EOA/account execution. To register live factory and session manager contracts on Robinhood Chain Testnet or Mainnet, broadcast `contracts/script/Deploy.s.sol` using a funded deployer key.
+1. **Endpoint**: Point all API calls to `https://api.terawallet.app`.
+2. **CORS**: Pre-configured and verified (`Access-Control-Allow-Origin: *`).
+3. **Zero Contract Deployments Needed**: All prepared transactions point directly to the canonical Universal Router or token contracts.
+4. **No Relayer / Bundler Keys**: The user wallet pays gas directly on Robinhood Chain Mainnet (`4663`).
