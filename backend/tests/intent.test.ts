@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import request from "supertest";
 import app from "../src/app";
+import { env } from "../src/env";
 
 describe("Intent Pipeline & Prepared Transaction API", () => {
   const sampleOwner = "0x1111111111111111111111111111111111111111" as const;
@@ -26,7 +27,7 @@ describe("Intent Pipeline & Prepared Transaction API", () => {
     expect(tx.to).toBeDefined();
     expect(tx.data).toStartWith("0x");
     expect(tx.actionHash).toStartWith("0x");
-    expect(tx.chainId).toBe(46630);
+    expect(tx.chainId).toBe(env.rhcChainId);
   });
 
   it("successfully prepares a CLAIM_YIELD transaction", async () => {
