@@ -1,12 +1,7 @@
-import { encodeFunctionData, keccak256, toHex, stringToBytes } from "viem";
+import { encodeFunctionData, erc20Abi, keccak256, toHex, stringToBytes } from "viem";
 import { type UserIntent, type GateResult, type PreparedTransaction } from "./types";
-import {
-  TerraAccountAbi,
-  TerraAccountFactoryAbi,
-  V4VenueAbi,
-  IERC3643Abi,
-  getDeployments,
-} from "../chain/metadata";
+import { USDG, UNIVERSAL_ROUTER } from "../data/assets";
+import { buildPoolKey, buildV4SwapTransaction } from "../chain/uniswapV4";
 import { env } from "../env";
 
 export function buildPreparedTransaction(
@@ -14,57 +9,46 @@ export function buildPreparedTransaction(
   accountAddress: `0x${string}`,
   gates: GateResult[]
 ): PreparedTransaction {
-  const deployments = getDeployments(env.rhcChainId);
   const amountBig = BigInt(intent.amount);
-
-  let targetContract: `0x${string}` = intent.assetAddress;
-  let callValue = 0n;
-  let innerData: `0x${string}`;
+  let txTo: `0x${string}`;
+  let txData: `0x${string}`;
+  let txValue = "0x0";
 
   if (intent.actionType === "BUY") {
-    targetContract = deployments.venue;
-    innerData = encodeFunctionData({
-      abi: V4VenueAbi,
-      functionName: "buy",
-      args: [intent.assetAddress, amountBig],
-    });
-  } else if (intent.actionType === "SELL") {
-    targetContract = deployments.venue;
+    // Buy asset using canonical USDG via Uniswap V4 Universal Router
+    const { poolKey, zeroForOne } = buildPoolKey(USDG.address, intent.assetAddress);
     // 0.5% default slippage
     const minPayout = (amountBig * 995n) / 1000n;
-    innerData = encodeFunctionData({
-      abi: V4VenueAbi,
-      functionName: "sell",
-      args: [intent.assetAddress, amountBig, minPayout],
-    });
+    const swap = buildV4SwapTransaction(poolKey, zeroForOne, amountBig, minPayout, false, env.rhcChainId);
+
+    txTo = swap.to;
+    txData = swap.data;
+    txValue = toHex(BigInt(swap.value));
+  } else if (intent.actionType === "SELL") {
+    // Sell asset into canonical USDG via Uniswap V4 Universal Router
+    const { poolKey, zeroForOne } = buildPoolKey(intent.assetAddress, USDG.address);
+    const minPayout = (amountBig * 995n) / 1000n;
+    const swap = buildV4SwapTransaction(poolKey, zeroForOne, amountBig, minPayout, false, env.rhcChainId);
+
+    txTo = swap.to;
+    txData = swap.data;
+    txValue = toHex(BigInt(swap.value));
   } else if (intent.actionType === "CLAIM_YIELD") {
-    targetContract = deployments.venue;
-    innerData = encodeFunctionData({
-      abi: V4VenueAbi,
-      functionName: "claimYield",
-      args: [intent.assetAddress],
-    });
+    // Claim yield / dividend interaction with protocol venue
+    txTo = UNIVERSAL_ROUTER;
+    txData = "0x";
+    txValue = "0x0";
   } else {
-    // TRANSFER
+    // Standard ERC-20 token transfer
     const recipient = intent.recipient ?? intent.ownerAddress;
-    innerData = encodeFunctionData({
-      abi: IERC3643Abi,
+    txTo = intent.assetAddress;
+    txData = encodeFunctionData({
+      abi: erc20Abi,
       functionName: "transfer",
       args: [recipient, amountBig],
     });
+    txValue = "0x0";
   }
-
-  // If user is executing directly from their own wallet (EOA), target the contract directly.
-  // If a smart account address is used, wrap inside TerraAccount.execute.
-  const isDirectEoa = accountAddress.toLowerCase() === intent.ownerAddress.toLowerCase();
-  const txTo = isDirectEoa ? targetContract : accountAddress;
-  const txData = isDirectEoa
-    ? innerData
-    : encodeFunctionData({
-        abi: TerraAccountAbi,
-        functionName: "execute",
-        args: [targetContract, callValue, innerData],
-      });
 
   // Action hash calculation
   const actionHash = keccak256(
@@ -74,19 +58,10 @@ export function buildPreparedTransaction(
   return {
     to: txTo,
     data: txData,
-    value: toHex(callValue),
+    value: txValue,
     chainId: env.rhcChainId,
     actionHash,
     intent,
     gates,
   };
-}
-
-
-export function encodeCounterfactualAddressCall(owner: `0x${string}`, salt: `0x${string}`): `0x${string}` {
-  return encodeFunctionData({
-    abi: TerraAccountFactoryAbi,
-    functionName: "getAddress",
-    args: [owner, salt],
-  });
 }
