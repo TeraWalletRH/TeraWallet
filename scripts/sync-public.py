@@ -95,6 +95,7 @@ def main():
             out.write(f"commit refs/heads/{LOCAL_EXPORT_REF}\n".encode("utf-8"))
         elif line.startswith(b"M ") or line.startswith(b"D ") or line.startswith(b"R ") or line.startswith(b"C "):
             parts = line.rstrip(b"\r\n").split(b" ")
+            path = parts[-1]
             if (
                 path == b".lovable"
                 or path.startswith(b".lovable/")
@@ -102,6 +103,7 @@ def main():
                 or path.startswith(b"technical-docs/")
                 or path == b"FRONTEND_INTEGRATION.md"
             ):
+
                 if len(parts) > 2 and parts[2] == b"inline":
 
                     data_line = inp.readline()
