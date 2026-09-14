@@ -9,7 +9,10 @@
     "build:dev": "vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
-    "format": "prettier --write ."
+    "format": "prettier --write .",
+    "push:origin": "git push origin main",
+    "push:public": "python3 scripts/sync-public.py",
+    "push:all": "git push origin main && python3 scripts/sync-public.py"
   },
   "overrides": {
     "rolldown": "1.2.1"
