@@ -8,28 +8,28 @@ import { type UserIntent } from "../pipeline/types";
 const router = Router();
 
 const SYSTEM_PROMPT = `
-You are the Tera Wallet AI Agent Assistant on Robinhood Chain.
+You are the Tera Wallet AI Agent Assistant on Robinhood Chain (Chain ID: 4663).
 The core principle of Tera Wallet is:
 "The agent formulates an intent. Tera Wallet determines whether the intent is permitted. The owner retains final authority."
 
 Your task:
-Analyze the user's natural language request regarding Real World Assets (RWAs).
-Select the most appropriate approved asset from the Tera Asset Registry:
+Analyze the user's natural language request regarding Real World Assets (RWAs) and tokenized assets on Robinhood Chain.
+Select the most appropriate approved asset from the Robinhood Asset Registry:
 ${JSON.stringify(
   SUPPORTED_RWA_ASSETS.map((a) => ({
     symbol: a.symbol,
     name: a.name,
     address: a.address,
     category: a.category,
-    apy: `${a.yieldApyPercent}%`,
     minInvestment: `$${a.minInvestmentUsd}`,
+    decimals: a.decimals,
   })),
   null,
   2
 )}
 
 Determine the intent actionType (BUY, SELL, TRANSFER, CLAIM_YIELD).
-Determine the token amount in base units (assuming 6 decimals for USD RWAs, so $100 = "100000000").
+Determine the token amount in base units (e.g. 18 decimals for equities/WETH/ETH, 6 decimals for USDG).
 Calculate maxSpendUsdCents (e.g. $100 = 10000 cents).
 
 You MUST respond strictly with a valid JSON object matching this schema:
@@ -38,12 +38,13 @@ You MUST respond strictly with a valid JSON object matching this schema:
   "intent": {
     "assetAddress": "0x...",
     "actionType": "BUY" | "SELL" | "TRANSFER" | "CLAIM_YIELD",
-    "amount": "100000000",
+    "amount": "1000000000000000000",
     "maxSpendUsdCents": 10000
   }
 }
 Do not include markdown formatting or backticks around the JSON.
 `;
+
 
 /**
  * POST /api/agent/propose
@@ -101,10 +102,15 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
     // Heuristic fallback if LLM was skipped or failed
     if (!intentDraft.assetAddress) {
       const lowerPrompt = prompt.toLowerCase();
-      let matchedAsset = SUPPORTED_RWA_ASSETS[0]; // default USYC
+      let matchedAsset = findAsset("SPCX") ?? SUPPORTED_RWA_ASSETS[0];
 
+      // Check all assets and aliases
       for (const asset of SUPPORTED_RWA_ASSETS) {
-        if (lowerPrompt.includes(asset.symbol.toLowerCase()) || lowerPrompt.includes(asset.category.toLowerCase())) {
+        if (
+          lowerPrompt.includes(asset.symbol.toLowerCase()) ||
+          lowerPrompt.includes(asset.name.toLowerCase()) ||
+          (asset.underlyingTicker && lowerPrompt.includes(asset.underlyingTicker.toLowerCase()))
+        ) {
           matchedAsset = asset;
           break;
         }
@@ -135,10 +141,10 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
         action = "TRANSFER";
       }
 
-
       const matchNum = prompt.match(/\$?(\d+(\.\d+)?)/);
       const parsedDollars = matchNum ? parseFloat(matchNum[1]) : 100;
-      const amountUnits = BigInt(Math.floor(parsedDollars * 1_000_000)).toString();
+      const multiplier = BigInt(10) ** BigInt(matchedAsset.decimals);
+      const amountUnits = (BigInt(Math.floor(parsedDollars)) * multiplier).toString();
 
       intentDraft = {
         assetAddress: matchedAsset.address,
@@ -147,8 +153,9 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
         maxSpendUsdCents: Math.floor(parsedDollars * 100),
       };
 
-      explanation = `Drafted proposal to ${action} $${parsedDollars} worth of ${matchedAsset.symbol} (${matchedAsset.name}, APY: ${matchedAsset.yieldApyPercent}%). Verified through deterministic compliance checks before owner signature.`;
+      explanation = `Drafted proposal to ${action} $${parsedDollars} worth of ${matchedAsset.symbol} (${matchedAsset.name}) on Robinhood Chain. Verified through deterministic compliance checks before owner signature.`;
     }
+
 
     const fullIntent: UserIntent = {
       ownerAddress,

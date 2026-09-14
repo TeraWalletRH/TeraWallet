@@ -7,7 +7,7 @@ describe("AI Agent Proposal Layer", () => {
 
   it("POST /api/agent/propose parses prompt into structured intent and returns prepared tx", async () => {
     const res = await request(app).post("/api/agent/propose").send({
-      prompt: "I want to invest $250 into USYC yield coin",
+      prompt: "I want to invest $250 into SpaceX stock on Robinhood Chain",
       ownerAddress: sampleOwner,
     });
 
@@ -24,7 +24,7 @@ describe("AI Agent Proposal Layer", () => {
 
   it("POST /api/agent/chat answers questions about RWA compliance", async () => {
     const res = await request(app).post("/api/agent/chat").send({
-      message: "Explain what ERC-3643 is and why Tera Wallet uses it for RWAs.",
+      message: "Explain how Tera Wallet protects my assets on Robinhood Chain when an AI agent proposes a trade.",
     });
 
     expect(res.status).toBe(200);
