@@ -5,7 +5,8 @@ import { env } from "../src/env";
 
 describe("Intent Pipeline & Prepared Transaction API", () => {
   const sampleOwner = "0x1111111111111111111111111111111111111111" as const;
-  const sampleAsset = "0x2222222222222222222222222222222222222222" as const;
+  const sampleAsset = "0x4a0E65A3EcceC6dBe60AE065F2e7bb85Fae35eEa" as const; // SpaceX (SPCX)
+
 
   it("successfully prepares a valid BUY transaction passing all 5 gates", async () => {
     const payload = {
