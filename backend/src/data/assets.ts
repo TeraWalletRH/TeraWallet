@@ -31,6 +31,7 @@ export const SUPPORTED_RWA_ASSETS: RwaAsset[] = [
     description:
       "Short-term US Treasury reverse repo yield coin. Regulated ERC-3643 security token requiring ONCHAINID identity claims.",
   },
+  
   {
     symbol: "USTB",
     name: "OpenEden Treasury Bill Token",
