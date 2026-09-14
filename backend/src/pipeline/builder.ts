@@ -54,12 +54,17 @@ export function buildPreparedTransaction(
     });
   }
 
-  // Outer call: TerraAccount.execute(targetContract, callValue, innerData)
-  const outerData = encodeFunctionData({
-    abi: TerraAccountAbi,
-    functionName: "execute",
-    args: [targetContract, callValue, innerData],
-  });
+  // If user is executing directly from their own wallet (EOA), target the contract directly.
+  // If a smart account address is used, wrap inside TerraAccount.execute.
+  const isDirectEoa = accountAddress.toLowerCase() === intent.ownerAddress.toLowerCase();
+  const txTo = isDirectEoa ? targetContract : accountAddress;
+  const txData = isDirectEoa
+    ? innerData
+    : encodeFunctionData({
+        abi: TerraAccountAbi,
+        functionName: "execute",
+        args: [targetContract, callValue, innerData],
+      });
 
   // Action hash calculation
   const actionHash = keccak256(
@@ -67,8 +72,8 @@ export function buildPreparedTransaction(
   );
 
   return {
-    to: accountAddress,
-    data: outerData,
+    to: txTo,
+    data: txData,
     value: toHex(callValue),
     chainId: env.rhcChainId,
     actionHash,
@@ -76,6 +81,7 @@ export function buildPreparedTransaction(
     gates,
   };
 }
+
 
 export function encodeCounterfactualAddressCall(owner: `0x${string}`, salt: `0x${string}`): `0x${string}` {
   return encodeFunctionData({
