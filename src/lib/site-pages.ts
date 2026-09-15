@@ -28,6 +28,9 @@ export async function serveSitePage(pathname: string): Promise<Response> {
       rpcUrl: import.meta.env["VITE_RPC_URL"] || "https://rpc.mainnet.chain.robinhood.com",
       walletConnectProjectId: import.meta.env["VITE_WALLETCONNECT_PROJECT_ID"] || "",
       explorerUrl: import.meta.env["VITE_EXPLORER_URL"] || "https://robinhoodchain.blockscout.com",
+      policySignerAddress: import.meta.env["VITE_POLICY_SIGNER_ADDRESS"] || "",
+      policyBundleUrl: import.meta.env["VITE_POLICY_BUNDLE_URL"] || "",
+      policyBundleMaxAgeSeconds: Number(import.meta.env["VITE_POLICY_BUNDLE_MAX_AGE_SECONDS"] || 86400),
     };
     const json = JSON.stringify(configuration).replace(/</g, "\\u003c");
     html = html.replace(

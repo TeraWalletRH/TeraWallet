@@ -6,6 +6,7 @@ import agentRouter from "./routes/agent";
 import sessionRouter from "./routes/session";
 import accountRouter from "./routes/account";
 import { requestIdMiddleware } from "./logging";
+import policyRouter from "./routes/policy";
 
 const app = express();
 
@@ -25,6 +26,7 @@ app.use((req, res, next) => {
 app.use(express.json());
 
 app.use(healthRouter);
+app.use(policyRouter);
 app.use(assetsRouter);
 app.use(intentRouter);
 app.use(agentRouter);

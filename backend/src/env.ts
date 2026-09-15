@@ -8,6 +8,10 @@ export const env = {
   rhcChainId: Number(process.env.RHC_CHAIN_ID ?? process.env.RHC_ID ?? 4663),
   groqApiKey: process.env.GROQ_API_KEY ?? "",
   groqModel: process.env.GROQ_MODEL ?? "qwen/qwen3.8-27b",
+  policySignerPrivateKey: process.env.POLICY_SIGNER_PRIVATE_KEY ?? "",
+  policySignerAddress: process.env.POLICY_SIGNER_ADDRESS ?? "",
+  policyBundleUrl: process.env.POLICY_BUNDLE_URL ?? "",
+  policyBundleMaxAgeSeconds: Number(process.env.POLICY_BUNDLE_MAX_AGE_SECONDS ?? 86400),
 } as const;
 
 export const isProduction = env.nodeEnv === "production";
