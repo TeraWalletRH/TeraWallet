@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { env } from "../env";
 import { SUPPORTED_RWA_ASSETS, findAsset } from "../data/assets";
 import { runGatePipeline } from "../pipeline/gates";
-import { buildPreparedTransaction } from "../pipeline/builder";
+import { buildPreparedTransaction, UnsupportedActionError } from "../pipeline/builder";
 import { type UserIntent } from "../pipeline/types";
 
 const router = Router();
@@ -197,6 +197,15 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
       preparedTransaction,
     });
   } catch (error) {
+    if (error instanceof UnsupportedActionError) {
+      res.status(501).json({
+        success: false,
+        error: error.message,
+        action: error.action,
+        supported: false,
+      });
+      return;
+    }
     console.error("Agent proposal error:", error);
     res.status(500).json({
       success: false,
