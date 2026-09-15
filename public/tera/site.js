@@ -113,5 +113,5 @@ document.addEventListener('click',e=>{if(phaseControl(e.target)){e.preventDefaul
  if(a.origin===location.origin&&a.pathname!==location.pathname){e.preventDefault();e.stopImmediatePropagation();window.teraCloseMenu?.();window.teraNavigate(a.pathname+a.search+a.hash)}
 },true);
 document.addEventListener('submit',e=>{e.preventDefault();e.stopImmediatePropagation();comingSoon()},true);
-installMenu();enhance();let queued=false;new MutationObserver(()=>{if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;enhance()})}).observe(document.body,{childList:true,subtree:true});
+installMenu();enhance();let queued=false;const reapplyLocale=()=>{if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;enhance();translatePage(locale())})};new MutationObserver(reapplyLocale).observe(document.body,{childList:true,characterData:true,subtree:true});addEventListener('load',()=>{[0,250,1200].forEach(delay=>setTimeout(()=>translatePage(locale()),delay))});
 })();
