@@ -15,6 +15,7 @@ import {
   evaluateLocalPolicy,
 } from "./core.js";
 import { renderAssistantMarkdown } from "./markdown.js";
+import { verifyPolicyBundle } from "/tera/connect/policy-verify.js";
 import {
   LOCAL_ONLY,
   REQUESTS,
@@ -103,6 +104,8 @@ const state = {
   records: [],
   chat: [],
   privacyLog: [],
+  policyBundle: null,
+  policyError: "",
   demo: false,
   guide: 0,
   busy: false,
@@ -181,6 +184,11 @@ function closeDialog() {
 function navigate(key) {
   history.pushState(null, "", href(key));
   render();
+  if (key === "policy")
+    void loadPolicyBundle().then(render).catch((error) => {
+      state.policyError = errorMessage(error);
+      render();
+    });
   document.querySelector("h1")?.focus();
   window.scrollTo(0, 0);
 }
@@ -312,7 +320,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
       const g = p.gates?.find((g) => g.gate === name);
       return `<li class="${g?.passed === false ? "blocked" : ""}"><span class="audit-num">0${i + 1}</span><span>${gateLabels[i]}${g?.reason ? `<small>${esc(g.reason)}</small>` : ""}</span><b>${i === 4 && g?.passed ? "AWAITING SIGNATURE" : g ? (g.passed ? "PASS" : "BLOCKED") : "NOT RUN"}</b></li>`;
     }).join("")}</ul>
-    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${(intent?.actionType === "BUY" || intent?.actionType === "SELL") ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.recipient ? pair("Recipient", intent.recipient) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
+    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${(intent?.actionType === "BUY" || intent?.actionType === "SELL") ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", intent.recipient) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
     ${submitted ? `<p>Transaction: ${explorer(p.txHash)}</p>` : issue ? `<p class="live-blocked">${esc(issue)}</p>` : '<p class="micro">Review the token amount and recipient. Your wallet will ask you to sign and pay the network fee.</p>'}
     <div class="actions">${button("Approve in wallet ↗", "approve", `data-index="${index}" ${issue || submitted || state.busy || state.chain !== chainId ? "disabled" : ""}`)}${button("Prepare again", "reprepare", `data-index="${index}" ${state.busy || submitted || !intent ? "disabled" : ""}`)}${button("Dismiss", "draft-dismiss", `data-index="${index}" ${state.busy ? "disabled" : ""}`)}</div></article>`;
 }
@@ -320,7 +328,9 @@ function approvals() {
   return `<div class="toolbar">${button("+ New proposal", "create")}${chip("Review before signing")}</div>${state.drafts.map(proposalCard).join("") || empty("No proposals in this session. Create a new proposal to run the checks.")}<p class="micro">Quote-based proposals may expire when the backend supplies an expiry. Transfers remain reviewable until you dismiss them. Pending transactions remain in Receipts.</p>`;
 }
 function policy() {
-  return `<div class="content-grid"><section class="panel"><div class="eyebrow">Service availability</div><h2>Private rules need a connected policy service.</h2><p>Personal spending limits cannot be viewed or changed yet. Tera currently applies a fixed server-side per-trade check.</p><p class="micro">Your old demo settings are not applied to wallet transactions. A passing proposal check does not establish that a personal daily limit was enforced.</p><button class="btn" disabled>Policy editing unavailable</button></section><aside class="panel"><h2>Your approval remains required.</h2><p>Every executable proposal is reviewed by you before your wallet signs it.</p><a class="btn" href="${href("approvals")}">Review proposals ↗</a></aside></div>`;
+  const bundle = state.policyBundle;
+  if (!bundle) return `<div class="content-grid"><section class="panel"><div class="eyebrow">Local policy</div><h2>Loading signed policy bundle…</h2>${state.policyError ? `<p class="live-blocked">${esc(state.policyError)}</p>` : ""}<div class="actions">${button("Refresh policy", "policy-refresh")}</div></section></div>`;
+  return `<div class="content-grid"><section class="panel"><div class="eyebrow">Local policy ${chip("Signed and active")}</div><h2>Rules run in this wallet before preparation.</h2>${pair("Bundle version", `v${bundle.version}`)}${pair("Signer", short(bundle.signer))}${pair("Expires", new Date(bundle.expiresAt).toLocaleString())}${pair("Single-trade cap", `$${(bundle.rules.maxSingleTradeUsdCents / 100).toLocaleString()}`)}${pair("Allowed actions", bundle.rules.allowedActions.join(", "))}<p class="micro">The browser recovered the signing address from the bundle signature before applying these rules. Tera evaluates the same rules again server-side.</p><div class="actions">${button("Refresh policy", "policy-refresh")}</div></section><aside class="panel"><h2>Your approval remains required.</h2><p>Local policy can block a proposal early. Only you can approve a transaction in your wallet.</p><a class="btn" href="${href("approvals")}">Review proposals ↗</a></aside></div>`;
 }
 function sessions() {
   if (!state.owner) return accountPrompt();
@@ -595,15 +605,26 @@ function createProposal(symbol) {
   };
 }
 async function prepareWithLocalPolicy(intent) {
+  const bundle = await loadPolicyBundle();
+  const issue = evaluateLocalPolicy(intent, bundle, config.policySignerAddress || bundle.signer);
+  if (issue) throw new Error(issue);
+  return { ...intent, policyVersion: bundle.version, policySigner: bundle.signer, policySignature: bundle.signature };
+}
+async function loadPolicyBundle(force = false) {
+  if (state.policyBundle && !force && Date.parse(state.policyBundle.expiresAt) > Date.now())
+    return state.policyBundle;
   const url = config.policyBundleUrl || `${apiUrl.replace(/\/$/, "")}/policy-bundle.json`;
+  state.privacyLog = appendLog(state.privacyLog, describeRequest("/policy-bundle.json"));
   let response;
   try { response = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(10000) }); }
   catch { throw new Error("Cannot load the signed local policy bundle."); }
   if (!response.ok) throw new Error("The signed local policy bundle is unavailable.");
   const bundle = await response.json();
-  const issue = evaluateLocalPolicy(intent, bundle, config.policySignerAddress || bundle.signer);
-  if (issue) throw new Error(issue);
-  return { ...intent, policyVersion: bundle.version, policySigner: bundle.signer, policySignature: bundle.signature };
+  const signer = config.policySignerAddress || bundle.signer;
+  if (!await verifyPolicyBundle(bundle, signer)) throw new Error("The signed local policy bundle failed signature verification.");
+  state.policyBundle = bundle;
+  state.policyError = "";
+  return bundle;
 }
 
 async function prepare(intent) {
@@ -680,6 +701,13 @@ function bindForms() {
             "Review the proposal in Approvals.",
         });
         if (mode === "propose") {
+          try {
+            const locallyApprovedIntent = await prepareWithLocalPolicy(result.intent);
+            result.intent = locallyApprovedIntent;
+            if (result.preparedTransaction) result.preparedTransaction.intent = locallyApprovedIntent;
+          } catch (error) {
+            result.error = errorMessage(error);
+          }
           // Agent proposals are reviewed here; manual preparation persists the
           // exact intent through the API before any executable approval.
           state.drafts.unshift({
@@ -870,6 +898,11 @@ document.addEventListener("click", async (event) => {
       await refreshAccount();
     }
     if (action === "assets-retry") await loadAssets();
+    if (action === "policy-refresh") {
+      state.policyError = "";
+      await loadPolicyBundle(true);
+      render();
+    }
     if (action === "create" || action === "asset-propose") createProposal(target.dataset.symbol);
     if (action === "asset") inspectAsset(target.dataset.symbol);
     if (action === "draft-dismiss") {

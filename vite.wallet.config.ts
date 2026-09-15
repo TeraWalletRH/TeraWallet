@@ -12,9 +12,12 @@ export default defineConfig({
     outDir: "public/tera/connect",
     emptyOutDir: true,
     lib: {
-      entry: "src/wallet/connect.tsx",
+      entry: {
+        "wallet-connect": "src/wallet/connect.tsx",
+        "policy-verify": "src/wallet/policy.ts",
+      },
       formats: ["es"],
-      fileName: "wallet-connect",
+      fileName: (_format, entryName) => `${entryName}.js`,
       cssFileName: "wallet-connect",
     },
   },
