@@ -2,6 +2,33 @@
 const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelectorAll(s)];
 const icons={x:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.9 2H22l-6.8 7.8L23.2 22h-6.3l-5-7.5L5.3 22H2.1l7.9-9L1 2h6.5l4.6 6.8L18.9 2ZM17.9 20h1.7L6.5 3.9H4.7L17.9 20Z"/></svg>',telegram:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.8 3.5-3.3 16c-.2 1.1-.9 1.3-1.8.8l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1L18 6c.4-.4-.1-.6-.6-.3L5.9 12.9 1 11.4c-1.1-.3-1.1-1.1.2-1.6L20.3 2.4c.9-.3 1.7.2 1.5 1.1Z"/></svg>'};
 let lastFocus;
+const zhText={
+ 'Home':'首页','About Tera':'关于 Tera','Capabilities':'能力','Wallet workflows':'钱包工作流','Roadmap':'路线图','Community':'社区',
+ 'Explore Tera Wallet':'探索 Tera Wallet','Open wallet ↗':'打开钱包 ↗','Wallet ↗':'钱包 ↗','Tera Wallet':'Tera 钱包',
+ 'Private authorization.':'私密授权。','Your wallet, your authority.':'你的钱包，你的权限。','Explore wallet ↗':'探索钱包 ↗','Community · coming soon ↗':'社区 · 即将推出 ↗',
+ 'Owner approved':'所有者已批准','Designed for':'专为','Private by default':'默认保护隐私','Coming soon.':'即将推出。',
+ 'We’re preparing the next chapter of Tera Wallet. Explore the interactive demo while live access and community channels take shape.':'我们正在准备 Tera Wallet 的下一阶段。探索交互式演示，实时访问和社区渠道即将开放。',
+ 'The agent proposes. You retain authority.':'代理提出方案。权限始终属于你。','Permission at every step':'每一步都需要权限','Selective disclosure':'选择性披露',
+ 'Private authorization for supervised real-world asset workflows. The agent thinks. Tera enforces. You approve.':'面向受监督现实资产工作流的私密授权。代理负责思考，Tera 负责执行规则，你负责批准。',
+ 'Your assets. Your rules. Your authority.':'你的资产，你的规则，你的权限。','The agent can think. Your wallet enforces.':'代理可以思考，你的钱包负责执行规则。',
+ 'deterministic gates':'确定性关卡','owner authority':'所有者权限','self-custody':'自托管','Roadmap phases':'路线图阶段',
+ 'The agent proposes.':'代理提出方案。','You see the checks.':'你查看检查结果。','You sign the action.':'你签署操作。','Results stay traceable.':'结果始终可追踪。',
+ 'Owner supervised.':'所有者监督。','The owner approves the action.':'所有者批准操作。','Wallet workflows':'钱包工作流',
+ 'Open navigation':'打开导航','Close navigation':'关闭导航','Back to site ↗':'返回网站 ↗'
+};
+function locale(){try{return localStorage.getItem('tera-locale')==='zh'?'zh':'en'}catch{return'en'}}
+function setLocale(next){const lang=next==='zh'?'zh':'en';try{localStorage.setItem('tera-locale',lang)}catch{}document.documentElement.lang=lang==='zh'?'zh-CN':'en';$$('[data-locale-select]').forEach(s=>{s.value=lang});translatePage(lang)}
+function translatePage(lang){
+ const nodes=[];const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);while(walker.nextNode())nodes.push(walker.currentNode);
+ nodes.forEach(n=>{if(n.parentElement?.closest('script,style,select'))return;const raw=n.nodeValue||'';const key=raw.trim();if(!key)return;const value=lang==='zh'?zhText[key]:n.dataset.teraEnglish||key;if(lang==='en'&&!n.dataset.teraEnglish)n.dataset.teraEnglish=key;if(value&&value!==key)n.nodeValue=raw.replace(key,value)});
+ $$('[data-locale-label]').forEach(e=>{e.textContent=lang==='zh'?'语言':'Language'});
+}
+function localeControl(){return '<label class="tera-locale"><span data-locale-label>Language</span><select data-locale-select aria-label="Select language"><option value="en">EN</option><option value="zh">中文</option></select></label>'}
+function installLocaleControls(){
+ const controls=$('.tera-header-controls');if(controls&&!controls.querySelector('[data-locale-select]')){const wrap=document.createElement('div');wrap.innerHTML=localeControl();controls.prepend(wrap.firstElementChild)}
+ $$('footer').forEach(f=>{if(!f.querySelector('[data-locale-select]')){const wrap=document.createElement('div');wrap.className='tera-footer-locale';wrap.innerHTML=localeControl();f.append(wrap)}});
+ $$('[data-locale-select]').forEach(s=>{s.onchange=()=>setLocale(s.value)});setLocale(locale());
+}
 function comingSoon(channel='Tera Wallet'){
  let d=$('#tera-coming-soon');if(!d){d=document.createElement('dialog');d.id='tera-coming-soon';d.className='tera-dialog';d.setAttribute('aria-labelledby','coming-title');d.innerHTML='<button class="close" aria-label="Close popup">×</button><small id="coming-channel"></small><h2 id="coming-title">Coming soon.</h2><p>We’re preparing the next chapter of Tera Wallet. Explore the interactive demo while live access and community channels take shape.</p><a href="/dashboard/">Explore wallet ↗</a>';document.body.append(d);$('.close',d).onclick=()=>d.close();d.addEventListener('click',e=>{if(e.target===d){const r=d.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)d.close()}});d.addEventListener('close',()=>lastFocus?.focus())}lastFocus=document.activeElement;$('#coming-channel').textContent=channel;d.showModal();
 }
@@ -22,6 +49,7 @@ function enhance(){
  $$('footer [data-framer-name="Designed for"] p').forEach(p=>{if(p.textContent.trim()==='Designed for')p.textContent='Owner approved'});
  // Brand credit text is replaced without changing the footer composition.
  $$('p').forEach(p=>{if(['Designed for','Powered by','owner authority','self-custody'].includes(p.textContent.trim())&&p.closest('footer'))p.style.opacity='.7'});
+ installLocaleControls();
 }
 
 function installMenu(){
@@ -29,7 +57,7 @@ function installMenu(){
  document.documentElement.classList.add('tera-menu-ready');document.documentElement.classList.toggle('tera-is-home',location.pathname==='/');
  const h=document.createElement('header');h.id='tera-header';h.className='tera-header';
  const links=[['Home','/'],['About Tera','/about/'],['Capabilities','/solutions/'],['Wallet workflows','/projects/'],['Roadmap','/roadmap/'],['Community','/contacts/']];
- h.innerHTML=`<a class="tera-header-brand" href="/" aria-label="Tera Wallet home"><img src="/tera/logo.png" alt="">TERA WALLET</a><div class="tera-header-controls"><a class="tera-header-cta" href="/dashboard/">Open wallet ↗</a><button class="tera-menu-toggle" aria-label="Open navigation" aria-controls="tera-menu-panel" aria-expanded="false"><span class="tera-menu-word">Menu</span><span class="tera-menu-glyph" aria-hidden="true"></span></button></div><div class="tera-menu-panel" id="tera-menu-panel" hidden><p class="tera-menu-label">Explore Tera Wallet</p><nav aria-label="Main navigation">${links.map(([label,href],i)=>`<a href="${href}" ${location.pathname.replace(/\/$/,'')===href.replace(/\/$/,'')?'aria-current="page"':''}><span>0${i+1}</span>${label}</a>`).join('')}</nav><div class="tera-menu-bottom"><a class="tera-menu-wallet" href="/dashboard/">Wallet ↗</a><div class="tera-menu-socials"><button aria-label="X — coming soon" data-community="X">${icons.x}</button><button aria-label="Telegram — coming soon" data-community="Telegram">${icons.telegram}</button></div></div></div>`;
+ h.innerHTML=`<a class="tera-header-brand" href="/" aria-label="Tera Wallet home"><img src="/tera/logo.png" alt="">TERA WALLET</a><div class="tera-header-controls"><a class="tera-header-cta" href="/dashboard/">Open wallet ↗</a><button class="tera-menu-toggle" aria-label="Open navigation" aria-controls="tera-menu-panel" aria-expanded="false"><span class="tera-menu-word">Menu</span><span class="tera-menu-glyph" aria-hidden="true"></span></button></div><div class="tera-menu-panel" id="tera-menu-panel" hidden><p class="tera-menu-label">Explore Tera Wallet</p><nav aria-label="Main navigation">${links.map(([label,href],i)=>`<a href="${href}" ${location.pathname.replace(/\/$/,'')===href.replace(/\/$/,'')?'aria-current="page"':''}><span>0${i+1}</span>${label}</a>`).join('')}</nav><div class="tera-menu-bottom"><a class="tera-menu-wallet" href="/dashboard/">Wallet ↗</a><div class="tera-menu-socials"><button aria-label="X — coming soon" data-community="X">${icons.x}</button><button aria-label="Telegram — coming soon" data-community="Telegram">${icons.telegram}</button></div></div><div class="tera-menu-locale">${localeControl()}</div></div>`;
  document.body.append(h);
  let contrastQueued=false;
  function contrast(){contrastQueued=false;const point=h.querySelector('.tera-header-brand').getBoundingClientRect();const under=document.elementsFromPoint(point.left+point.width/2,point.top+point.height/2).filter(e=>!h.contains(e));let dark=false;for(const e of under){const color=getComputedStyle(e).backgroundColor;const values=color.match(/[\d.]+/g)?.map(Number);if(values&&values.length>=3&&(values.length<4||values[3]>.85)){dark=(values[0]*.2126+values[1]*.7152+values[2]*.0722)<125;break}}h.classList.toggle('tera-on-dark',dark)}
