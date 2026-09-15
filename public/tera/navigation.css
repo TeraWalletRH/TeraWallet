@@ -24,3 +24,5 @@ html{scroll-behavior:smooth;scroll-padding-top:100px}
 .tera-header-brand{transition:color .2s ease}.tera-on-dark .tera-header-brand{color:#f2f0ee}
 
 .tera-header-brand{min-height:48px;box-sizing:border-box;padding:6px 10px 6px 0;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+
+.tera-menu-socials button{border:0;background:none;color:#f2f0ee;padding:10px;cursor:pointer}.tera-menu-socials button:hover{color:#d2d9a1}

@@ -100,6 +100,7 @@ function enhance(){
  $$('footer [data-framer-name="Designed for"] p').forEach(p=>{if(p.textContent.trim()==='Designed for')p.textContent='Owner approved'});
  // Brand credit text is replaced without changing the footer composition.
  $$('p').forEach(p=>{if(['Designed for','Powered by','owner authority','self-custody'].includes(p.textContent.trim())&&p.closest('footer'))p.style.opacity='.7'});
+ $$('footer').forEach(f=>{if(f.querySelector('.tera-footer-socials'))return;const social=document.createElement('nav');social.className='tera-footer-socials';social.setAttribute('aria-label','Tera Wallet social links');social.innerHTML='<a href="https://x.com/terawalletrh" target="_blank" rel="noopener noreferrer" aria-label="Tera Wallet on X">'+icons.x+'<span>X</span></a><a href="https://t.me/terawalletrh" target="_blank" rel="noopener noreferrer" aria-label="Tera Wallet on Telegram">'+icons.telegram+'<span>Telegram</span></a>';f.append(social)});
  installLocaleControls();
 }
 
@@ -118,7 +119,7 @@ function installMenu(){
  function setMenu(open,focus=false){b.setAttribute('aria-expanded',String(open));b.setAttribute('aria-label',open?'Close navigation':'Open navigation');panel.hidden=!open;if(focus)(open?$('nav a',panel):b).focus()}
  window.teraCloseMenu=()=>setMenu(false);
  b.addEventListener('click',()=>setMenu(b.getAttribute('aria-expanded')!=='true'));
- h.querySelectorAll('[data-community]').forEach(button=>button.onclick=()=>{setMenu(false);comingSoon(button.dataset.community)});
+ h.querySelectorAll('[data-community]').forEach(button=>button.onclick=()=>{setMenu(false);window.open(button.dataset.community==='X'?'https://x.com/terawalletrh':'https://t.me/terawalletrh','_blank','noopener,noreferrer')});
  h.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>setMenu(false)));
  document.addEventListener('click',e=>{if(!h.contains(e.target))setMenu(false)});
  document.addEventListener('keydown',e=>{if(b.getAttribute('aria-expanded')!=='true')return;if(e.key==='Escape'){setMenu(false,true);e.preventDefault()}if(e.key==='Tab'){const items=[b,...panel.querySelectorAll('a,button')],first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){last.focus();e.preventDefault()}else if(!e.shiftKey&&document.activeElement===last){first.focus();e.preventDefault()}}});
