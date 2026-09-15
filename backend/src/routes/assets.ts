@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from "express";
 import { SUPPORTED_RWA_ASSETS, findAsset } from "../data/assets";
 import { checkEligibilityPreflight } from "../pipeline/gates";
 import { type UserIntent } from "../pipeline/types";
+import { logger } from "../logging";
 
 const router = Router();
 
@@ -72,7 +73,7 @@ router.post("/api/assets/preflight", async (req: Request, res: Response) => {
       reason: preflight.reason ?? null,
     });
   } catch (error) {
-    console.error("Asset preflight check failed:", error);
+    logger.error(req, "asset.preflight_failed", error);
     res.status(500).json({
       success: false,
       error: "Preflight evaluation error",

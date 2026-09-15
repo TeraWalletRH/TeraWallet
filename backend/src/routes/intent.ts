@@ -5,6 +5,7 @@ import { buildPreparedTransaction, UnsupportedActionError } from "../pipeline/bu
 import pool from "../db";
 import { env } from "../env";
 import { keccak256, stringToBytes } from "viem";
+import { logger } from "../logging";
 
 const router = Router();
 
@@ -106,7 +107,7 @@ router.post("/api/intent/prepare", async (req: Request, res: Response) => {
         }
       }
     } catch (dbErr) {
-      console.warn("DB intent persistence fallback:", dbErr);
+      logger.warn(req, "intent.persistence_fallback", dbErr);
     }
 
     if (!intentId) {
@@ -140,7 +141,7 @@ router.post("/api/intent/prepare", async (req: Request, res: Response) => {
       });
       return;
     }
-    console.error("Failed to prepare intent transaction:", error);
+    logger.error(req, "intent.prepare_failed", error);
     res.status(500).json({
       success: false,
       error: "Internal server error during intent preparation",
@@ -178,7 +179,7 @@ router.get("/api/intent/:actionHash", async (req: Request, res: Response) => {
       }
     }
   } catch (dbErr) {
-    console.warn("DB intent query fallback:", dbErr);
+    logger.warn(req, "intent.query_fallback", dbErr);
   }
 
   const memory = memoryIntents[actionHash];
@@ -250,7 +251,7 @@ router.post("/api/intent/receipt", async (req: Request, res: Response) => {
         );
       }
     } catch (dbErr) {
-      console.warn("DB receipt insertion fallback:", dbErr);
+      logger.warn(req, "intent.receipt_persistence_fallback", dbErr);
     }
 
     if (memoryIntents[actionHash]) {
@@ -274,7 +275,7 @@ router.post("/api/intent/receipt", async (req: Request, res: Response) => {
       status: "CONFIRMED",
     });
   } catch (error) {
-    console.error("Failed to record transaction receipt:", error);
+    logger.error(req, "intent.receipt_failed", error);
     res.status(500).json({
       success: false,
       error: "Failed to record transaction receipt",

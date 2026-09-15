@@ -3,6 +3,7 @@ import { encodeFunctionData, keccak256, stringToBytes } from "viem";
 import pool from "../db";
 import { SessionManagerAbi, TerraAccountAbi, getDeployments } from "../chain/metadata";
 import { env } from "../env";
+import { logger } from "../logging";
 
 const router = Router();
 
@@ -82,7 +83,7 @@ router.post("/api/session/prepare-register", async (req: Request, res: Response)
       },
     });
   } catch (error) {
-    console.error("Failed to prepare session registration:", error);
+    logger.error(req, "session.prepare_register_failed", error);
     res.status(500).json({
       success: false,
       error: "Internal error preparing session registration",
@@ -132,7 +133,7 @@ router.post("/api/session/register", async (req: Request, res: Response) => {
         return;
       }
     } catch (dbErr) {
-      console.warn("DB session insertion fallback:", dbErr);
+      logger.warn(req, "session.persistence_fallback", dbErr);
     }
 
     const sessionObj = {
@@ -151,7 +152,7 @@ router.post("/api/session/register", async (req: Request, res: Response) => {
       session: sessionObj,
     });
   } catch (error) {
-    console.error("Failed to register session:", error);
+    logger.error(req, "session.register_failed", error);
     res.status(500).json({ success: false, error: "Failed to record session" });
   }
 });
@@ -181,7 +182,7 @@ router.get("/api/session/:accountAddress", async (req: Request, res: Response) =
       return;
     }
   } catch (dbErr) {
-    console.warn("DB query fallback:", dbErr);
+      logger.warn(req, "session.query_fallback", dbErr);
   }
 
   const matches = memorySessions.filter(
@@ -237,7 +238,7 @@ router.post("/api/session/prepare-revoke", async (req: Request, res: Response) =
       },
     });
   } catch (error) {
-    console.error("Failed to prepare session revocation:", error);
+    logger.error(req, "session.prepare_revoke_failed", error);
     res.status(500).json({
       success: false,
       error: "Internal error preparing session revocation",
@@ -271,7 +272,7 @@ router.post("/api/session/revoke", async (req: Request, res: Response) => {
         );
       }
     } catch (dbErr) {
-      console.warn("DB update fallback:", dbErr);
+      logger.warn(req, "session.revoke_persistence_fallback", dbErr);
     }
 
     const found = memorySessions.find(
@@ -290,7 +291,7 @@ router.post("/api/session/revoke", async (req: Request, res: Response) => {
       isRevoked: true,
     });
   } catch (error) {
-    console.error("Failed to mark session as revoked:", error);
+    logger.error(req, "session.revoke_failed", error);
     res.status(500).json({ success: false, error: "Failed to revoke session in DB" });
   }
 });

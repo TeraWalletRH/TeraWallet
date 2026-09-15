@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import pool from "../db";
 import { env } from "../env";
+import { logger } from "../logging";
 
 const router = Router();
 
@@ -41,7 +42,7 @@ router.post("/api/account/register", async (req: Request, res: Response) => {
         return;
       }
     } catch (dbErr) {
-      console.warn("DB account registration fallback:", dbErr);
+      logger.warn(req, "account.registration_fallback", dbErr);
     }
 
     const lower = accountAddress.toLowerCase();
@@ -57,7 +58,7 @@ router.post("/api/account/register", async (req: Request, res: Response) => {
       account: memoryAccounts[lower],
     });
   } catch (error) {
-    console.error("Account registration failed:", error);
+    logger.error(req, "account.registration_failed", error);
     res.status(500).json({ success: false, error: "Internal error registering account" });
   }
 });
@@ -112,7 +113,7 @@ router.get("/api/account/:address", async (req: Request, res: Response) => {
       return;
     }
   } catch (dbErr) {
-    console.warn("DB account fetch fallback:", dbErr);
+      logger.warn(req, "account.fetch_fallback", dbErr);
   }
 
   const memory = memoryAccounts[address.toLowerCase()];
@@ -159,7 +160,7 @@ router.get("/api/account/:address/history", async (req: Request, res: Response) 
       return;
     }
   } catch (dbErr) {
-    console.warn("DB history fetch fallback:", dbErr);
+      logger.warn(req, "account.history_fallback", dbErr);
   }
 
   res.status(200).json({
