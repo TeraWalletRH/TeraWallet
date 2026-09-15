@@ -126,7 +126,7 @@ function installMenu(){
 
 function installTokenHero(){
  const address='0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8';
- const heading=[...document.querySelectorAll('h1')].find(h=>/your assets|你的资产/i.test(h.textContent));
+ const heading=[...document.querySelectorAll('h1')].find(h=>/your assets|你的资产/i.test(h.textContent.replace(/\s+/g,' ')));
  if(!heading||$('#tera-token-hero'))return;
  const card=document.createElement('div');card.id='tera-token-hero';card.className='tera-token-hero';
  card.innerHTML=`<span class="tera-token-label">CONTRACT ADDRESS</span><code>${address}</code><button type="button" aria-label="Copy contract address">Copy</button><a href="https://dexscreener.com/search?q=${address}" target="_blank" rel="noopener noreferrer">Dexscreener ↗</a>`;
@@ -143,13 +143,14 @@ document.addEventListener('click',e=>{if(phaseControl(e.target)){e.preventDefaul
  if(a.origin===location.origin&&a.pathname!==location.pathname){e.preventDefault();e.stopImmediatePropagation();window.teraCloseMenu?.();window.teraNavigate(a.pathname+a.search+a.hash)}
 },true);
 document.addEventListener('submit',e=>{e.preventDefault();e.stopImmediatePropagation();comingSoon()},true);
-installMenu();enhance();addEventListener('load',installTokenHero,{once:true});
+installMenu();enhance();
 // Framer replaces its text nodes during hydration. Translate only after its
 // mutations settle; do not call enhance() here because it writes English chrome.
-let localeTimer=null;
+let localeTimer=null,tokenTimer=null;
 const localeObserver=new MutationObserver(scheduleLocaleTranslation);
 function observeLocale(){localeObserver.observe(document.body,{childList:true,characterData:true,subtree:true})}
-function scheduleLocaleTranslation(){if(locale()!=='zh'||localeTimer!==null)return;localeTimer=setTimeout(()=>{localeTimer=null;localeObserver.disconnect();try{installTokenHero();installLocaleControls();translatePage('zh')}finally{observeLocale()}},0)}
+function scheduleTokenHero(){if(tokenTimer!==null)return;tokenTimer=setTimeout(()=>{tokenTimer=null;installTokenHero()},100)}
+function scheduleLocaleTranslation(){scheduleTokenHero();if(locale()!=='zh'||localeTimer!==null)return;localeTimer=setTimeout(()=>{localeTimer=null;localeObserver.disconnect();try{installTokenHero();installLocaleControls();translatePage('zh')}finally{observeLocale()}},0)}
 observeLocale();scheduleLocaleTranslation();
-addEventListener('load',scheduleLocaleTranslation);
+addEventListener('load',()=>{scheduleTokenHero();[500,1500,3000].forEach(delay=>setTimeout(scheduleTokenHero,delay));scheduleLocaleTranslation()});
 })();
