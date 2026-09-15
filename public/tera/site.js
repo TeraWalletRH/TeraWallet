@@ -19,9 +19,24 @@ const zhText={
 function locale(){try{return localStorage.getItem('tera-locale')==='zh'?'zh':'en'}catch{return'en'}}
 function setLocale(next){const lang=next==='zh'?'zh':'en';try{localStorage.setItem('tera-locale',lang)}catch{}document.documentElement.lang=lang==='zh'?'zh-CN':'en';$$('[data-locale-select]').forEach(s=>{s.value=lang});translatePage(lang)}
 function translatePage(lang){
+ if(location.pathname==='/' ){renderChineseLanding(lang);return}
  const nodes=[];const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);while(walker.nextNode())nodes.push(walker.currentNode);
  nodes.forEach(n=>{if(n.parentElement?.closest('script,style,select'))return;const raw=n.nodeValue||'';const key=raw.trim();if(!key)return;const value=lang==='zh'?zhText[key]:n.dataset.teraEnglish||key;if(lang==='en'&&!n.dataset.teraEnglish)n.dataset.teraEnglish=key;if(value&&value!==key)n.nodeValue=raw.replace(key,value)});
  $$('[data-locale-label]').forEach(e=>{e.textContent=lang==='zh'?'语言':'Language'});
+}
+function renderChineseLanding(lang){
+ const existing=$('#tera-zh-landing');
+ if(lang!=='zh'){existing?.remove();document.body.classList.remove('tera-zh-mode');$$('[data-locale-label]').forEach(e=>{e.textContent='Language'});return}
+ document.body.classList.add('tera-zh-mode');
+ $$('[data-locale-label]').forEach(e=>{e.textContent='语言'});
+ if(existing)return;
+ const page=document.createElement('main');page.id='tera-zh-landing';page.innerHTML=`
+  <section class="zh-hero"><p class="zh-kicker">TERA WALLET / 私密授权</p><h1>你的资产。<br>你的规则。<br><em>你的权限。</em></h1><p class="zh-lead">面向现实世界资产工作流的自托管钱包。代理准备提案，Tera 检查规则，你批准最终操作。</p><a class="zh-button" href="/dashboard/">探索钱包 ↗</a></section>
+  <section class="zh-section"><p class="zh-kicker">01 / 工作方式</p><h2>每一步都需要权限。</h2><div class="zh-grid"><article><b>资产与资格</b><p>检查资产注册表、发行方限制和转移资格，未通过的操作在签名前停止。</p></article><article><b>私有策略</b><p>代理看到检查结果，不会看到你的余额、策略或私有限额。</p></article><article><b>所有者批准</b><p>你在钱包中审核精确的资产、金额、路线和有效期，再签署操作。</p></article><article><b>可追踪回执</b><p>每次提交都有清晰的状态、区块浏览器链接和可选择披露的回执。</p></article></div></section>
+  <section class="zh-section zh-dark"><p class="zh-kicker">02 / 确定性关卡</p><h2>代理可以思考，<br>钱包负责执行规则。</h2><div class="zh-steps"><div><span>01</span>资产注册表</div><div><span>02</span>资格预检查</div><div><span>03</span>私有策略</div><div><span>04</span>风险检查</div><div><span>05</span>所有者批准</div></div></section>
+  <section class="zh-section"><p class="zh-kicker">03 / 隐私优先</p><h2>权限来自代码，<br>从不来自代理的解释。</h2><p class="zh-copy">你的密钥不会交给代理。每个批准都绑定到一个精确意图，代理不能扩大范围，也不能绕过你的规则。</p><a class="zh-button zh-button-light" href="/whitepaper">阅读白皮书 ↗</a></section>
+  <footer class="tera-zh-footer"><span>TERA WALLET</span><span>所有者签名 · 所有者支付网络费用</span>${localeControl()}</footer>`;
+ document.body.append(page);
 }
 function localeControl(){return '<label class="tera-locale"><span data-locale-label>Language</span><select data-locale-select aria-label="Select language"><option value="en">EN</option><option value="zh">中文</option></select></label>'}
 function installLocaleControls(){
