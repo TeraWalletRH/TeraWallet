@@ -52,7 +52,18 @@ Do not include markdown formatting or backticks around the JSON.
  */
 router.post("/api/agent/propose", async (req: Request, res: Response) => {
   try {
-    const { prompt, ownerAddress, accountAddress } = req.body;
+    const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
+    const unsupportedFields = Object.keys(body).filter((field) => !["prompt", "ownerAddress"].includes(field));
+    if (unsupportedFields.length > 0) {
+      res.status(400).json({
+        success: false,
+        error: "Proposal payload only accepts prompt and ownerAddress",
+        unsupportedFields,
+      });
+      return;
+    }
+
+    const { prompt, ownerAddress } = body as { prompt?: string; ownerAddress?: string };
 
     if (!prompt || !ownerAddress) {
       res.status(400).json({
@@ -157,9 +168,10 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
     }
 
 
+    const walletAddress = ownerAddress as `0x${string}`;
     const fullIntent: UserIntent = {
-      ownerAddress,
-      accountAddress: accountAddress ?? ownerAddress,
+      ownerAddress: walletAddress,
+      accountAddress: walletAddress,
       assetAddress: intentDraft.assetAddress as `0x${string}`,
       actionType: (intentDraft.actionType as any) ?? "BUY",
       amount: String(intentDraft.amount ?? "100000000"),
@@ -185,7 +197,7 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
     // 3. Build prepared transaction for owner wallet execution
     const preparedTransaction = buildPreparedTransaction(
       fullIntent,
-      (accountAddress ?? ownerAddress) as `0x${string}`,
+      walletAddress,
       gates
     );
 
