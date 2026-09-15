@@ -38,6 +38,7 @@ ul [data-framer-name^="Logo "]>[data-framer-component-type="SVG"]{visibility:hid
 footer nav a{line-height:1.5!important}
 footer [data-framer-name="Oberon logo"] p{font-size:16px!important}
 @media(max-width:809px){#main h1{line-height:1.12!important;--framer-line-height:1.12!important;letter-spacing:-.045em!important}#main h2{line-height:1.13!important;--framer-line-height:1.13!important}#main [data-framer-component-type="RichTextContainer"]{max-width:100%}footer .tera-demo-entry a{padding:15px 14px;font-size:12px}.tera-standard{font-size:15px}.tera-dialog{padding:28px}.tera-dialog h2{font-size:34px}}
+
 @media(max-width:359px){#main h1{font-size:34px!important;--framer-font-size:34px!important}#main h2{font-size:29px!important;--framer-font-size:29px!important}}
 /* Workflow names reserve a separate date column, including long labels. */
 a[data-framer-name^="Case "]:has(> [data-framer-component-type="RichTextContainer"]){align-items:flex-start!important;height:auto!important;min-height:32px}

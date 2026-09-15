@@ -8,22 +8,24 @@
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-38B2AC?logo=tailwindcss&logoColor=white)
 ![Robinhood Chain](https://img.shields.io/badge/Robinhood_Chain-Arbitrum_Orbit_L2-00C805)
 
-Tera Wallet is a self-custodial wallet experience for supervised real-world-asset (RWA) workflows. An assistant can explain assets and prepare a typed proposal, while the owner reviews the checks and approves the exact transaction in their wallet. The product is built for Robinhood Chain (Arbitrum Orbit L2) and follows a private-by-default direction: *the agent can think; Tera Wallet checks; you approve.*
+Tera Wallet is a self-custodial wallet experience for supervised real-world-asset (RWA) workflows. An assistant can explain assets and prepare a typed proposal, while the owner reviews the checks and approves the exact transaction in their wallet. The product is built for Robinhood Chain (Arbitrum Orbit L2) and follows a private-by-default direction: _the agent can think; Tera Wallet checks; you approve._
 
 **Explore the product:** [live wallet](https://terawallet.app/dashboard/) · [whitepaper](https://terawallet.app/whitepaper) · [roadmap](https://terawallet.app/roadmap/)
+
+语言：English · [简体中文](README.zh-CN.md)
 
 ---
 
 ## Core Capabilities
 
-| Capability | RWA Agent Supervised Model |
-|---|---|
-| **Owner-supervised proposals** | Assistant chat turns a request into a structured transfer or workflow proposal; the owner reviews before signing. |
-| **Review gates** | Asset, eligibility, policy, risk, and owner-approval states are shown before a wallet signature is requested. |
-| **Wallet connection** | RainbowKit supports installed wallets and WalletConnect on Robinhood Chain. |
-| **Asset registry** | Supported assets, decimals, contract addresses, eligibility, and action availability are visible in the dashboard. |
-| **Sessions and receipts** | Agent sessions, revocation state, transaction status, and explorer links are available in the dashboard. |
-| **Privacy direction** | The assistant receives only the message and wallet address needed for a proposal; private policy and selective-disclosure features are being expanded. |
+| Capability                     | RWA Agent Supervised Model                                                                                                                             |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Owner-supervised proposals** | Assistant chat turns a request into a structured transfer or workflow proposal; the owner reviews before signing.                                      |
+| **Review gates**               | Asset, eligibility, policy, risk, and owner-approval states are shown before a wallet signature is requested.                                          |
+| **Wallet connection**          | RainbowKit supports installed wallets and WalletConnect on Robinhood Chain.                                                                            |
+| **Asset registry**             | Supported assets, decimals, contract addresses, eligibility, and action availability are visible in the dashboard.                                     |
+| **Sessions and receipts**      | Agent sessions, revocation state, transaction status, and explorer links are available in the dashboard.                                               |
+| **Privacy direction**          | The assistant receives only the message and wallet address needed for a proposal; private policy and selective-disclosure features are being expanded. |
 
 ### Available now vs. planned
 
@@ -55,13 +57,13 @@ Tera Wallet Smart Account validates on-chain & executes (ERC-4337 UserOp)
 
 ## Ecosystem Roles
 
-| Participant | Role | Reward / Outcome |
-|---|---|---|
-| **RWA Owner** | Supervises agent intents within private limits | Automation without surrendering keys or privacy |
-| **Agent Developer** | Builds against typed intent schema (`createIntent`) | Bounded, safe surface — zero liability for execution |
-| **Issuer / Provider** | Supplies preflight attestation facts | Compliant distribution to self-custodial accounts |
-| **Verifier / Attestor** | Validates registry state and action receipts | Protocol trust attestation |
-| **$TERA Staker** | Secures registry governance & fee distribution | Protocol fee share |
+| Participant             | Role                                                | Reward / Outcome                                     |
+| ----------------------- | --------------------------------------------------- | ---------------------------------------------------- |
+| **RWA Owner**           | Supervises agent intents within private limits      | Automation without surrendering keys or privacy      |
+| **Agent Developer**     | Builds against typed intent schema (`createIntent`) | Bounded, safe surface — zero liability for execution |
+| **Issuer / Provider**   | Supplies preflight attestation facts                | Compliant distribution to self-custodial accounts    |
+| **Verifier / Attestor** | Validates registry state and action receipts        | Protocol trust attestation                           |
+| **$TERA Staker**        | Secures registry governance & fee distribution      | Protocol fee share                                   |
 
 ---
 
@@ -69,24 +71,24 @@ Tera Wallet Smart Account validates on-chain & executes (ERC-4337 UserOp)
 
 The backend exposes an Express service running under Bun:
 
-| Method | Endpoint | Description |
-|---|---|---|
-| `GET` | `/health` | Service health status, server timestamp, and version |
-| `GET` | `/api/assets` | Asset registry and supported actions |
-| `POST` | `/api/assets/preflight` | Asset and eligibility preflight checks |
-| `POST` | `/api/agent/chat` | Assistant response for an owner message |
-| `POST` | `/api/agent/propose` | Prepare a structured owner-review proposal |
-| `POST` | `/api/intent/prepare` | Prepare intent checks and transaction data |
-| `GET` | `/api/intent/:actionHash` | Retrieve an intent status |
-| `POST` | `/api/intent/receipt` | Reconcile a submitted transaction receipt |
-| `POST` | `/api/account/register` | Register or initialize an account record |
-| `GET` | `/api/account/:address` | Retrieve account state |
-| `GET` | `/api/account/:address/history` | Retrieve account history |
-| `POST` | `/api/session/prepare-register` | Prepare a scoped session registration |
-| `POST` | `/api/session/register` | Register a scoped session |
-| `GET` | `/api/session/:accountAddress` | List account sessions |
-| `POST` | `/api/session/prepare-revoke` | Prepare session revocation |
-| `POST` | `/api/session/revoke` | Revoke a scoped session |
+| Method | Endpoint                        | Description                                          |
+| ------ | ------------------------------- | ---------------------------------------------------- |
+| `GET`  | `/health`                       | Service health status, server timestamp, and version |
+| `GET`  | `/api/assets`                   | Asset registry and supported actions                 |
+| `POST` | `/api/assets/preflight`         | Asset and eligibility preflight checks               |
+| `POST` | `/api/agent/chat`               | Assistant response for an owner message              |
+| `POST` | `/api/agent/propose`            | Prepare a structured owner-review proposal           |
+| `POST` | `/api/intent/prepare`           | Prepare intent checks and transaction data           |
+| `GET`  | `/api/intent/:actionHash`       | Retrieve an intent status                            |
+| `POST` | `/api/intent/receipt`           | Reconcile a submitted transaction receipt            |
+| `POST` | `/api/account/register`         | Register or initialize an account record             |
+| `GET`  | `/api/account/:address`         | Retrieve account state                               |
+| `GET`  | `/api/account/:address/history` | Retrieve account history                             |
+| `POST` | `/api/session/prepare-register` | Prepare a scoped session registration                |
+| `POST` | `/api/session/register`         | Register a scoped session                            |
+| `GET`  | `/api/session/:accountAddress`  | List account sessions                                |
+| `POST` | `/api/session/prepare-revoke`   | Prepare session revocation                           |
+| `POST` | `/api/session/revoke`           | Revoke a scoped session                              |
 
 ---
 
@@ -132,12 +134,14 @@ terrawallet/
 ### Installation
 
 1. **Clone the repository:**
+
    ```bash
    git clone https://github.com/notadeveloper7/terrawallet.git
    cd terrawallet
    ```
 
 2. **Frontend setup:**
+
    ```bash
    bun install
    cp .env.example .env
@@ -145,6 +149,7 @@ terrawallet/
    ```
 
 3. **Backend setup:**
+
    ```bash
    cd backend
    bun install
