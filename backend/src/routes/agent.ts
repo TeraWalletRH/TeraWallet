@@ -196,7 +196,7 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
     }
 
     // 3. Build prepared transaction for owner wallet execution
-    const preparedTransaction = buildPreparedTransaction(
+    const preparedTransaction = await buildPreparedTransaction(
       fullIntent,
       walletAddress,
       gates
@@ -211,11 +211,13 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
     });
   } catch (error) {
     if (error instanceof UnsupportedActionError) {
-      res.status(501).json({
+      const status = error.action.startsWith("SWAP") ? 422 : 501;
+      res.status(status).json({
         success: false,
         error: error.message,
         action: error.action,
         supported: false,
+        quoteUnavailable: error.action.startsWith("SWAP"),
       });
       return;
     }

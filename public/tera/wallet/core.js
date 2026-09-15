@@ -107,8 +107,15 @@ export function executionIssue(proposal, owner, chainId, now = Date.now()) {
     if (!Number.isFinite(expiry) || now > expiry)
       return "This proposal has expired. Prepare it again to refresh the checks.";
   }
-  if (intent.actionType === "BUY" || intent.actionType === "SELL")
-    return "Swap execution is unavailable until Tera supplies a verified quote and exact spending amounts.";
+  if (intent.actionType === "BUY" || intent.actionType === "SELL") {
+    const quote = proposal.quote || tx.quote || proposal.preparedTransaction?.quote;
+    if (!quote || !quote.amountOutWei || !quote.quotedAt || !quote.route)
+      return "This swap has no verified live quote. Prepare it again.";
+    if (!Array.isArray(tx.approvals)) return "Swap approvals are incomplete. Prepare it again.";
+    if (Number.isFinite(Date.parse(quote.quotedAt)) && now - Date.parse(quote.quotedAt) > 120000)
+      return "This swap quote is stale. Prepare it again.";
+    return null;
+  }
   if (intent.actionType === "CLAIM_YIELD")
     return "Yield claims are not yet supported by the transaction service.";
   if (intent.actionType !== "TRANSFER") return "Unsupported transaction action.";
@@ -158,33 +165,38 @@ export async function sendPrepared(provider, proposal, owner, chainId, beforeSen
   if (issue) throw new Error(issue);
   const tx = proposal.preparedTransaction;
   const nativeTransfer = proposal.intent.assetAddress === ZERO_ADDRESS;
-  const request = {
-    from: owner,
-    to: tx.to,
-    data: tx.data,
-    value: tx.value,
-    chainId: `0x${chainId.toString(16)}`,
-  };
+  const steps = [...(tx.approvals || []), tx];
   await assertWallet(provider, owner, chainId);
-  if (!nativeTransfer) {
-    const code = await provider.request({ method: "eth_getCode", params: [tx.to, "latest"] });
-    if (!code || code === "0x" || code === "0x0")
-      throw new Error("No token contract exists at this address on the selected network.");
+  let finalHash;
+  for (const step of steps) {
+    const request = { from: owner, to: step.to, data: step.data, value: step.value, chainId: `0x${chainId.toString(16)}` };
+    if (!nativeTransfer) {
+      const code = await provider.request({ method: "eth_getCode", params: [step.to, "latest"] });
+      if (!code || code === "0x" || code === "0x0")
+        throw new Error("No contract exists at a prepared transaction address on the selected network.");
+    }
+    const simulation = await provider.request({ method: "eth_call", params: [request, "latest"] });
+    if (!nativeTransfer && simulation !== "0x" && !/^0x0{63}1$/i.test(simulation))
+      throw new Error("The transaction failed wallet simulation.");
+    await provider.request({ method: "eth_estimateGas", params: [request] });
+    await assertWallet(provider, owner, chainId);
+    const refreshedIssue = executionIssue(proposal, owner, chainId);
+    if (refreshedIssue) throw new Error(refreshedIssue);
+    beforeSend();
+    const hash = await provider.request({ method: "eth_sendTransaction", params: [request] });
+    if (!isHash(hash)) throw new Error("The wallet returned an invalid transaction hash. Check your wallet activity before retrying.");
+    finalHash = hash;
+    if (step !== tx) {
+      // Wait for each approval before the swap so the router can observe the new allowance.
+      let receipt = null;
+      for (let attempt = 0; attempt < 60 && !receipt; attempt++) {
+        receipt = await provider.request({ method: "eth_getTransactionReceipt", params: [hash] });
+        if (!receipt) await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      if (!receipt || receipt.status === "0x0") throw new Error("An approval transaction did not confirm. The swap was not submitted.");
+    }
   }
-  const simulation = await provider.request({ method: "eth_call", params: [request, "latest"] });
-  if (!nativeTransfer && simulation !== "0x" && !/^0x0{63}1$/i.test(simulation))
-    throw new Error("The token rejected the transfer simulation.");
-  await provider.request({ method: "eth_estimateGas", params: [request] });
-  await assertWallet(provider, owner, chainId);
-  const refreshedIssue = executionIssue(proposal, owner, chainId);
-  if (refreshedIssue) throw new Error(refreshedIssue);
-  beforeSend();
-  const hash = await provider.request({ method: "eth_sendTransaction", params: [request] });
-  if (!isHash(hash))
-    throw new Error(
-      "The wallet returned an invalid transaction hash. Check your wallet activity before retrying.",
-    );
-  return hash;
+  return finalHash;
 }
 
 export async function checkReceipt(provider, record, chainId) {

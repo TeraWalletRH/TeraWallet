@@ -24,6 +24,13 @@ export interface GateResult {
   details?: Record<string, unknown>;
 }
 
+export interface PreparedUnsignedTransaction {
+  to: `0x${string}`;
+  data: `0x${string}`;
+  value: string;
+  chainId: number;
+}
+
 export interface PreparedTransaction {
   to: `0x${string}`;
   data: `0x${string}`;
@@ -32,4 +39,7 @@ export interface PreparedTransaction {
   actionHash: `0x${string}`;
   intent: UserIntent;
   gates: GateResult[];
+  approvals?: PreparedUnsignedTransaction[];
+  quote?: { amountOut: string; amountOutWei: string; decimalsOut: number; priceImpactPct: number; route: string; quotedAt: string };
+  expiresAt?: string;
 }
