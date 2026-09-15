@@ -4,6 +4,7 @@ import { SUPPORTED_RWA_ASSETS, findAsset } from "../data/assets";
 import { runGatePipeline } from "../pipeline/gates";
 import { buildPreparedTransaction, UnsupportedActionError } from "../pipeline/builder";
 import { type UserIntent } from "../pipeline/types";
+import { logger } from "../logging";
 
 const router = Router();
 
@@ -106,7 +107,7 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
           if (parsed.intent) intentDraft = parsed.intent;
         }
       } catch (aiErr) {
-        console.warn("Groq agent reasoning fallback to heuristic parser:", aiErr);
+          logger.warn(req, "agent.groq_fallback", aiErr);
       }
     }
 
@@ -218,7 +219,7 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
       });
       return;
     }
-    console.error("Agent proposal error:", error);
+    logger.error(req, "agent.proposal_failed", error);
     res.status(500).json({
       success: false,
       error: "Internal server error during agent proposal generation",
@@ -280,7 +281,7 @@ router.post("/api/agent/chat", async (req: Request, res: Response) => {
       reply,
     });
   } catch (error) {
-    console.error("Agent chat failed:", error);
+    logger.error(req, "agent.chat_failed", error);
     res.status(500).json({
       success: false,
       error: "Chat service unavailable",
