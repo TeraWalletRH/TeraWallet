@@ -13,10 +13,33 @@ import {
   ZERO_ADDRESS,
 } from "./core.js";
 import { renderAssistantMarkdown } from "./markdown.js";
+import {
+  LOCAL_ONLY,
+  REQUESTS,
+  describeRequest,
+  appendLog,
+  summarize,
+  exportable,
+} from "./privacy.js";
 
 const config = JSON.parse(document.getElementById("tera-config")?.textContent || "{}");
 const chainId = Number(config.chainId || 4663);
-const api = createApi(config.apiUrl || "https://api.terawallet.app");
+const apiUrl = config.apiUrl || "https://api.terawallet.app";
+const serviceHost = (() => {
+  try {
+    return new URL(apiUrl).host;
+  } catch {
+    return apiUrl;
+  }
+})();
+const request = createApi(apiUrl);
+// Every service request is recorded for the privacy status centre before it is
+// sent. Field names only: no address, amount or message text enters the log.
+const api = (path, body) => {
+  state.privacyLog = appendLog(state.privacyLog, describeRequest(path, body));
+  if (route() === "privacy") queueMicrotask(render);
+  return request(path, body);
+};
 const app = document.getElementById("wallet-app");
 const esc = (value) =>
   String(value ?? "").replace(
@@ -32,6 +55,7 @@ const titles = {
   policy: "Private policy",
   sessions: "Agent sessions",
   receipts: "Receipts",
+  privacy: "Privacy status",
   settings: "Settings",
 };
 const gateLabels = [
@@ -65,6 +89,7 @@ const state = {
   drafts: [],
   records: [],
   chat: [],
+  privacyLog: [],
   busy: false,
   loading: false,
   query: "",
@@ -156,6 +181,7 @@ function render() {
       policy,
       sessions,
       receipts,
+      privacy: privacyCentre,
       settings,
     }[key] || overview;
   app.innerHTML = `<div class="wallet-wrap">
@@ -243,6 +269,51 @@ function receipts() {
   if (!state.owner) return accountPrompt();
   return `<div class="section-label">Transactions tracked on this device</div>${state.records.map((r, i) => `<article class="panel live-record"><div class="proposal-top"><b>${esc(r.action || "Transaction")}</b>${chip(r.status === "confirmed" ? (r.recorded ? "Confirmed · recorded" : "Confirmed · audit sync pending") : r.status, r.status === "reverted")}</div>${pair("Submitted", r.createdAt)}<p>${explorer(r.txHash)}</p>${r.error ? `<p class="micro">${esc(r.error)}</p>` : ""}<div class="actions">${r.status !== "reverted" && !r.recorded ? button("Check status / retry audit sync", "receipt-check", `data-index="${i}" ${state.busy ? "disabled" : ""}`) : ""}${button("Export receipt", "receipt-export", `data-index="${i}"`)}</div></article>`).join("") || empty("No transactions tracked on this device.")}
     <div class="section-label live-history-heading">Account history from Tera</div>${state.errors.history ? empty(state.errors.history) : `<div class="table-scroll"><table><thead><tr><th>Action</th><th>Service status</th><th>Created</th><th>Transaction</th></tr></thead><tbody>${state.history.map((r) => `<tr><td>${esc(r.intent_type || r.intent?.actionType || "—")}</td><td>${esc(r.status)}</td><td>${esc(r.created_at || r.createdAt)}</td><td>${r.tx_hash ? explorer(r.tx_hash) : "—"}</td></tr>`).join("")}</tbody></table>${state.history.length ? "" : empty("No history returned by the service.")}</div>`}`;
+}
+function privacyCentre() {
+  const totals = summarize(state.privacyLog);
+  const time = (at) =>
+    new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  const list = (items, fallback) =>
+    items.length ? items.map((item) => esc(item)).join(" · ") : fallback;
+  return `<div class="privacy-totals">
+      <div class="metric"><strong>${totals.requests}</strong><small>Service requests from this page session</small></div>
+      <div class="metric"><strong>${totals.identifying}</strong><small>Requests that carried your wallet address</small></div>
+      <div class="metric"><strong>${totals.toModelProvider}</strong><small>Requests whose text reached the model provider</small></div>
+      <div class="metric"><strong>${totals.fields}</strong><small>Distinct fields sent</small></div>
+    </div>
+    <div class="note"><strong>Data boundary</strong>Requests go to ${esc(serviceHost)}. Balances and receipts are read directly through your wallet's network provider, so Tera does not see them. The log below records field names only — never an address, an amount or the text you typed.</div>
+    <div class="content-grid privacy-grid">
+      <section>
+        <div class="section-label"><span>This session's requests</span><div class="actions">${button("Export log", "privacy-export", state.privacyLog.length ? "" : "disabled")}${button("Clear log", "privacy-clear", state.privacyLog.length ? "" : "disabled")}</div></div>
+        ${
+          state.privacyLog.length
+            ? state.privacyLog
+                .map(
+                  (entry) => `<article class="panel privacy-entry">
+              <div class="proposal-top"><b>${esc(entry.label)}</b>${chip(entry.identifies ? "Address sent" : "No address sent", entry.identifies)}</div>
+              <p class="micro">${esc(entry.purpose)}</p>
+              ${pair("Sent", list(entry.sent, "No owner data"))}${pair("Request", `${entry.method} ${entry.path}`)}${pair("Goes to", entry.processors.join(" · "))}${pair("Withheld", list(entry.withheld, "Not documented"))}${pair("Recorded at", time(entry.at))}
+              <p class="micro">${esc(entry.retention)}</p>
+            </article>`,
+                )
+                .join("")
+            : empty(
+                "No service requests yet in this page session. Ask the assistant or prepare a proposal to watch the boundary live.",
+              )
+        }
+      </section>
+      <aside>
+        <div class="section-label">Never leaves this device</div>
+        ${LOCAL_ONLY.map((item) => `<article class="panel privacy-local"><b>${esc(item.label)}</b><p class="micro">${esc(item.detail)}</p></article>`).join("")}
+      </aside>
+    </div>
+    <div class="section-label privacy-catalogue-heading">Every request this wallet can make</div>
+    <div class="table-scroll"><table><thead><tr><th>Request</th><th>Fields sent</th><th>Goes to</th><th>Retention</th></tr></thead><tbody>${REQUESTS.map(
+      (entry) =>
+        `<tr><td><b>${esc(entry.label)}</b><small>${esc(entry.method)} ${esc(entry.path)}</small></td><td class="privacy-wrap">${list(entry.fields, "No owner data")}</td><td class="privacy-wrap">${esc(entry.processors.join(" · "))}</td><td class="privacy-wrap">${esc(entry.retention)}</td></tr>`,
+    ).join("")}</tbody></table></div>
+    <p class="micro">Retention is described by the service and cannot be verified from this page. Deleting service-side records is not available yet; clearing the log above removes only this local copy.</p>`;
 }
 function settings() {
   return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Data on this device</h2><p>Transaction hashes and audit-sync status are saved to resume tracking after a reload. Proposals and chat stay in this page session. No wallet keys are stored by Tera.</p><p class="micro">Disconnecting clears the current account view. Your wallet extension manages site permissions.</p></aside></div>`;
@@ -622,25 +693,34 @@ async function updateReceipt(record) {
     render();
   }
 }
-function exportReceipt(index) {
-  const record = state.records[index];
-  if (!record) return;
-  const data = {
-    chainId: record.chainId,
-    transactionHash: record.txHash,
-    actionHash: record.actionHash,
-    status: record.status,
-    recordedByTera: record.recorded,
-    receiptId: record.receiptId,
-  };
+function downloadJson(data, filename) {
   const url = URL.createObjectURL(
     new Blob([JSON.stringify(data, null, 2)], { type: "application/json" }),
   );
   const link = document.createElement("a");
   link.href = url;
-  link.download = `tera-${record.txHash.slice(0, 12)}.json`;
+  link.download = filename;
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function exportReceipt(index) {
+  const record = state.records[index];
+  if (!record) return;
+  downloadJson(
+    {
+      chainId: record.chainId,
+      transactionHash: record.txHash,
+      actionHash: record.actionHash,
+      status: record.status,
+      recordedByTera: record.recorded,
+      receiptId: record.receiptId,
+    },
+    `tera-${record.txHash.slice(0, 12)}.json`,
+  );
+}
+function exportPrivacyLog() {
+  if (!state.privacyLog.length) return;
+  downloadJson(exportable(state.privacyLog, serviceHost), `tera-privacy-log-${Date.now()}.json`);
 }
 function inspectAsset(symbol) {
   const a = state.assets.find((a) => a.symbol === symbol);
@@ -715,6 +795,11 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "approve") await approve(index);
     if (action === "receipt-export") exportReceipt(index);
+    if (action === "privacy-export") exportPrivacyLog();
+    if (action === "privacy-clear") {
+      state.privacyLog = [];
+      render();
+    }
     if (action === "receipt-check" && state.records[index])
       await updateReceipt(state.records[index]);
     if (action === "preflight") {
