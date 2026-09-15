@@ -2,6 +2,7 @@ import { encodeFunctionData, erc20Abi, formatUnits, keccak256, toHex, stringToBy
 import { type UserIntent, type GateResult, type PreparedTransaction } from "./types";
 import { USDG, findAsset } from "../data/assets";
 import { env } from "../env";
+import { SwapQuoteRpcError } from "../chain/swapQuote";
 
 /**
  * Thrown when an action type is explicitly unsupported.
@@ -43,7 +44,14 @@ export async function buildPreparedTransaction(
     const output = intent.actionType === "BUY" ? findAsset(intent.assetAddress) : USDG;
     if (!input || !output) throw new UnsupportedActionError("SWAP", "The selected swap asset is not supported.");
     const { planSwap } = await import("../chain/swapPlanner");
-    const plan = await planSwap(input.symbol, output.symbol, formatUnits(BigInt(intent.amount), input.decimals), accountAddress);
+    let plan;
+    try {
+      plan = await planSwap(input.symbol, output.symbol, formatUnits(BigInt(intent.amount), input.decimals), accountAddress);
+    } catch (error) {
+      if (error instanceof SwapQuoteRpcError)
+        throw new UnsupportedActionError("SWAP_QUOTE_RPC_UNAVAILABLE", error.message);
+      throw error;
+    }
     if (!plan) throw new UnsupportedActionError("SWAP_QUOTE_UNAVAILABLE", "No live swap route or verified quote is available for this pair and amount.");
     tx = plan.swap;
     approvals = plan.approvals;
