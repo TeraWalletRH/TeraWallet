@@ -53,3 +53,4 @@ pnpm-debug.log*
 # Documentation
 technical-docs/
 FRONTEND_INTEGRATION.md
+DUAL_REPO_SYNC*.md
