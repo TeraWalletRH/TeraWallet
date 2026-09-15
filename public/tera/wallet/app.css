@@ -1,0 +1,173 @@
+.live-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  border: 1px solid #aab49a;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  background: #e6e8dc;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.live-blocked,
+.live-form-error {
+  color: #895630;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.live-form-error:empty {
+  display: none;
+}
+.live-agent {
+  max-width: 850px;
+  margin: auto;
+}
+.live-agent .chat-feed {
+  max-height: 500px;
+}
+.live-record,
+.live-session {
+  margin-bottom: 18px;
+}
+.live-history-heading {
+  margin-top: 40px;
+}
+.live-wallet-options {
+  display: grid;
+  gap: 12px;
+}
+.live-menu {
+  display: none;
+}
+.pair b {
+  overflow-wrap: anywhere;
+  max-width: 65%;
+  text-align: right;
+}
+.proposal .status-list small {
+  display: block;
+  font-size: 11px;
+  line-height: 1.5;
+  margin-top: 6px;
+}
+.proposal .status-list b {
+  font-size: 9px;
+  white-space: normal;
+  text-align: right;
+}
+.chat-bubble {
+  overflow-wrap: anywhere;
+}
+.chat-bubble > .chat-role {
+  display: block;
+  font: 10px monospace;
+  text-transform: uppercase;
+  margin-bottom: 7px;
+  color: #77866c;
+}
+.chat-bubble.user > .chat-role {
+  color: #cad6b3;
+}
+.assistant-markdown strong,
+.assistant-markdown em {
+  display: inline;
+  font: inherit;
+  text-transform: none;
+  color: inherit;
+}
+.assistant-markdown p:first-child {
+  margin-top: 0;
+}
+.chat-bubble p {
+  margin: 10px 0;
+  line-height: 1.6;
+}
+.chat-bubble h1,
+.chat-bubble h2,
+.chat-bubble h3,
+.chat-bubble h4 {
+  font-size: 14px;
+  line-height: 1.3;
+  margin: 16px 0 8px;
+  font-weight: 650;
+}
+.chat-bubble h1 {
+  font-size: 17px;
+}
+.chat-bubble ul,
+.chat-bubble ol {
+  margin: 10px 0;
+  padding-left: 20px;
+  line-height: 1.65;
+}
+.chat-bubble code {
+  font:
+    11px/1.4 "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  background: #e2e5d5;
+  padding: 2px 4px;
+}
+.chat-bubble pre {
+  overflow: auto;
+  background: #e2e5d5;
+  padding: 12px;
+  margin: 10px 0;
+}
+.chat-bubble pre code {
+  padding: 0;
+  background: transparent;
+}
+.chat-bubble a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.chat-bubble.user {
+  white-space: pre-wrap;
+}
+.val {
+  overflow-wrap: anywhere;
+  max-width: 55%;
+}
+.wallet-dialog .field input,
+.wallet-dialog .field select {
+  width: 100%;
+}
+h1:focus {
+  outline: none;
+}
+@media (max-width: 809px) {
+  .live-menu {
+    display: inline-flex;
+  }
+  .wallet-head {
+    flex-wrap: wrap;
+    padding: 16px 0;
+  }
+  .wallet-nav {
+    display: none !important;
+  }
+  .wallet-nav.live-open {
+    display: grid !important;
+    grid-template-columns: 1fr 1fr;
+  }
+  .wallet-nav a,
+  .wallet-nav a:first-child {
+    padding: 16px 8px;
+  }
+  .live-notice {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .pair {
+    gap: 15px;
+  }
+  .wallet-head .chip {
+    display: none;
+  }
+  .live-record .actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

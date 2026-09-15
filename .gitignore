@@ -8,6 +8,7 @@ backend/.env
 
 # Dependencies
 node_modules/
+public/tera/connect/
 bun.lockb
 
 # Build outputs
