@@ -11,6 +11,7 @@ import {
   errorMessage,
   GATES,
   ZERO_ADDRESS,
+  evaluateLocalPolicy,
 } from "./core.js";
 import { renderAssistantMarkdown } from "./markdown.js";
 import {
@@ -518,15 +519,28 @@ function createProposal(symbol) {
     }
   };
 }
+async function prepareWithLocalPolicy(intent) {
+  const url = config.policyBundleUrl || `${apiUrl.replace(/\/$/, "")}/policy-bundle.json`;
+  let response;
+  try { response = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(10000) }); }
+  catch { throw new Error("Cannot load the signed local policy bundle."); }
+  if (!response.ok) throw new Error("The signed local policy bundle is unavailable.");
+  const bundle = await response.json();
+  const issue = evaluateLocalPolicy(intent, bundle, config.policySignerAddress || bundle.signer);
+  if (issue) throw new Error(issue);
+  return { ...intent, policyVersion: bundle.version, policySigner: bundle.signer, policySignature: bundle.signature };
+}
+
 async function prepare(intent) {
   connected();
   if (state.busy) throw new Error("Wait for the current request to finish.");
   const version = generation;
   state.busy = true;
   try {
+    const locallyApprovedIntent = await prepareWithLocalPolicy(intent);
     let result;
     try {
-      result = await api("/api/intent/prepare", intent);
+      result = await api("/api/intent/prepare", locallyApprovedIntent);
     } catch (error) {
       if (!error.payload?.gates) throw error;
       result = error.payload;
@@ -534,7 +548,7 @@ async function prepare(intent) {
     if (version !== generation) throw new Error("Your wallet changed. Prepare a new proposal.");
     // Keep the owner's requested intent for calldata comparison, never replace it
     // with a service-supplied owner, recipient or amount.
-    state.drafts.unshift({ ...result, intent, preparedAt: Date.now() });
+    state.drafts.unshift({ ...result, intent: locallyApprovedIntent, preparedAt: Date.now() });
   } finally {
     state.busy = false;
     render();
