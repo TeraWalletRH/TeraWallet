@@ -44,15 +44,34 @@ const zhText={
  ,'your logo':'你的标志','your logo 2':'你的标志','ceo avatar':'首席执行官头像','client avatar 1':'客户头像 1','client avatar 2':'客户头像 2','client avatar 3':'客户头像 3','client avatar 4':'客户头像 4','client avatar 5':'客户头像 5','integrated logo 1':'集成标志 1','integrated logo 2':'集成标志 2','integrated logo 3':'集成标志 3','integrated logo 4':'集成标志 4','integrated logo 5':'集成标志 5','integrated logo 6':'集成标志 6','integrated logo 7':'集成标志 7','integrated logo 8':'集成标志 8'
  ,'rights reserved':'版权所有','workflows':'工作流','Owner approval':'所有者批准','Scoped keys':'受限密钥','Private policy':'私有策略','Language':'语言','Select language':'选择语言','Open wallet':'打开钱包','Wallet overview':'钱包概览'
 };
-const zhLookup=Object.fromEntries(Object.entries(zhText).map(([key,value])=>[key.replace(/\s+/g,' ').trim().toLowerCase(),value]));
+Object.assign(zhText,{
+ 'Private':'私密','authorization':'授权','gates':'关卡','privacy policy':'隐私政策','Powered by':'技术支持','Got some other':'还有其他','Contract address':'合约地址','Copy':'复制','Copied':'已复制','Copy unavailable':'复制不可用','Dexscreener ↗':'在 Dexscreener 查看 ↗',
+ 'we built automation around your intent':'代理可以思考，你的钱包负责执行规则。','Built around your intent':'执行你的私有规则','Workflow workflows':'遵守受限上下文','Scoped agent sessions':'受限代理会话','explore wallet workflows':'探索钱包工作流',
+ 'Automate repetitive workflows, and reporting so your roles can focus on high-impact work.':'代理不能更改你的策略、绕过发行方限制或使用你的密钥签名。',
+ 'An innovative scoped sessions company seeking faster and more efficient research operations. Through intelligent automation, we optimized data processing.':'为低风险任务提供严格限定的权限、固定有效期和简单的撤销方式。该功能将在核心完成审计后推出。'
+});
+const normalizeTranslation=s=>s.replace(/\s+/g,'').toLowerCase();
+const zhLookup=Object.fromEntries(Object.entries(zhText).map(([key,value])=>[normalizeTranslation(key),value]));
+const translatedNodes=new WeakMap();
+function sourceText(node){const previous=translatedNodes.get(node);return previous&&node.nodeValue===previous.output?previous.source:node.nodeValue||''}
+function writeTranslation(node,source,output){translatedNodes.set(node,{source,output});if(node.nodeValue!==output)node.nodeValue=output}
 function locale(){try{return localStorage.getItem('tera-locale')==='zh'?'zh':'en'}catch{return'en'}}
 function applyLocaleUi(lang){document.documentElement.lang=lang==='zh'?'zh-CN':'en';$$('[data-locale-select]').forEach(s=>{s.value=lang});$$('[data-locale-label]').forEach(e=>{e.textContent=lang==='zh'?'语言':'Language'})}
 function setLocale(next){const lang=next==='zh'?'zh':'en',current=locale();try{localStorage.setItem('tera-locale',lang)}catch{}if(lang!==current){location.reload();return}applyLocaleUi(lang)}
 function translatePage(lang){
  document.title=lang==='zh'?'Tera 钱包 · 私密授权':'Tera Wallet · Private authorization';const description=$('meta[name="description"]');if(description)description.content=lang==='zh'?'Tera 钱包：面向受监督现实世界资产工作流的私密授权。代理提出方案，所有者保留权限。':'Tera Wallet: private authorization for supervised real-world asset workflows. The agent proposes. You retain authority.';
  const nodes=[];const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);while(walker.nextNode())nodes.push(walker.currentNode);
- nodes.forEach(n=>{if(n.parentElement?.closest('script,style,select'))return;const raw=n.nodeValue||'';const key=raw.trim();if(!key)return;if(!n.__teraEnglish)n.__teraEnglish=key;const lookupKey=n.__teraEnglish.replace(/\s+/g,' ').trim().toLowerCase();const value=lang==='zh'?zhLookup[lookupKey]||key:n.__teraEnglish;if(value&&value!==key)n.nodeValue=raw.replace(key,value)});
- $$('[alt],[aria-label],[placeholder]').forEach(el=>['alt','aria-label','placeholder'].forEach(attr=>{const raw=el.getAttribute(attr);if(!raw)return;const store=`__tera_${attr}`;if(!el[store])el[store]=raw;const lookupKey=el[store].replace(/\s+/g,' ').trim().toLowerCase();const value=lang==='zh'?zhLookup[lookupKey]||el[store]:el[store];el.setAttribute(attr,value)}));
+ const groups=new Map();
+ nodes.forEach(n=>{if(n.parentElement?.closest('script,style,select,code'))return;const block=n.parentElement?.closest('p,h1,h2,h3,h4,h5,h6,button,a,label')||n;const group=groups.get(block)||[];group.push(n);groups.set(block,group)});
+ for(const group of groups.values()){
+  const sources=group.map(sourceText),phrase=sources.join(''),translation=zhLookup[normalizeTranslation(phrase)];
+  if(lang==='zh'&&translation!==undefined){
+   // Keep every span in place, including spans used by heading animations.
+   const chars=Array.from(translation);let offset=0,consumed=0;
+   group.forEach((n,i)=>{consumed+=sources[i].length;const end=i===group.length-1?chars.length:Math.round(chars.length*consumed/Math.max(phrase.length,1));writeTranslation(n,sources[i],chars.slice(offset,end).join(''));offset=end});
+  }else group.forEach((n,i)=>{const source=sources[i],value=lang==='zh'?zhLookup[normalizeTranslation(source)]:undefined;writeTranslation(n,source,value===undefined?source:source.replace(source.trim(),value))});
+ }
+ $$('[alt],[aria-label],[placeholder]').forEach(el=>['alt','aria-label','placeholder'].forEach(attr=>{const raw=el.getAttribute(attr);if(!raw)return;const store=`__tera_${attr}`;if(!el[store])el[store]=raw;const value=lang==='zh'?zhLookup[normalizeTranslation(el[store])]||el[store]:el[store];if(raw!==value)el.setAttribute(attr,value)}));
  $$('[data-locale-label]').forEach(e=>{e.textContent=lang==='zh'?'语言':'Language'});
 }
 function localeControl(){return '<label class="tera-locale"><span data-locale-label>Language</span><select data-locale-select aria-label="Select language"><option value="en">EN</option><option value="zh">中文</option></select></label>'}
@@ -127,8 +146,10 @@ document.addEventListener('submit',e=>{e.preventDefault();e.stopImmediatePropaga
 installMenu();enhance();addEventListener('load',installTokenHero,{once:true});
 // Framer replaces its text nodes during hydration. Translate only after its
 // mutations settle; do not call enhance() here because it writes English chrome.
-let localeTimer=0,translationGuardUntil=0;
-function scheduleLocaleTranslation(){if(locale()!=='zh'||Date.now()<translationGuardUntil)return;clearTimeout(localeTimer);localeTimer=setTimeout(()=>{translationGuardUntil=Date.now()+350;translatePage('zh');installTokenHero()},140)}
-new MutationObserver(()=>scheduleLocaleTranslation()).observe(document.body,{childList:true,characterData:true,subtree:true});
-addEventListener('load',()=>[50,350,1200,2400].forEach(delay=>setTimeout(scheduleLocaleTranslation,delay)));
+let localeTimer=null;
+const localeObserver=new MutationObserver(scheduleLocaleTranslation);
+function observeLocale(){localeObserver.observe(document.body,{childList:true,characterData:true,subtree:true})}
+function scheduleLocaleTranslation(){if(locale()!=='zh'||localeTimer!==null)return;localeTimer=setTimeout(()=>{localeTimer=null;localeObserver.disconnect();try{installTokenHero();installLocaleControls();translatePage('zh')}finally{observeLocale()}},0)}
+observeLocale();scheduleLocaleTranslation();
+addEventListener('load',scheduleLocaleTranslation);
 })();
