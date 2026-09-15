@@ -8,7 +8,9 @@
 ![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-v4-38B2AC?logo=tailwindcss&logoColor=white)
 ![Robinhood Chain](https://img.shields.io/badge/Robinhood_Chain-Arbitrum_Orbit_L2-00C805)
 
-Tera Wallet is a self-custodial smart wallet that lets an AI agent *propose* real-world-asset (RWA) actions while the wallet — not the agent — decides what is permitted, and the owner keeps final authority. Built on Robinhood Chain (Arbitrum Orbit L2), it combines ERC-4337 account abstraction, ERC-3643 compliance preflight verification, and zero-knowledge policy proofs into a private-by-default execution environment: *the agent can think; Tera Wallet enforces; you approve.*
+Tera Wallet is a self-custodial wallet experience for supervised real-world-asset (RWA) workflows. An assistant can explain assets and prepare a typed proposal, while the owner reviews the checks and approves the exact transaction in their wallet. The product is built for Robinhood Chain (Arbitrum Orbit L2) and follows a private-by-default direction: *the agent can think; Tera Wallet checks; you approve.*
+
+**Explore the product:** [live wallet](https://terawallet.app/dashboard/) · [whitepaper](https://terawallet.app/whitepaper) · [roadmap](https://terawallet.app/roadmap/)
 
 ---
 
@@ -16,12 +18,16 @@ Tera Wallet is a self-custodial smart wallet that lets an AI agent *propose* rea
 
 | Capability | RWA Agent Supervised Model |
 |---|---|
-| **Self-Custodial Smart Account** | User-owned ERC-4337 smart wallet for supervised agent intent delegation. |
-| **Eligibility Preflight Gate** | Deterministic ERC-3643 (`canTransfer`) and issuer constraint checks before signatures or gas spend. |
-| **Private Policy Vault** | Private spending, risk, and asset limits that the agent and external venues cannot inspect. |
-| **Zero-Knowledge Policy Proofs** | Cryptographic verification that an action conforms to policy without revealing threshold values. |
-| **Scoped Session Keys** | Granular, revocable, low-risk execution sessions (e.g. yield claims) enforced on-chain. |
-| **Selective Disclosure Receipts** | Granular proof and receipt emission without exposing full portfolio or transaction history. |
+| **Owner-supervised proposals** | Assistant chat turns a request into a structured transfer or workflow proposal; the owner reviews before signing. |
+| **Review gates** | Asset, eligibility, policy, risk, and owner-approval states are shown before a wallet signature is requested. |
+| **Wallet connection** | RainbowKit supports installed wallets and WalletConnect on Robinhood Chain. |
+| **Asset registry** | Supported assets, decimals, contract addresses, eligibility, and action availability are visible in the dashboard. |
+| **Sessions and receipts** | Agent sessions, revocation state, transaction status, and explorer links are available in the dashboard. |
+| **Privacy direction** | The assistant receives only the message and wallet address needed for a proposal; private policy and selective-disclosure features are being expanded. |
+
+### Available now vs. planned
+
+The current repository demonstrates the supervised proposal workflow and its backend integration. ERC-4337 smart-account execution, production ERC-3643 adapters, zero-knowledge policy proofs, and cryptographic selective-disclosure receipts remain protocol work planned for later phases.
 
 ---
 
@@ -66,8 +72,21 @@ The backend exposes an Express service running under Bun:
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/health` | Service health status, server timestamp, and version |
-
-*(Additional agent intent gateway, preflight proxy, and session key management endpoints to be configured in subsequent phases).*
+| `GET` | `/api/assets` | Asset registry and supported actions |
+| `POST` | `/api/assets/preflight` | Asset and eligibility preflight checks |
+| `POST` | `/api/agent/chat` | Assistant response for an owner message |
+| `POST` | `/api/agent/propose` | Prepare a structured owner-review proposal |
+| `POST` | `/api/intent/prepare` | Prepare intent checks and transaction data |
+| `GET` | `/api/intent/:actionHash` | Retrieve an intent status |
+| `POST` | `/api/intent/receipt` | Reconcile a submitted transaction receipt |
+| `POST` | `/api/account/register` | Register or initialize an account record |
+| `GET` | `/api/account/:address` | Retrieve account state |
+| `GET` | `/api/account/:address/history` | Retrieve account history |
+| `POST` | `/api/session/prepare-register` | Prepare a scoped session registration |
+| `POST` | `/api/session/register` | Register a scoped session |
+| `GET` | `/api/session/:accountAddress` | List account sessions |
+| `POST` | `/api/session/prepare-revoke` | Prepare session revocation |
+| `POST` | `/api/session/revoke` | Revoke a scoped session |
 
 ---
 
@@ -144,12 +163,12 @@ terrawallet/
 
 ## Roadmap
 
-- [x] **Phase A — RWA Readiness**: Asset registry schema, viewer UI, issuer constraint presentation, mock RWA environments.
-- [ ] **Phase B — Agent Proposal Layer**: Intent Gateway and chat interface; agent drafts typed intents without direct execution rights.
-- [ ] **Phase C — Eligibility & Route Preflight**: ERC-3643 `canTransfer` preflight adapters, deterministic route validation, simulation.
-- [ ] **Phase D — Owner-Approved Execution**: ERC-4337 smart account UserOp execution; non-replayable hashes and owner authorization.
-- [ ] **Phase E — Scoped Agent Automation**: Bounded session keys for low-risk actions (e.g. yield claiming).
-- [ ] **Phase F — Private Policy Proofs**: Zero-knowledge proofs of policy compliance, scheduled post-audit.
+- [x] **Phase A — RWA readiness**: Asset registry, viewer UI, issuer-constraint presentation, and demo RWA environments.
+- [x] **Phase B — Supervised proposal layer**: Assistant chat, typed proposal preparation, review gates, wallet approval UI, and receipts.
+- [x] **Phase C — Integration foundation**: Backend intent, asset, account, and session routes with frontend preflight and receipt handling.
+- [ ] **Phase D — Production execution**: ERC-4337 smart-account UserOp execution, non-replayable hashes, and owner authorization on-chain.
+- [ ] **Phase E — Scoped automation**: Bounded session keys for low-risk actions with production registration and revocation enforcement.
+- [ ] **Phase F — Private policy proofs**: Local/private policy evaluation, zero-knowledge compliance proofs, and selective-disclosure receipts.
 
 ---
 
