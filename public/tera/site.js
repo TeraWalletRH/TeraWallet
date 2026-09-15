@@ -105,6 +105,16 @@ function installMenu(){
  document.addEventListener('keydown',e=>{if(b.getAttribute('aria-expanded')!=='true')return;if(e.key==='Escape'){setMenu(false,true);e.preventDefault()}if(e.key==='Tab'){const items=[b,...panel.querySelectorAll('a,button')],first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){last.focus();e.preventDefault()}else if(!e.shiftKey&&document.activeElement===last){first.focus();e.preventDefault()}}});
 }
 
+function installTokenHero(){
+ const address='0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8';
+ const heading=[...document.querySelectorAll('h1')].find(h=>/your assets|你的资产/i.test(h.textContent));
+ if(!heading||$('#tera-token-hero'))return;
+ const card=document.createElement('div');card.id='tera-token-hero';card.className='tera-token-hero';
+ card.innerHTML=`<span class="tera-token-label">CONTRACT ADDRESS</span><code>${address}</code><button type="button" aria-label="Copy contract address">Copy</button><a href="https://dexscreener.com/search?q=${address}" target="_blank" rel="noopener noreferrer">Dexscreener ↗</a>`;
+ (heading.parentElement||heading).append(card);
+ const copy=$('button',card);copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(address);copy.textContent='Copied';setTimeout(()=>{copy.textContent='Copy'},1600)}catch{copy.textContent='Copy unavailable';setTimeout(()=>{copy.textContent='Copy'},1600)}});
+}
+
 function phaseControl(target){const c=target.closest('[data-highlight]');if(!c)return false;const name=c.textContent.trim();if(!['first','next','first milestone','next milestone'].includes(name))return false;let section=c.parentElement;while(section&&(!section.querySelector('h2')||![...section.querySelectorAll('p')].some(p=>/^[A-F]$/.test(p.textContent.trim()))))section=section.parentElement;if(!section||!section.querySelector('h2').textContent.replace(/\s/g,'').includes('Roadmap'))return false;const next=name.startsWith('next');section.querySelectorAll('p').forEach(p=>{if(/^[A-F]$/.test(p.textContent.trim())){if(!p.dataset.phasePair)p.dataset.phasePair=String(Math.floor((p.textContent.trim().charCodeAt(0)-65)/2));const value=String.fromCharCode(65+Number(p.dataset.phasePair)*2+(next?1:0));if(p.textContent!==value){p.textContent=value;p.animate([{opacity:.3,transform:'translateY(6px)'},{opacity:1,transform:'translateY(0)'}],{duration:300})}}});section.querySelectorAll('[data-highlight]').forEach(b=>{if(['first','next','first milestone','next milestone'].includes(b.textContent.trim()))b.setAttribute('aria-pressed',String(b===c))});return true}
 document.addEventListener('keydown',e=>{if(['Enter',' '].includes(e.key)&&phaseControl(e.target))e.preventDefault()});
 document.addEventListener('click',e=>{if(phaseControl(e.target)){e.preventDefault();e.stopImmediatePropagation();return}const a=e.target.closest('a');if(!a||e.ctrlKey||e.metaKey||e.shiftKey||e.altKey||a.target==='_blank'||a.hasAttribute('download'))return;const h=a.getAttribute('href')||'';const t=a.textContent.trim().toLowerCase();
@@ -114,5 +124,5 @@ document.addEventListener('click',e=>{if(phaseControl(e.target)){e.preventDefaul
  if(a.origin===location.origin&&a.pathname!==location.pathname){e.preventDefault();e.stopImmediatePropagation();window.teraCloseMenu?.();window.teraNavigate(a.pathname+a.search+a.hash)}
 },true);
 document.addEventListener('submit',e=>{e.preventDefault();e.stopImmediatePropagation();comingSoon()},true);
-installMenu();enhance();
+installMenu();enhance();addEventListener('load',installTokenHero,{once:true});
 })();
