@@ -171,3 +171,65 @@ h1:focus {
     flex-direction: column;
   }
 }
+.privacy-totals {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+  border-top: 1px solid #bac3ac;
+  border-bottom: 1px solid #bac3ac;
+  margin-bottom: 24px;
+}
+.privacy-totals .metric {
+  padding: 22px 0;
+}
+.privacy-grid {
+  border-top: 0;
+  margin-top: 26px;
+  align-items: start;
+}
+.privacy-entry,
+.privacy-local {
+  margin-bottom: 16px;
+}
+.privacy-entry .pair b {
+  font-family: "IBM Plex Mono", "Courier New", monospace;
+  font-size: 12px;
+}
+.privacy-local b {
+  font-size: 14px;
+  font-weight: 550;
+}
+.privacy-local p {
+  margin: 8px 0 0;
+}
+.privacy-catalogue-heading {
+  margin: 40px 0 18px;
+}
+.privacy-wrap {
+  white-space: normal;
+  min-width: 190px;
+  max-width: 340px;
+  line-height: 1.6;
+}
+@media (max-width: 1150px) {
+  .privacy-totals {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+@media (max-width: 750px) {
+  .privacy-totals {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+  .privacy-totals .metric {
+    padding: 16px 0;
+    border-bottom: 1px dashed #c2cbb5;
+  }
+  .privacy-totals .metric:last-child {
+    border-bottom: 0;
+  }
+  .privacy-entry .actions,
+  .privacy-grid .section-label .actions {
+    flex-wrap: wrap;
+  }
+}

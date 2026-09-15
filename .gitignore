@@ -54,3 +54,5 @@ pnpm-debug.log*
 technical-docs/
 FRONTEND_INTEGRATION.md
 DUAL_REPO_SYNC*.md
+look-skipp.md
+TECH_UPDATES.md
