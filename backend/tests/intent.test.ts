@@ -6,9 +6,11 @@ import { env } from "../src/env";
 describe("Intent Pipeline & Prepared Transaction API", () => {
   const sampleOwner = "0x1111111111111111111111111111111111111111" as const;
   const sampleAsset = "0x4a0E65A3EcceC6dBe60AE065F2e7bb85Fae35eEa" as const; // SpaceX (SPCX)
+  const liveSwapTest = process.env.RUN_LIVE_SWAP_TESTS === "true" ? it : it.skip;
 
-
-  it("successfully prepares a valid BUY transaction passing all 5 gates", async () => {
+  // This depends on live RPC access and pool liquidity, so it runs only in an
+  // explicitly configured integration environment, never normal CI.
+  liveSwapTest("successfully prepares a valid BUY transaction passing all 5 gates", async () => {
     const payload = {
       ownerAddress: sampleOwner,
       actionType: "BUY",

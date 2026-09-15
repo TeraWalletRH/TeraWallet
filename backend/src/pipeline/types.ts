@@ -8,6 +8,9 @@ export interface UserIntent {
   amount: string;
   maxSpendUsdCents?: number;
   recipient?: `0x${string}`;
+  policyVersion?: number;
+  policySigner?: `0x${string}`;
+  policySignature?: `0x${string}`;
 }
 
 export type GateName =

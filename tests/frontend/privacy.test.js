@@ -18,7 +18,7 @@ test("every documented request is complete", () => {
   assert.ok(LOCAL_ONLY.length > 0);
   for (const entry of REQUESTS) {
     assert.equal(typeof entry.id, "string");
-    assert.match(entry.path, /^\/api\//);
+    assert.match(entry.path, /^(?:\/api\/|\/policy-bundle\.json$)/);
     assert.ok(["GET", "POST"].includes(entry.method));
     assert.ok(entry.label && entry.purpose && entry.retention);
     assert.ok(Array.isArray(entry.fields));
