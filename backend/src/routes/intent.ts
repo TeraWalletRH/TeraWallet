@@ -47,7 +47,7 @@ router.post("/api/intent/prepare", async (req: Request, res: Response) => {
     const accountAddress = intent.accountAddress ?? intent.ownerAddress;
 
     // Build the prepared transaction payload for user wallet popup
-    const preparedTransaction = buildPreparedTransaction(intent, accountAddress, gates);
+    const preparedTransaction = await buildPreparedTransaction(intent, accountAddress, gates);
 
     let intentId: string | null = null;
 
@@ -133,11 +133,13 @@ router.post("/api/intent/prepare", async (req: Request, res: Response) => {
     });
   } catch (error) {
     if (error instanceof UnsupportedActionError) {
-      res.status(501).json({
+      const status = error.action.startsWith("SWAP") ? 422 : 501;
+      res.status(status).json({
         success: false,
         error: error.message,
         action: error.action,
         supported: false,
+        quoteUnavailable: error.action.startsWith("SWAP"),
       });
       return;
     }
