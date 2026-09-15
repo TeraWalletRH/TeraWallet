@@ -5,6 +5,13 @@ import { env } from "../env";
 import { quoteV4Direct, type PoolKey } from "./swapQuoteV4";
 const WETH_ADDRESS = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73" as const;
 
+export class SwapQuoteRpcError extends Error {
+  constructor(message = "Robinhood Chain RPC is unavailable while fetching a live swap quote.", options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "SwapQuoteRpcError";
+  }
+}
+
 const client = createPublicClient({ transport: http(env.rhcRpcUrl) });
 const resolveToken = async (input: string) => {
   const asset = findAsset(input);
@@ -279,6 +286,10 @@ export async function quoteSwap(
   const client = createPublicClient({ transport: http(env.rhcRpcUrl) });
 
   try {
+    // Health-check the configured chain before route discovery. Without this,
+    // transport/DNS failures are indistinguishable from an empty pool set.
+    const chainId = await client.getChainId();
+    if (chainId !== env.rhcChainId) throw new SwapQuoteRpcError(`RPC returned chain ${chainId}; expected ${env.rhcChainId}.`);
     const [decimalsIn, decimalsOut] = await Promise.all([
       client.readContract({ address: tokenIn.address, abi: erc20Abi, functionName: "decimals" }),
       client.readContract({ address: tokenOut.address, abi: erc20Abi, functionName: "decimals" }),
@@ -320,10 +331,9 @@ export async function quoteSwap(
       route: winner.route,
       routing: winner.routing,
     };
-  } catch {
-    // No pool at any standard fee tier or venue, or the pair isn't listed —
-    // caller falls back to an unsimulated preview rather than crashing.
-    return null;
+  } catch (error) {
+    if (error instanceof SwapQuoteRpcError) throw error;
+    throw new SwapQuoteRpcError(undefined, { cause: error });
   }
 }
 
