@@ -2,6 +2,7 @@ import { type UserIntent, type GateResult } from "./types";
 import { createPublicClient, http, erc20Abi, isAddress } from "viem";
 import { env } from "../env";
 import { findAsset, SUPPORTED_RWA_ASSETS } from "../data/assets";
+import { evaluatePolicy } from "../policy";
 
 const publicClient = createPublicClient({
   transport: http(env.rhcRpcUrl),
@@ -159,17 +160,15 @@ export async function checkEligibilityPreflight(intent: UserIntent): Promise<Gat
 }
 
 export async function checkPolicyVault(intent: UserIntent): Promise<GateResult> {
-  // Default private spending limit: max $10,000 (1,000,000 cents) per trade
-  const MAX_SINGLE_TRADE_CENTS = 1_000_000;
-
-  if (intent.maxSpendUsdCents && intent.maxSpendUsdCents > MAX_SINGLE_TRADE_CENTS) {
+  const policy = evaluatePolicy(intent);
+  if (!policy.passed) {
     return {
       gate: "policy_vault",
       passed: false,
       reason: `Proposal exceeds the maximum single-trade limit`,
       details: {
         limitExceeded: true,
-        maxAllowedCents: MAX_SINGLE_TRADE_CENTS,
+        signedPolicy: true,
       },
     };
   }
@@ -179,9 +178,7 @@ export async function checkPolicyVault(intent: UserIntent): Promise<GateResult> 
     passed: true,
     details: {
       withinSingleTradeCap: true,
-      // Daily cap aggregation is not yet implemented (sprint 2).
-      // This is advisory only — not an enforced on-chain limit.
-      dailyCapTracking: "not_implemented",
+      signedPolicy: true,
     },
   };
 }

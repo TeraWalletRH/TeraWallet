@@ -33,6 +33,18 @@ export function formatUnits(value, decimals = 18) {
   return digits.slice(0, -decimals) + (fraction ? `.${fraction}` : "");
 }
 
+export function evaluateLocalPolicy(intent, bundle, signerAddress, now = Date.now()) {
+  if (!bundle || !bundle.signature || !bundle.rules || !sameAddress(bundle.signer, signerAddress))
+    return "The signed policy bundle could not be verified.";
+  const expires = Date.parse(bundle.expiresAt);
+  if (!Number.isFinite(expires) || now > expires) return "The signed policy bundle has expired.";
+  if (!Array.isArray(bundle.rules.allowedActions) || !bundle.rules.allowedActions.includes(intent.actionType))
+    return "This action is blocked by the signed local policy.";
+  if (intent.maxSpendUsdCents && Number(intent.maxSpendUsdCents) > Number(bundle.rules.maxSingleTradeUsdCents))
+    return "This proposal exceeds the signed local spending limit.";
+  return null;
+}
+
 export class ApiError extends Error {
   constructor(message, payload, status) {
     super(message);

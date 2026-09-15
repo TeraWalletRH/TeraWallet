@@ -30,6 +30,19 @@ export const LOCAL_ONLY = [
 // request can carry; the live log records the field names actually present.
 export const REQUESTS = [
   {
+    id: "policy-bundle",
+    method: "GET",
+    path: "/policy-bundle.json",
+    match: (path) => path === "/policy-bundle.json",
+    label: "Signed policy bundle",
+    purpose: "Load the public rules evaluated in this wallet before proposal preparation.",
+    fields: [],
+    identifies: false,
+    processors: ["Tera service"],
+    retention: "No wallet address, amount, or proposal data is sent with this read.",
+    withheld: ["Wallet address", "Balances", "Amounts", "Assistant messages", "Private keys"],
+  },
+  {
     id: "assets",
     method: "GET",
     path: "/api/assets",
