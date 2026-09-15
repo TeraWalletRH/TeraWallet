@@ -233,3 +233,87 @@ h1:focus {
     flex-wrap: wrap;
   }
 }
+.demo-guide {
+  border: 1px solid #8a9765;
+  background: #e7eadc;
+  margin-bottom: 26px;
+}
+.demo-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 14px 20px;
+  border-bottom: 1px solid #b6c09e;
+  background: #243b2c;
+  color: #f2f0ee;
+}
+.demo-banner .eyebrow {
+  font-size: 11px;
+}
+.demo-banner .chip {
+  border-color: #7d8d63;
+  color: #f2f0ee;
+}
+.demo-steps {
+  display: flex;
+  overflow: auto;
+  border-bottom: 1px solid #b6c09e;
+  scrollbar-width: thin;
+}
+.demo-step {
+  border: 0;
+  border-right: 1px solid #c3cbb1;
+  background: transparent;
+  color: #5c6857;
+  font:
+    11px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  text-transform: uppercase;
+  padding: 13px 16px;
+  white-space: nowrap;
+  min-height: 44px;
+  text-align: left;
+}
+.demo-step:hover {
+  background: #dde2cd;
+}
+.demo-step.done {
+  color: #76845f;
+}
+.demo-step.current {
+  background: #f2f0ee;
+  color: #2c4430;
+  box-shadow: inset 0 -2px 0 #768143;
+}
+.demo-body {
+  padding: 22px 20px;
+}
+.demo-body h2 {
+  font-size: 24px;
+  font-weight: 450;
+  letter-spacing: -0.8px;
+  margin: 0 0 10px;
+}
+.demo-body p {
+  font-size: 14px;
+  line-height: 1.7;
+  margin: 0 0 18px;
+  max-width: 70ch;
+}
+.privacy-entry .proposal-top .actions {
+  justify-content: flex-end;
+}
+@media (max-width: 750px) {
+  .demo-body {
+    padding: 18px 16px;
+  }
+  .demo-body h2 {
+    font-size: 21px;
+  }
+  .demo-body .actions .btn {
+    flex: 1 1 auto;
+  }
+}
