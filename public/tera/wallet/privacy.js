@@ -228,6 +228,8 @@ export function appendLog(log, entry, limit = 60) {
 export function summarize(log) {
   return {
     requests: log.length,
+    // Simulated entries were answered locally and never reached the network.
+    simulated: log.filter((entry) => entry.simulated).length,
     identifying: log.filter((entry) => entry.identifies).length,
     toModelProvider: log.filter((entry) => entry.processors.includes("Assistant model provider"))
       .length,
@@ -246,6 +248,7 @@ export function exportable(log, destination) {
       method: entry.method,
       path: entry.path,
       fieldsSent: entry.sent,
+      simulated: Boolean(entry.simulated),
       processors: entry.processors,
       retention: entry.retention,
       withheldFromThisRequest: entry.withheld,

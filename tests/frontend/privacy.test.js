@@ -122,6 +122,7 @@ test("summarize counts identifying requests and model-provider requests", () => 
   ];
   assert.deepEqual(summarize(log), {
     requests: 3,
+    simulated: 0,
     identifying: 1,
     toModelProvider: 1,
     fields: 3,

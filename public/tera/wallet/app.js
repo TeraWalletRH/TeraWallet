@@ -1,5 +1,6 @@
 import {
   createApi,
+  ApiError,
   executionIssue,
   sendPrepared,
   checkReceipt,
@@ -21,6 +22,7 @@ import {
   summarize,
   exportable,
 } from "./privacy.js";
+import { GUIDE, guideStep, createDemoState, demoApi, DEMO_OWNER } from "./demo.js";
 
 const config = JSON.parse(document.getElementById("tera-config")?.textContent || "{}");
 const chainId = Number(config.chainId || 4663);
@@ -35,10 +37,20 @@ const serviceHost = (() => {
 const request = createApi(apiUrl);
 // Every service request is recorded for the privacy status centre before it is
 // sent. Field names only: no address, amount or message text enters the log.
-const api = (path, body) => {
-  state.privacyLog = appendLog(state.privacyLog, describeRequest(path, body));
+const api = async (path, body) => {
+  const entry = describeRequest(path, body);
+  state.privacyLog = appendLog(
+    state.privacyLog,
+    state.demo ? { ...entry, simulated: true } : entry,
+  );
   if (route() === "privacy") queueMicrotask(render);
-  return request(path, body);
+  if (!state.demo) return request(path, body);
+  // The guided demo answers locally under the same success contract as the
+  // service, so every code path below behaves exactly as it does in production.
+  const payload = demoApi(path, body, chainId);
+  if (payload.success !== true)
+    throw new ApiError(payload.error || "Blocked by a check in the demo.", payload, 422);
+  return payload;
 };
 const app = document.getElementById("wallet-app");
 const esc = (value) =>
@@ -90,6 +102,8 @@ const state = {
   records: [],
   chat: [],
   privacyLog: [],
+  demo: false,
+  guide: 0,
   busy: false,
   loading: false,
   query: "",
@@ -185,7 +199,7 @@ function render() {
       settings,
     }[key] || overview;
   app.innerHTML = `<div class="wallet-wrap">
-    <header class="wallet-head"><a class="wordmark" href="/"><img src="/tera/logo.png" alt="">TERA WALLET</a><div class="actions">${chip(state.owner ? short(state.owner) : "Owner controlled")}${button(state.owner ? "Wallet ↗" : "Connect wallet ↗", state.owner ? "wallet-account" : "connect", state.busy ? "disabled" : "")}<button class="btn live-menu" aria-expanded="false" aria-controls="wallet-navigation" data-action="menu">Menu</button></div></header>
+    <header class="wallet-head"><a class="wordmark" href="/"><img src="/tera/logo.png" alt="">TERA WALLET</a><div class="actions">${state.demo ? chip("Guided demo · sample data") : chip(state.owner ? short(state.owner) : "Owner controlled")}${state.demo ? button("Exit demo", "demo-exit") : button(state.owner ? "Wallet ↗" : "Connect wallet ↗", state.owner ? "wallet-account" : "connect", state.busy ? "disabled" : "")}<button class="btn live-menu" aria-expanded="false" aria-controls="wallet-navigation" data-action="menu">Menu</button></div></header>
     <nav id="wallet-navigation" class="wallet-nav" aria-label="Wallet navigation">${Object.entries(
       titles,
     )
@@ -197,14 +211,60 @@ function render() {
     <main id="wallet-content"><div class="page-heading"><div><div class="eyebrow">Private authorization / Your authority</div><h1 tabindex="-1">${titles[key] || "Overview"}${key === "dashboard" ? "." : ""}</h1></div><p>The agent proposes. You review the checks and approve in your wallet.</p></div>
     ${state.notice ? `<div class="live-notice" role="alert"><span>${esc(state.notice)}</span>${button("Dismiss", "notice-dismiss")}</div>` : ""}
     ${state.owner && state.chain !== chainId ? `<div class="live-notice" role="status">Your wallet is on a different network. ${button("Switch network", "switch")}</div>` : ""}
+    ${guidePanel()}
     ${state.loading ? '<p class="micro" role="status">Refreshing your account…</p>' : ""}${view()}</main>
     <footer class="wallet-footer"><div>© ${new Date().getFullYear()} Tera Wallet<br>Owner signs · Owner pays network fees</div><div class="actions"><a href="/">Website ↗</a><a href="/roadmap/">Roadmap</a>${button("Refresh", "refresh", state.loading ? "disabled" : "")}</div></footer>
   </div>`;
   bindForms();
 }
 
+function guidePanel() {
+  if (!state.demo) return "";
+  const step = guideStep(state.guide);
+  const last = state.guide >= GUIDE.length - 1;
+  return `<section class="demo-guide" aria-label="Guided demo">
+    <div class="demo-banner"><span class="eyebrow">Guided demo · nothing is sent, nothing is signed</span>${chip(`Step ${state.guide + 1} of ${GUIDE.length}`)}</div>
+    <div class="demo-steps" role="list">${GUIDE.map(
+      (entry, i) =>
+        `<button role="listitem" class="demo-step ${i === state.guide ? "current" : ""} ${i < state.guide ? "done" : ""}" data-action="demo-step" data-index="${i}" aria-current="${i === state.guide}">${String(i + 1).padStart(2, "0")} ${esc(entry.title)}</button>`,
+    ).join("")}</div>
+    <div class="demo-body"><h2>${esc(step.title)}</h2><p>${esc(step.body)}</p>
+      <div class="actions">${button(`${esc(step.action)} ↗`, "demo-goto")}${button("Back", "demo-back", state.guide ? "" : "disabled")}${button(last ? "Finish" : "Next", "demo-next")}${button("Reset demo", "demo-reset")}</div>
+    </div>
+  </section>`;
+}
+// The demo makes the same calls the wallet makes on a real connection, so the
+// privacy log shows the true request shape. Each one is answered locally.
+async function runDemoSession() {
+  await loadAssets();
+  await refreshAccount();
+}
+function startDemo(notice = "") {
+  generation++;
+  Object.assign(state, createDemoState(chainId), { demo: true, guide: 0, notice });
+  // Simulated entries belong to the run being replaced; real ones are left alone.
+  state.privacyLog = state.privacyLog.filter((entry) => !entry.simulated);
+  navigate(guideStep(0).route);
+  void runDemoSession();
+}
+function resetDemo() {
+  startDemo("Demo reset. Sample data and the simulated request log are back to the start.");
+}
+function exitDemo() {
+  const wasDemo = state.demo;
+  state.demo = false;
+  state.guide = 0;
+  clearAccount();
+  state.assets = [];
+  state.assetsLoaded = false;
+  state.privacyLog = state.privacyLog.filter((entry) => !entry.simulated);
+  if (wasDemo)
+    state.notice = "Guided demo closed. Sample data and simulated requests were cleared.";
+  render();
+  void loadAssets();
+}
 function accountPrompt() {
-  return `<div class="panel"><h2>Your wallet. Your authority.</h2><p>Connect a browser wallet to load your balances, prepare proposals, and review account activity.</p>${button("Connect wallet ↗", "connect")}</div>`;
+  return `<div class="panel"><h2>Your wallet. Your authority.</h2><p>Connect a browser wallet to load your balances, prepare proposals, and review account activity.</p><p class="micro">Or walk the whole privacy boundary first with sample data. The guided demo sends nothing and signs nothing.</p><div class="actions">${button("Connect wallet ↗", "connect")}${button("Start guided demo", "demo-start")}</div></div>`;
 }
 function overview() {
   const balanceRows = state.assets
@@ -276,13 +336,28 @@ function privacyCentre() {
     new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const list = (items, fallback) =>
     items.length ? items.map((item) => esc(item)).join(" · ") : fallback;
+  // A simulated request never left the page, so it cannot claim anything was sent.
+  const addressChip = (entry) =>
+    entry.simulated
+      ? entry.identifies
+        ? "Would carry your address"
+        : "No address in this request"
+      : entry.identifies
+        ? "Address sent"
+        : "No address sent";
   return `<div class="privacy-totals">
-      <div class="metric"><strong>${totals.requests}</strong><small>Service requests from this page session</small></div>
-      <div class="metric"><strong>${totals.identifying}</strong><small>Requests that carried your wallet address</small></div>
+      <div class="metric"><strong>${totals.requests}</strong><small>Requests recorded in this page session</small></div>
+      ${totals.simulated ? `<div class="metric"><strong>${totals.simulated}</strong><small>Answered locally by the demo · never sent</small></div>` : ""}
+      <div class="metric"><strong>${totals.identifying}</strong><small>Requests carrying your wallet address</small></div>
       <div class="metric"><strong>${totals.toModelProvider}</strong><small>Requests whose text reached the model provider</small></div>
       <div class="metric"><strong>${totals.fields}</strong><small>Distinct fields sent</small></div>
     </div>
     <div class="note"><strong>Data boundary</strong>Requests go to ${esc(serviceHost)}. Balances and receipts are read directly through your wallet's network provider, so Tera does not see them. The log below records field names only — never an address, an amount or the text you typed.</div>
+    ${
+      state.demo
+        ? `<div class="note"><strong>Guided demo</strong>Every request below was answered locally. Nothing reached ${esc(serviceHost)} and nothing was signed.</div>`
+        : `<div class="note"><strong>Guided demo</strong>Want to show this boundary without a real account? ${button("Start guided demo", "demo-start")}</div>`
+    }
     <div class="content-grid privacy-grid">
       <section>
         <div class="section-label"><span>This session's requests</span><div class="actions">${button("Export log", "privacy-export", state.privacyLog.length ? "" : "disabled")}${button("Clear log", "privacy-clear", state.privacyLog.length ? "" : "disabled")}</div></div>
@@ -291,7 +366,7 @@ function privacyCentre() {
             ? state.privacyLog
                 .map(
                   (entry) => `<article class="panel privacy-entry">
-              <div class="proposal-top"><b>${esc(entry.label)}</b>${chip(entry.identifies ? "Address sent" : "No address sent", entry.identifies)}</div>
+              <div class="proposal-top"><b>${esc(entry.label)}</b><span class="actions">${entry.simulated ? chip("Simulated · not sent") : ""}${chip(addressChip(entry), entry.identifies)}</span></div>
               <p class="micro">${esc(entry.purpose)}</p>
               ${pair("Sent", list(entry.sent, "No owner data"))}${pair("Request", `${entry.method} ${entry.path}`)}${pair("Goes to", entry.processors.join(" · "))}${pair("Withheld", list(entry.withheld, "Not documented"))}${pair("Recorded at", time(entry.at))}
               <p class="micro">${esc(entry.retention)}</p>
@@ -316,7 +391,7 @@ function privacyCentre() {
     <p class="micro">Retention is described by the service and cannot be verified from this page. Deleting service-side records is not available yet; clearing the log above removes only this local copy.</p>`;
 }
 function settings() {
-  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Data on this device</h2><p>Transaction hashes and audit-sync status are saved to resume tracking after a reload. Proposals and chat stay in this page session. No wallet keys are stored by Tera.</p><p class="micro">Disconnecting clears the current account view. Your wallet extension manages site permissions.</p></aside></div>`;
+  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside><aside class="panel"><h2>Data on this device</h2><p>Transaction hashes and audit-sync status are saved to resume tracking after a reload. Proposals and chat stay in this page session. No wallet keys are stored by Tera.</p><p class="micro">Disconnecting clears the current account view. Your wallet extension manages site permissions.</p></aside></div>`;
 }
 
 async function loadAssets() {
@@ -575,9 +650,7 @@ function bindForms() {
         try {
           result = await api(
             mode === "propose" ? "/api/agent/propose" : "/api/agent/chat",
-            mode === "propose"
-              ? { prompt: message, ownerAddress: state.owner }
-              : { message },
+            mode === "propose" ? { prompt: message, ownerAddress: state.owner } : { message },
           );
         } catch (error) {
           if (!error.payload?.gates) throw error;
@@ -656,7 +729,11 @@ async function approve(index) {
       }
     }
   } catch (error) {
-    if (version === generation) state.notice = errorMessage(error);
+    if (version === generation) {
+      state.notice = errorMessage(error);
+      // Reaching the signature is the point of the demo's approval step.
+      if (state.demo && guideStep(state.guide).id === "approve") state.guide += 1;
+    }
   } finally {
     state.busy = false;
     render();
@@ -795,6 +872,27 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "approve") await approve(index);
     if (action === "receipt-export") exportReceipt(index);
+    if (action === "demo-start") startDemo();
+    if (action === "demo-exit") exitDemo();
+    if (action === "demo-reset") resetDemo();
+    if (action === "demo-goto") navigate(guideStep(state.guide).route);
+    if (action === "demo-step" && Number.isInteger(index)) {
+      state.guide = index;
+      navigate(guideStep(index).route);
+    }
+    if (action === "demo-back") {
+      state.guide = Math.max(state.guide - 1, 0);
+      navigate(guideStep(state.guide).route);
+    }
+    if (action === "demo-next") {
+      if (state.guide >= GUIDE.length - 1) {
+        state.notice = "That is the whole boundary. Reset the demo to run it again.";
+        render();
+      } else {
+        state.guide += 1;
+        navigate(guideStep(state.guide).route);
+      }
+    }
     if (action === "privacy-export") exportPrivacyLog();
     if (action === "privacy-clear") {
       state.privacyLog = [];
@@ -829,6 +927,7 @@ window.addEventListener("tera:wallet-change", (event) => {
     return;
   }
   if (!connection.provider?.request || !isAddress(connection.address)) return;
+  if (state.demo) exitDemo();
   if (
     state.provider === connection.provider &&
     sameAddress(state.owner, connection.address) &&
