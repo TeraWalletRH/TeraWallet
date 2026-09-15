@@ -134,14 +134,17 @@ export async function checkEligibilityPreflight(intent: UserIntent): Promise<Gat
       },
     };
   } catch (rpcError) {
-    // If RPC call fails, pass if asset exists in verified registry
+    // RPC call failed — fall back to static registry check.
+    // canTransfer is unknown; we have not verified deployment on-chain.
     if (asset) {
       return {
         gate: "eligibility_preflight",
         passed: true,
         details: {
-          canTransfer: true,
+          canTransfer: "unknown",
+          verifiedOnChain: false,
           verifiedInRegistry: true,
+          rpcFallback: true,
           tokenStandard: asset.tokenStandard,
         },
       };
@@ -150,7 +153,7 @@ export async function checkEligibilityPreflight(intent: UserIntent): Promise<Gat
     return {
       gate: "eligibility_preflight",
       passed: false,
-      reason: "Failed to verify asset contract on Robinhood Chain",
+      reason: "Failed to verify asset contract on Robinhood Chain and asset is not in static registry",
     };
   }
 }
@@ -163,9 +166,9 @@ export async function checkPolicyVault(intent: UserIntent): Promise<GateResult> 
     return {
       gate: "policy_vault",
       passed: false,
-      reason: `Proposal exceeds owner maximum single-trade limit of $${MAX_SINGLE_TRADE_CENTS / 100}`,
+      reason: `Proposal exceeds the maximum single-trade limit`,
       details: {
-        attemptedCents: intent.maxSpendUsdCents,
+        limitExceeded: true,
         maxAllowedCents: MAX_SINGLE_TRADE_CENTS,
       },
     };
@@ -175,8 +178,10 @@ export async function checkPolicyVault(intent: UserIntent): Promise<GateResult> 
     gate: "policy_vault",
     passed: true,
     details: {
-      withinPrivateLimits: true,
-      withinDailyCap: true,
+      withinSingleTradeCap: true,
+      // Daily cap aggregation is not yet implemented (sprint 2).
+      // This is advisory only — not an enforced on-chain limit.
+      dailyCapTracking: "not_implemented",
     },
   };
 }

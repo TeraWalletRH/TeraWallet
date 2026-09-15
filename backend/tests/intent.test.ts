@@ -31,7 +31,7 @@ describe("Intent Pipeline & Prepared Transaction API", () => {
     expect(tx.chainId).toBe(env.rhcChainId);
   });
 
-  it("successfully prepares a CLAIM_YIELD transaction", async () => {
+  it("returns 501 for CLAIM_YIELD (unsupported action — no yield protocol configured)", async () => {
     const payload = {
       ownerAddress: sampleOwner,
       actionType: "CLAIM_YIELD",
@@ -41,9 +41,10 @@ describe("Intent Pipeline & Prepared Transaction API", () => {
 
     const res = await request(app).post("/api/intent/prepare").send(payload);
 
-    expect(res.status).toBe(200);
-    expect(res.body.success).toBe(true);
-    expect(res.body.preparedTransaction.data).toStartWith("0x");
+    expect(res.status).toBe(501);
+    expect(res.body.success).toBe(false);
+    expect(res.body.supported).toBe(false);
+    expect(res.body.action).toBe("CLAIM_YIELD");
   });
 
   it("rejects intent exceeding policy spending limits with 422 status", async () => {
@@ -59,7 +60,7 @@ describe("Intent Pipeline & Prepared Transaction API", () => {
 
     expect(res.status).toBe(422);
     expect(res.body.success).toBe(false);
-    expect(res.body.error).toContain("exceeds owner maximum single-trade limit");
+    expect(res.body.error).toContain("exceeds the maximum single-trade limit");
   });
 
   it("rejects intent with zero amount at the risk engine gate with 422 status", async () => {

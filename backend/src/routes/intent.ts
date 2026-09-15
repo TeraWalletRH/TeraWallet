@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { type UserIntent } from "../pipeline/types";
 import { runGatePipeline } from "../pipeline/gates";
-import { buildPreparedTransaction } from "../pipeline/builder";
+import { buildPreparedTransaction, UnsupportedActionError } from "../pipeline/builder";
 import pool from "../db";
 import { env } from "../env";
 import { keccak256, stringToBytes } from "viem";
@@ -131,6 +131,15 @@ router.post("/api/intent/prepare", async (req: Request, res: Response) => {
       gates,
     });
   } catch (error) {
+    if (error instanceof UnsupportedActionError) {
+      res.status(501).json({
+        success: false,
+        error: error.message,
+        action: error.action,
+        supported: false,
+      });
+      return;
+    }
     console.error("Failed to prepare intent transaction:", error);
     res.status(500).json({
       success: false,
