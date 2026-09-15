@@ -4,6 +4,10 @@ Tera Wallet 是面向现实世界资产（RWA）工作流的自托管钱包体�
 
 **产品入口：** [钱包](https://terawallet.app/dashboard/) · [白皮书](https://terawallet.app/whitepaper) · [路线图](https://terawallet.app/roadmap/)
 
+**社区：** [X](https://x.com/terawalletrh) · [Telegram](https://t.me/terawalletrh)
+
+**合约地址：** `0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8`
+
 ## 核心能力
 
 | 能力                 | 说明                                                                         |
