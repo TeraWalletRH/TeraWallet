@@ -125,4 +125,10 @@ document.addEventListener('click',e=>{if(phaseControl(e.target)){e.preventDefaul
 },true);
 document.addEventListener('submit',e=>{e.preventDefault();e.stopImmediatePropagation();comingSoon()},true);
 installMenu();enhance();addEventListener('load',installTokenHero,{once:true});
+// Framer replaces its text nodes during hydration. Translate only after its
+// mutations settle; do not call enhance() here because it writes English chrome.
+let localeTimer=0,translationGuardUntil=0;
+function scheduleLocaleTranslation(){if(locale()!=='zh'||Date.now()<translationGuardUntil)return;clearTimeout(localeTimer);localeTimer=setTimeout(()=>{translationGuardUntil=Date.now()+350;translatePage('zh');installTokenHero()},140)}
+new MutationObserver(()=>scheduleLocaleTranslation()).observe(document.body,{childList:true,characterData:true,subtree:true});
+addEventListener('load',()=>[50,350,1200,2400].forEach(delay=>setTimeout(scheduleLocaleTranslation,delay)));
 })();
