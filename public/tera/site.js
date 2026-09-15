@@ -46,7 +46,8 @@ const zhText={
 };
 const zhLookup=Object.fromEntries(Object.entries(zhText).map(([key,value])=>[key.replace(/\s+/g,' ').trim().toLowerCase(),value]));
 function locale(){try{return localStorage.getItem('tera-locale')==='zh'?'zh':'en'}catch{return'en'}}
-function setLocale(next){const lang=next==='zh'?'zh':'en';try{localStorage.setItem('tera-locale',lang)}catch{}document.documentElement.lang=lang==='zh'?'zh-CN':'en';$$('[data-locale-select]').forEach(s=>{s.value=lang});translatePage(lang)}
+function applyLocaleUi(lang){document.documentElement.lang=lang==='zh'?'zh-CN':'en';$$('[data-locale-select]').forEach(s=>{s.value=lang});$$('[data-locale-label]').forEach(e=>{e.textContent=lang==='zh'?'语言':'Language'})}
+function setLocale(next){const lang=next==='zh'?'zh':'en',current=locale();try{localStorage.setItem('tera-locale',lang)}catch{}if(lang!==current){location.reload();return}applyLocaleUi(lang)}
 function translatePage(lang){
  document.title=lang==='zh'?'Tera 钱包 · 私密授权':'Tera Wallet · Private authorization';const description=$('meta[name="description"]');if(description)description.content=lang==='zh'?'Tera 钱包：面向受监督现实世界资产工作流的私密授权。代理提出方案，所有者保留权限。':'Tera Wallet: private authorization for supervised real-world asset workflows. The agent proposes. You retain authority.';
  const nodes=[];const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);while(walker.nextNode())nodes.push(walker.currentNode);
@@ -58,7 +59,7 @@ function localeControl(){return '<label class="tera-locale"><span data-locale-la
 function installLocaleControls(){
  const controls=$('.tera-header-controls');if(controls&&!controls.querySelector('[data-locale-select]')){const wrap=document.createElement('div');wrap.innerHTML=localeControl();controls.prepend(wrap.firstElementChild)}
  $$('footer').forEach(f=>{if(!f.querySelector('[data-locale-select]')){const wrap=document.createElement('div');wrap.className='tera-footer-locale';wrap.innerHTML=localeControl();f.append(wrap)}});
- $$('[data-locale-select]').forEach(s=>{s.onchange=()=>setLocale(s.value)});setLocale(locale());
+ $$('[data-locale-select]').forEach(s=>{s.onchange=()=>setLocale(s.value)});applyLocaleUi(locale());
 }
 function comingSoon(channel='Tera Wallet'){
  let d=$('#tera-coming-soon');if(!d){d=document.createElement('dialog');d.id='tera-coming-soon';d.className='tera-dialog';d.setAttribute('aria-labelledby','coming-title');d.innerHTML='<button class="close" aria-label="Close popup">×</button><small id="coming-channel"></small><h2 id="coming-title">Coming soon.</h2><p>We’re preparing the next chapter of Tera Wallet. Explore the interactive demo while live access and community channels take shape.</p><a href="/dashboard/">Explore wallet ↗</a>';document.body.append(d);$('.close',d).onclick=()=>d.close();d.addEventListener('click',e=>{if(e.target===d){const r=d.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)d.close()}});d.addEventListener('close',()=>lastFocus?.focus())}lastFocus=document.activeElement;$('#coming-channel').textContent=channel;d.showModal();
@@ -113,5 +114,5 @@ document.addEventListener('click',e=>{if(phaseControl(e.target)){e.preventDefaul
  if(a.origin===location.origin&&a.pathname!==location.pathname){e.preventDefault();e.stopImmediatePropagation();window.teraCloseMenu?.();window.teraNavigate(a.pathname+a.search+a.hash)}
 },true);
 document.addEventListener('submit',e=>{e.preventDefault();e.stopImmediatePropagation();comingSoon()},true);
-installMenu();enhance();let queued=false;const reapplyLocale=()=>{if(queued)return;queued=true;requestAnimationFrame(()=>{queued=false;enhance();translatePage(locale())})};new MutationObserver(reapplyLocale).observe(document.body,{childList:true,characterData:true,subtree:true});addEventListener('load',()=>{[0,250,1200].forEach(delay=>setTimeout(()=>translatePage(locale()),delay))});
+installMenu();enhance();
 })();
