@@ -6,7 +6,8 @@ import type { UserIntent } from "./pipeline/types";
 export const POLICY_DOMAIN = { name: "Tera Policy Bundle", version: "1" } as const;
 export const POLICY_RULES = {
   maxSingleTradeUsdCents: 1_000_000,
-  allowedActions: ["BUY", "SELL", "TRANSFER"],
+  // Yield remains visible as an explicitly unsupported action; execution is rejected by the builder.
+  allowedActions: ["BUY", "SELL", "TRANSFER", "CLAIM_YIELD"],
 } as const;
 
 export type SignedPolicyBundle = {
