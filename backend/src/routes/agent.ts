@@ -211,7 +211,7 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
     });
   } catch (error) {
     if (error instanceof UnsupportedActionError) {
-      const status = error.action.startsWith("SWAP") ? 422 : 501;
+      const status = error.action === "SWAP_QUOTE_RPC_UNAVAILABLE" ? 503 : error.action.startsWith("SWAP") ? 422 : 501;
       res.status(status).json({
         success: false,
         error: error.message,
