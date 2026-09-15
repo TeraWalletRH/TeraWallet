@@ -576,7 +576,7 @@ function bindForms() {
           result = await api(
             mode === "propose" ? "/api/agent/propose" : "/api/agent/chat",
             mode === "propose"
-              ? { prompt: message, ownerAddress: state.owner, accountAddress: state.owner }
+              ? { prompt: message, ownerAddress: state.owner }
               : { message },
           );
         } catch (error) {

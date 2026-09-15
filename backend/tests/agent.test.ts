@@ -32,4 +32,16 @@ describe("AI Agent Proposal Layer", () => {
     expect(res.body.reply).toBeString();
     expect(res.body.reply.length).toBeGreaterThan(20);
   }, 15000);
+
+  it("rejects proposal payloads that include unnecessary profile or portfolio data", async () => {
+    const res = await request(app).post("/api/agent/propose").send({
+      prompt: "Buy $10 of SpaceX",
+      ownerAddress: sampleOwner,
+      portfolio: { positions: [] },
+    });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe("Proposal payload only accepts prompt and ownerAddress");
+    expect(res.body.unsupportedFields).toEqual(["portfolio"]);
+  });
 });

@@ -5,8 +5,11 @@ import intentRouter from "./routes/intent";
 import agentRouter from "./routes/agent";
 import sessionRouter from "./routes/session";
 import accountRouter from "./routes/account";
+import { requestIdMiddleware } from "./logging";
 
 const app = express();
+
+app.use(requestIdMiddleware);
 
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin", "*");

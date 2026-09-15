@@ -12,6 +12,10 @@ Tera Wallet is a self-custodial wallet experience for supervised real-world-asse
 
 **Explore the product:** [live wallet](https://terawallet.app/dashboard/) · [whitepaper](https://terawallet.app/whitepaper) · [roadmap](https://terawallet.app/roadmap/)
 
+**Community:** [X](https://x.com/terawalletrh) · [Telegram](https://t.me/terawalletrh)
+
+**Contract address:** `0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8`
+
 语言：English · [简体中文](README.zh-CN.md)
 
 ---
