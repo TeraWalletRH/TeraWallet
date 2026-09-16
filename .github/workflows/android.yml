@@ -12,7 +12,7 @@ on:
         type: boolean
         default: false
 permissions:
-  contents: read
+  contents: write
 concurrency:
   group: android-${{ github.ref }}
   cancel-in-progress: true
@@ -90,3 +90,12 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
+      - name: Publish latest preview APK
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: .
+        run: |
+          gh release view android-preview --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create android-preview --repo "$GITHUB_REPOSITORY" --title "Tera Android Preview" --notes "Latest automated Android preview build." --prerelease --latest=false
+          gh release upload android-preview "$GITHUB_WORKSPACE/artifacts/tera-android-preview.apk" --repo "$GITHUB_REPOSITORY" --clobber
