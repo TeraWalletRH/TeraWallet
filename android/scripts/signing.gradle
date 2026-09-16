@@ -1,0 +1,14 @@
+// Applied after Expo prebuild. Release signing is supplied only by CI secrets.
+android {
+    signingConfigs {
+        teraRelease {
+            storeFile file(System.getenv('TERA_KEYSTORE_PATH'))
+            storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+            keyAlias System.getenv('ANDROID_KEY_ALIAS')
+            keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+        }
+    }
+    buildTypes {
+        release { signingConfig signingConfigs.teraRelease }
+    }
+}
