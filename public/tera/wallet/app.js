@@ -15,7 +15,12 @@ import {
   evaluateLocalPolicy,
 } from "./core.js";
 import { renderAssistantMarkdown } from "./markdown.js";
-import { verifyPolicyBundle } from "/tera/connect/policy-verify.js";
+import { verifyPolicyBundle, verifyBuildManifest } from "/tera/connect/policy-verify.js";
+import {
+  verifyManifest,
+  badge as integrityBadge,
+  summary as integritySummary,
+} from "./integrity.js";
 import { decryptVault, encryptVault, unlockVault } from "./vault.js";
 import { bridgeView, bridgeFormInput, checkBridgeQuote, sendBridge } from "./bridge.js";
 import {
@@ -161,6 +166,7 @@ const state = {
   rpcChecked: null,
   rpcError: "",
   rpcReads: 0,
+  integrity: null,
   demo: false,
   guide: 0,
   busy: false,
@@ -345,7 +351,7 @@ function render() {
       settings,
     }[key] || overview;
   app.innerHTML = `<div class="wallet-wrap">
-    <header class="wallet-head"><a class="wordmark" href="/"><img src="/tera/logo.png" alt="">TERA WALLET</a><div class="actions">${state.demo ? chip("Guided demo · sample data") : chip(state.owner ? short(state.owner) : "Owner controlled")}${state.demo ? button("Exit demo", "demo-exit") : button(state.owner ? "Wallet ↗" : "Connect wallet ↗", state.owner ? "wallet-account" : "connect", state.busy ? "disabled" : "")}<button class="btn live-menu" aria-expanded="false" aria-controls="wallet-navigation" data-action="menu">Menu</button></div></header>
+    <header class="wallet-head"><a class="wordmark" href="/"><img src="/tera/logo.png" alt="">TERA WALLET</a><div class="actions">${integrityChip()}${state.demo ? chip("Guided demo · sample data") : chip(state.owner ? short(state.owner) : "Owner controlled")}${state.demo ? button("Exit demo", "demo-exit") : button(state.owner ? "Wallet ↗" : "Connect wallet ↗", state.owner ? "wallet-account" : "connect", state.busy ? "disabled" : "")}<button class="btn live-menu" aria-expanded="false" aria-controls="wallet-navigation" data-action="menu">Menu</button></div></header>
     <nav id="wallet-navigation" class="wallet-nav" aria-label="Wallet navigation">${Object.entries(
       titles,
     )
@@ -355,6 +361,7 @@ function render() {
       )
       .join("")}</nav>
     <main id="wallet-content"><div class="page-heading"><div><div class="eyebrow">Private authorization / Your authority</div><h1 tabindex="-1">${titles[key] || "Overview"}${key === "dashboard" ? "." : ""}</h1></div><p>The agent proposes. You review the checks and approve in your wallet.</p></div>
+    ${state.integrity?.status === "modified" ? `<div class="live-notice integrity-alarm" role="alert"><span><b>This page does not match the published release.</b> ${esc(state.integrity.matched)} of ${esc(state.integrity.checked)} modules match. Do not approve a transaction from this page until you know why. <a href="${href("settings")}">See which files ↗</a></span></div>` : ""}
     ${state.notice ? `<div class="live-notice" role="alert"><span>${esc(state.notice)}</span>${button("Dismiss", "notice-dismiss")}</div>` : ""}
     ${state.owner && state.chain !== chainId ? `<div class="live-notice" role="status">Your wallet is on a different network. ${button("Switch network", "switch")}</div>` : ""}
     ${guidePanel()}
@@ -889,6 +896,41 @@ function privacyCentre() {
     <p class="micro">Retention is described by the service and cannot be verified from this page. Deleting service-side records is not available yet; clearing the log above removes only this local copy.</p>`;
 }
 
+function integrityChip() {
+  const mark = integrityBadge(state.integrity);
+  const tone = mark.tone === "fail" ? "fail" : mark.tone === "muted" ? "muted" : "";
+  return `<span class="chip integrity-chip ${tone}" title="Code transparency">${esc(mark.label)}</span>`;
+}
+function codeTransparencyPanel() {
+  const result = state.integrity;
+  const mark = integrityBadge(result);
+  const rows = result?.files || [];
+  const failing = rows.filter((file) => !file.ok);
+  const shown = failing.length ? failing : rows;
+  return `<p>${esc(integritySummary(result, location.host))}</p>
+    ${result ? pair("Release", result.release || "Not published") : ""}
+    ${result?.builtAt ? pair("Built", new Date(result.builtAt).toLocaleString()) : ""}
+    ${result ? pair("Manifest", result.signed ? (result.signerOk ? "Signed and verified" : result.signerOk === null ? "Signed · not checkable here" : "Signed · signature failed") : "Published without a signature") : ""}
+    ${result ? pair("Modules matching", `${result.matched} of ${result.checked}`) : ""}
+    <div class="actions">${button("Check again", "integrity-recheck")}${button("Download manifest", "integrity-download", result ? "" : "disabled")}</div>
+    ${
+      shown.length
+        ? `<div class="table-scroll integrity-table"><table><thead><tr><th>Module</th><th>Result</th></tr></thead><tbody>${shown
+            .map(
+              (file) =>
+                `<tr><td><b>${esc(file.path)}</b><small>${esc(file.ok ? file.expected : `expected ${file.expected}`)}</small>${file.ok ? "" : `<small>${esc(file.actual ? `served ${file.actual}` : "could not be read")}</small>`}</td><td>${chip(file.ok ? "Matches" : "Does not match", !file.ok)}</td></tr>`,
+            )
+            .join(
+              "",
+            )}</tbody></table></div>${failing.length ? "" : '<p class="micro">Every module checked is listed above with the hash it was published under.</p>'}`
+        : ""
+    }
+    <p class="micro"><b>What this proves.</b> The files this site is serving right now match a published list of hashes${result?.signed && result?.signerOk ? ", and that list was signed by the expected key" : ""}. ${mark.tone === "ok" ? "That is what a good result means, and no more." : ""}</p>
+    <p class="micro"><b>What it does not prove.</b> It cannot hash the code already running in this tab, and it cannot save you from an origin that has been taken over — whoever can replace a module can replace this checker. The published hashes are the part that survives that: fetch the files yourself and compare, or check them against the public source. The connection bundle under /tera/connect/ is a build output and is not covered.</p>
+    <p class="micro">Verify one yourself, from a terminal:</p>
+    <div class="share-preview"><pre>curl -s https://${esc(location.host)}/tera/wallet/app.js | openssl dgst -binary -sha256 | openssl base64 -A</pre></div>`;
+}
+
 function balanceReadsPanel() {
   const own = Boolean(state.rpcEndpoint);
   const described = own ? describeEndpoint(state.rpcEndpoint) : null;
@@ -932,7 +974,7 @@ async function saveBalanceEndpoint() {
 }
 
 function settings() {
-  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
+  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
 async function loadAssets() {
@@ -1165,6 +1207,50 @@ async function prepareWithLocalPolicy(intent) {
     policySignature: bundle.signature,
   };
 }
+// Check the wallet's own modules against the published manifest. It runs after
+// the first render and never blocks the wallet: a failed check is information,
+// not a reason to stop the owner reading their own screen.
+async function checkIntegrity() {
+  const manifestSigner = config.manifestSignerAddress || config.policySignerAddress || "";
+  try {
+    const response = await fetch("/tera/wallet/manifest.json", {
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) throw new Error(String(response.status));
+    const manifest = await response.json();
+    state.integrity = await verifyManifest(manifest, {
+      // Read from the server rather than the cache: this reports what is being
+      // served now, which is what an independent check would also see.
+      fetchFile: async (path) => {
+        const file = await fetch(path, { cache: "no-store", signal: AbortSignal.timeout(10000) });
+        if (!file.ok) throw new Error(String(file.status));
+        return new Uint8Array(await file.arrayBuffer());
+      },
+      // Without a configured signer there is nothing to check a signature
+      // against, so none is claimed.
+      ...(manifestSigner
+        ? { verifySignature: verifyBuildManifest, expectedSigner: manifestSigner }
+        : {}),
+    });
+  } catch {
+    state.integrity = {
+      status: "unavailable",
+      reason: "The build manifest could not be read from this site.",
+      signed: false,
+      signerOk: null,
+      release: "",
+      builtAt: "",
+      checked: 0,
+      matched: 0,
+      problems: [],
+      files: [],
+    };
+  }
+  render();
+}
+
 async function loadPolicyBundle(force = false) {
   if (state.policyBundle && !force && Date.parse(state.policyBundle.expiresAt) > Date.now())
     return state.policyBundle;
@@ -1831,6 +1917,15 @@ document.addEventListener("click", async (event) => {
       closeDialog();
       if (plan) await sendMessage({ ...plan, minimised: action === "minimise-send" });
     }
+    if (action === "integrity-recheck") {
+      state.integrity = null;
+      render();
+      await checkIntegrity();
+    }
+    if (action === "integrity-download") {
+      const response = await fetch("/tera/wallet/manifest.json", { cache: "no-store" });
+      downloadJson(await response.json(), `tera-build-manifest-${Date.now()}.json`);
+    }
     if (action === "rpc-save") await saveBalanceEndpoint();
     if (action === "rpc-clear") {
       state.rpcEndpoint = "";
@@ -2021,3 +2116,4 @@ setInterval(() => {
 }, 1000);
 render();
 void loadAssets();
+void checkIntegrity();
