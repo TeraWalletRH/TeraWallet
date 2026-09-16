@@ -60,11 +60,11 @@ export class ApiError extends Error {
 }
 
 export function createApi(baseUrl, fetcher = fetch) {
-  return async (path, body) => {
+  return async (path, body, options = {}) => {
     let response;
     try {
       response = await fetcher(`${baseUrl.replace(/\/$/, "")}${path}`, {
-        method: body === undefined ? "GET" : "POST",
+        method: options.method || (body === undefined ? "GET" : "POST"),
         headers:
           body === undefined
             ? { Accept: "application/json" }
