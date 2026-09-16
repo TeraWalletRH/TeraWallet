@@ -539,3 +539,138 @@ h1:focus {
     min-width: 100%;
   }
 }
+.boundary {
+  border: 1px solid #b9c0ae;
+  padding: 14px 16px;
+  margin: 14px 0 4px;
+}
+.boundary summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font:
+    11px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  text-transform: uppercase;
+}
+.boundary-side,
+.boundary-side-note {
+  display: block;
+  padding: 12px 14px;
+  margin: 12px 0;
+  background: #e7eadc;
+  border-left: 2px solid #a2ac7a;
+}
+.boundary-side b,
+.boundary-side-note b {
+  display: block;
+  font:
+    10px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #4c622f;
+  margin-bottom: 5px;
+}
+.boundary-side small,
+.boundary-side-note small {
+  font-size: 12px;
+  line-height: 1.6;
+  color: #5d6858;
+}
+.boundary-side-note {
+  background: #243b2c;
+  border-left-color: #f2f0ee;
+}
+.boundary-side-note b {
+  color: #dbe2c4;
+}
+.boundary-side-note small {
+  color: #dfe3d4;
+}
+.boundary-stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  counter-reset: stage;
+}
+.boundary-stages .stage {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-bottom: 1px dashed #c8cfbb;
+}
+.stage-mark {
+  width: 18px;
+  flex: none;
+  text-align: center;
+  font:
+    12px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  color: #8b957e;
+}
+.stage-body {
+  flex: 1;
+  min-width: 0;
+}
+.stage-body b {
+  display: block;
+  font-size: 13px;
+  font-weight: 550;
+}
+.stage-body small {
+  display: block;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #717c65;
+  margin-top: 5px;
+}
+.boundary-stages .stage em {
+  font-style: normal;
+  font:
+    9px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  color: #8b957e;
+  white-space: nowrap;
+}
+.stage.running .stage-mark,
+.stage.running em {
+  color: #4c622f;
+}
+.stage.done .stage-mark,
+.stage.done em {
+  color: #566b3e;
+}
+.stage.failed .stage-mark,
+.stage.failed em {
+  color: #945f3d;
+}
+.stage.owner .stage-body b {
+  color: #2c4430;
+}
+.boundary-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 6px 0;
+  font:
+    10px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #4c622f;
+}
+.boundary-line::before,
+.boundary-line::after {
+  content: "";
+  flex: 1;
+  height: 2px;
+  background: repeating-linear-gradient(90deg, #768143 0 6px, transparent 6px 12px);
+}

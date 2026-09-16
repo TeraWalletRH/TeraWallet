@@ -29,6 +29,16 @@ import { GUIDE, guideStep, createDemoState, demoApi, DEMO_OWNER } from "./demo.j
 import { redactProposal, toText, leaks, formatExact } from "./redact.js";
 import { GATE_LABELS, explainGate, localChecks, localSummary } from "./checks.js";
 import { snapshot, appendVersion, versionTrail, pruneVersions, formatAmount } from "./history.js";
+import {
+  STAGES,
+  SIDE_NOTES,
+  OWNER,
+  stagesFor,
+  initialProgress,
+  applyStage,
+  progressSummary,
+  boundaryIndex,
+} from "./boundary.js";
 
 const config = JSON.parse(document.getElementById("tera-config")?.textContent || "{}");
 const chainId = Number(config.chainId || 4663);
@@ -103,6 +113,7 @@ const state = {
   privacyLog: [],
   policyBundle: null,
   versions: {},
+  approval: null,
   policyError: "",
   vaultKey: null,
   vaultRetentionDays: 30,
@@ -331,6 +342,45 @@ function registry() {
 function chat() {
   return `<div class="section-label">Agent assistant ${chip("Owner supervised")}</div><div class="note">Ask a question or request an action. Only the message you submit and the wallet address needed for a proposal are sent.</div><div class="chat-feed" aria-live="polite">${state.chat.length ? state.chat.map((m) => `<div class="chat-bubble ${m.role === "user" ? "user" : ""}"><strong class="chat-role">${m.role === "user" ? "You" : "Tera assistant"}</strong>${m.role === "assistant" ? `<div class="assistant-markdown">${renderAssistantMarkdown(m.text)}</div>` : esc(m.text)}</div>`).join("") : '<p class="micro">Explore an asset or describe a proposal you want to review.</p>'}</div><form id="chat-form"><div class="field"><label for="chat-mode">Message type</label><select id="chat-mode" name="mode"><option value="chat">Ask a question</option><option value="propose">Prepare a proposal</option></select></div><div class="composer"><textarea name="message" aria-label="Message the agent" placeholder="Ask about an asset or describe an action…" required maxlength="1200"></textarea><button aria-label="Send message" ${state.busy ? "disabled" : ""}>↑</button></div><p class="micro">Messages are processed by Tera’s assistant service. Proposals always require your review.</p></form>`;
 }
+// The approval boundary: every stage that runs when this action is approved,
+// with the single line where authority stops being Tera's and becomes yours.
+function boundaryBlock(proposal, index) {
+  const intent = proposal.intent || proposal.preparedTransaction?.intent;
+  if (!proposal.preparedTransaction || !intent) return "";
+  const live = state.approval?.index === index ? state.approval : null;
+  const stages =
+    live?.stages ||
+    stagesFor({
+      nativeTransfer: intent.assetAddress === ZERO_ADDRESS,
+      steps: 1 + (proposal.preparedTransaction.approvals?.length || 0),
+    });
+  const progress = live?.progress || initialProgress(stages);
+  const summary = progressSummary(progress, stages);
+  const crossAt = boundaryIndex(stages);
+  const signatures = 1 + (proposal.preparedTransaction.approvals?.length || 0);
+  const mark = {
+    pending: "·",
+    running: "▶",
+    done: "✓",
+    failed: "✕",
+    skipped: "—",
+  };
+  return `<details class="boundary" ${live ? "open" : ""}>
+    <summary><span>Where your authority begins</span><b>${esc(summary.crossed ? "Crossed" : "Not crossed")}</b></summary>
+    <p class="micro">${esc(summary.text)}</p>
+    ${signatures > 1 ? `<p class="micro">This action needs ${signatures} signatures: an allowance first, then the action itself. The boundary is crossed once for each.</p>` : ""}
+    <div class="boundary-side"><b>${esc(SIDE_NOTES.prepared.title)}</b><small>${esc(SIDE_NOTES.prepared.note)}</small></div>
+    <ol class="boundary-stages">
+      ${stages
+        .map((stage, i) => {
+          const status = progress[stage.id] || "pending";
+          return `${i === crossAt ? `<li class="boundary-line" aria-hidden="false"><span>Authority moves here</span></li><li class="boundary-side-note"><b>${esc(SIDE_NOTES.owner.title)}</b><small>${esc(SIDE_NOTES.owner.note)}</small></li>` : ""}
+          <li class="stage ${stage.side} ${status}"><span class="stage-mark" aria-hidden="true">${mark[status] || "·"}</span><span class="stage-body"><b>${esc(stage.label)}</b><small>${esc(stage.detail)}</small></span><em>${esc(status.toUpperCase())}</em></li>`;
+        })
+        .join("")}
+    </ol>
+  </details>`;
+}
 // A local, owner-only record of how this action changed between preparations.
 function historyBlock(proposal) {
   const lineage = proposal?.lineage;
@@ -425,6 +475,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
     }).join("")}</ul>
     ${localBlock(p)}
     ${historyBlock(p)}
+    ${boundaryBlock(p, index)}
     ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", intent.recipient) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
     ${submitted ? `<p>Transaction: ${explorer(p.txHash)}</p>` : issue ? `<p class="live-blocked">${esc(issue)}</p>` : '<p class="micro">Review the token amount and recipient. Your wallet will ask you to sign and pay the network fee.</p>'}
     <div class="actions">${button("Approve in wallet ↗", "approve", `data-index="${index}" ${issue || submitted || state.busy || state.chain !== chainId ? "disabled" : ""}`)}${button("Prepare again", "reprepare", `data-index="${index}" ${state.busy || submitted || !intent ? "disabled" : ""}`)}${button("Share redacted", "share", `data-index="${index}"`)}${button("Dismiss", "draft-dismiss", `data-index="${index}" ${state.busy ? "disabled" : ""}`)}</div></article>`;
@@ -863,15 +914,31 @@ async function approve(index) {
   const provider = state.provider,
     owner = state.owner,
     version = generation;
+  const stages = stagesFor({
+    nativeTransfer: proposal.intent.assetAddress === ZERO_ADDRESS,
+    steps: 1 + (proposal.preparedTransaction.approvals?.length || 0),
+  });
   state.busy = true;
-  state.notice = "Checking the transfer before opening your wallet…";
+  state.approval = { index, progress: initialProgress(stages), stages };
+  state.notice = "Running read-only checks. Your wallet has not been asked to sign.";
   render();
   try {
-    const hash = await sendPrepared(provider, proposal, owner, chainId, () => {
-      if (version !== generation) throw new Error("Your wallet changed. Review a new proposal.");
-      state.notice = "Review and confirm the transaction in your wallet.";
-      render();
-    });
+    const hash = await sendPrepared(
+      provider,
+      proposal,
+      owner,
+      chainId,
+      () => {
+        if (version !== generation) throw new Error("Your wallet changed. Review a new proposal.");
+        state.notice = "Review and confirm the transaction in your wallet.";
+        render();
+      },
+      (id, status, info) => {
+        if (version !== generation || !state.approval) return;
+        state.approval.progress = applyStage(state.approval.progress, id, status, info);
+        render();
+      },
+    );
     proposal.txHash = hash;
     const record = {
       owner,

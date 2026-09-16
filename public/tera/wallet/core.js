@@ -38,9 +38,15 @@ export function evaluateLocalPolicy(intent, bundle, signerAddress, now = Date.no
     return "The signed policy bundle could not be verified.";
   const expires = Date.parse(bundle.expiresAt);
   if (!Number.isFinite(expires) || now > expires) return "The signed policy bundle has expired.";
-  if (!Array.isArray(bundle.rules.allowedActions) || !bundle.rules.allowedActions.includes(intent.actionType))
+  if (
+    !Array.isArray(bundle.rules.allowedActions) ||
+    !bundle.rules.allowedActions.includes(intent.actionType)
+  )
     return "This action is blocked by the signed local policy.";
-  if (intent.maxSpendUsdCents && Number(intent.maxSpendUsdCents) > Number(bundle.rules.maxSingleTradeUsdCents))
+  if (
+    intent.maxSpendUsdCents &&
+    Number(intent.maxSpendUsdCents) > Number(bundle.rules.maxSingleTradeUsdCents)
+  )
     return "This proposal exceeds the signed local spending limit.";
   return null;
 }
@@ -172,42 +178,109 @@ export async function assertWallet(provider, owner, chainId) {
     throw new Error("Switch your wallet to the configured Robinhood Chain network.");
 }
 
-export async function sendPrepared(provider, proposal, owner, chainId, beforeSend = () => {}) {
+export async function sendPrepared(
+  provider,
+  proposal,
+  owner,
+  chainId,
+  beforeSend = () => {},
+  onStage = () => {},
+) {
+  // `onStage` reports where the action has reached so the owner can see the
+  // moment authority moves from preparation to their own signature. It never
+  // changes what runs.
+  const report = (id, status, info) => {
+    try {
+      onStage(id, status, info || {});
+    } catch {
+      /* Progress reporting must never interrupt an approval. */
+    }
+  };
+  const stage = async (id, info, run) => {
+    report(id, "running", info);
+    try {
+      const value = await run();
+      report(id, "done", info);
+      return value;
+    } catch (error) {
+      report(id, "failed", { ...info, message: error?.message || "" });
+      throw error;
+    }
+  };
+
+  report("verify", "running", {});
   const issue = executionIssue(proposal, owner, chainId);
-  if (issue) throw new Error(issue);
+  if (issue) {
+    report("verify", "failed", { message: issue });
+    throw new Error(issue);
+  }
+  report("verify", "done", {});
   const tx = proposal.preparedTransaction;
   const nativeTransfer = proposal.intent.assetAddress === ZERO_ADDRESS;
   const steps = [...(tx.approvals || []), tx];
-  await assertWallet(provider, owner, chainId);
+  const total = steps.length;
+  await stage("wallet", { total }, () => assertWallet(provider, owner, chainId));
   let finalHash;
-  for (const step of steps) {
-    const request = { from: owner, to: step.to, data: step.data, value: step.value, chainId: `0x${chainId.toString(16)}` };
+  for (const [index, step] of steps.entries()) {
+    const info = { step: index + 1, total };
+    const request = {
+      from: owner,
+      to: step.to,
+      data: step.data,
+      value: step.value,
+      chainId: `0x${chainId.toString(16)}`,
+    };
     if (!nativeTransfer) {
-      const code = await provider.request({ method: "eth_getCode", params: [step.to, "latest"] });
-      if (!code || code === "0x" || code === "0x0")
-        throw new Error("No contract exists at a prepared transaction address on the selected network.");
+      await stage("contract", info, async () => {
+        const code = await provider.request({ method: "eth_getCode", params: [step.to, "latest"] });
+        if (!code || code === "0x" || code === "0x0")
+          throw new Error(
+            "No contract exists at a prepared transaction address on the selected network.",
+          );
+      });
+    } else {
+      report("contract", "skipped", info);
     }
-    const simulation = await provider.request({ method: "eth_call", params: [request, "latest"] });
-    if (!nativeTransfer && simulation !== "0x" && !/^0x0{63}1$/i.test(simulation))
-      throw new Error("The transaction failed wallet simulation.");
-    await provider.request({ method: "eth_estimateGas", params: [request] });
-    await assertWallet(provider, owner, chainId);
-    const refreshedIssue = executionIssue(proposal, owner, chainId);
-    if (refreshedIssue) throw new Error(refreshedIssue);
+    await stage("simulate", info, async () => {
+      const simulation = await provider.request({
+        method: "eth_call",
+        params: [request, "latest"],
+      });
+      if (!nativeTransfer && simulation !== "0x" && !/^0x0{63}1$/i.test(simulation))
+        throw new Error("The transaction failed wallet simulation.");
+    });
+    await stage("gas", info, () =>
+      provider.request({ method: "eth_estimateGas", params: [request] }),
+    );
+    await stage("recheck", info, async () => {
+      await assertWallet(provider, owner, chainId);
+      const refreshedIssue = executionIssue(proposal, owner, chainId);
+      if (refreshedIssue) throw new Error(refreshedIssue);
+    });
     beforeSend();
-    const hash = await provider.request({ method: "eth_sendTransaction", params: [request] });
-    if (!isHash(hash)) throw new Error("The wallet returned an invalid transaction hash. Check your wallet activity before retrying.");
+    const hash = await stage("sign", info, async () => {
+      const result = await provider.request({ method: "eth_sendTransaction", params: [request] });
+      if (!isHash(result))
+        throw new Error(
+          "The wallet returned an invalid transaction hash. Check your wallet activity before retrying.",
+        );
+      return result;
+    });
     finalHash = hash;
     if (step !== tx) {
       // Wait for each approval before the swap so the router can observe the new allowance.
-      let receipt = null;
-      for (let attempt = 0; attempt < 60 && !receipt; attempt++) {
-        receipt = await provider.request({ method: "eth_getTransactionReceipt", params: [hash] });
-        if (!receipt) await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-      if (!receipt || receipt.status === "0x0") throw new Error("An approval transaction did not confirm. The swap was not submitted.");
+      await stage("confirm", info, async () => {
+        let receipt = null;
+        for (let attempt = 0; attempt < 60 && !receipt; attempt++) {
+          receipt = await provider.request({ method: "eth_getTransactionReceipt", params: [hash] });
+          if (!receipt) await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+        if (!receipt || receipt.status === "0x0")
+          throw new Error("An approval transaction did not confirm. The swap was not submitted.");
+      });
     }
   }
+  report("submitted", "done", { total });
   return finalHash;
 }
 
