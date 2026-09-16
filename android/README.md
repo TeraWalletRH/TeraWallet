@@ -57,14 +57,14 @@ Every send requires password or biometric confirmation. The client rebuilds tran
 
 Bridge validation binds the source deposit to the reviewed Relay quote metadata; destination delivery still depends on Relay. V4 pools with nonzero hooks are rejected in this version. Liquidity and backend availability determine executable routes. A service session token permits proposal preparation, not spending authority.
 
-SecureStore protects the encrypted seed at rest. The mnemonic and derived signing key necessarily exist in JavaScript memory while unlocked; this is not hardware-isolated transaction signing and has not been independently audited. Screen capture is disabled throughout the wallet. Android backup is disabled. App uninstall/erase removes local recovery material; chain transactions cannot be deleted. The RPC sees requests and broadcasts, and assistant/Relay requests disclose their required input to those services.
+SecureStore protects the encrypted seed at rest. The mnemonic and derived signing key necessarily exist in JavaScript memory while unlocked; this is not hardware-isolated transaction signing and has not been independently audited. Screen capture is allowed for demos. Android backup is disabled. App uninstall/erase removes local recovery material; chain transactions cannot be deleted. The RPC sees requests and broadcasts, and assistant/Relay requests disclose their required input to those services.
 
 ## Device acceptance checks
 
 Use a disposable phrase and small amounts. Automated tests do not replace physical-device checks.
 
 1. Create a wallet, verify word backup, lock/unlock, restart and restore the same address by importing its phrase.
-2. Try a wrong password, cancel biometrics, change biometric enrollment, background during setup/unlock/signing and verify locking. Confirm screenshot protection.
+2. Try a wrong password, cancel biometrics, change biometric enrollment, background during setup/unlock/signing and verify locking.
 3. Verify balances, review a transfer's complete recipient/amount and confirm password authorization. Check the receipt after restarting the app.
 4. Review BUY/SELL quotes and reject an expired quote. Confirm every approval is bounded, and interrupted steps never resend automatically.
 5. Bridge a small supported amount; verify source confirmation separately from Relay delivery.

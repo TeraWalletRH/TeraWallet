@@ -13,7 +13,6 @@ import {
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
-import { usePreventScreenCapture } from "expo-screen-capture";
 import * as Clipboard from "expo-clipboard";
 import { formatUnits, parseUnits, zeroAddress, type Address } from "viem";
 import { api } from "./src/api";
@@ -38,7 +37,6 @@ type Review = {
   draftId?: number;
 };
 function Wallet() {
-  usePreventScreenCapture();
   const [language, setLanguage] = useState<"en" | "zh">("en");
   const t = (en: string, zh: string) => (language === "zh" ? zh : en);
   const [ready, setReady] = useState(false),
