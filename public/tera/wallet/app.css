@@ -173,7 +173,7 @@ h1:focus {
 }
 .privacy-totals {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 20px;
   border-top: 1px solid #bac3ac;
   border-bottom: 1px solid #bac3ac;
@@ -343,6 +343,79 @@ h1:focus {
 }
 .share-toggle input {
   flex: none;
+}
+.minimise-toggle {
+  margin: 0 0 0 auto;
+}
+.minimise-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+  align-items: start;
+}
+.minimise-columns .section-label {
+  margin-bottom: 0;
+}
+.minimise-columns .share-preview {
+  margin: 10px 0 0;
+  max-height: 34vh;
+}
+.minimise-mark {
+  background: #d3dcbe;
+  color: inherit;
+  padding: 1px 2px;
+  box-decoration-break: clone;
+}
+.minimise-mark.kept {
+  background: transparent;
+  border-bottom: 1px dashed #8d9a7c;
+}
+.minimise-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 16px 0 10px;
+}
+.minimise-sent {
+  margin-top: 12px;
+  border-top: 1px solid #b5bfa8;
+  padding-top: 10px;
+}
+.minimise-sent summary {
+  font: 10px monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+}
+.minimise-sent pre {
+  margin: 10px 0 0;
+  padding: 12px;
+  background: #e2e5d5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    11px/1.7 "IBM Plex Mono",
+    "Courier New",
+    monospace;
+}
+.minimise-sent .micro {
+  margin: 8px 0 0;
+}
+.chat-bubble.user .minimise-sent,
+.chat-bubble.user .minimise-sent-plain {
+  white-space: normal;
+}
+.minimise-sent-plain {
+  margin: 10px 0 0;
+  opacity: 0.75;
+}
+@media (max-width: 750px) {
+  .minimise-columns {
+    grid-template-columns: 1fr;
+  }
+  .minimise-toggle {
+    margin-left: 0;
+  }
 }
 .gate-detail summary {
   display: flex;

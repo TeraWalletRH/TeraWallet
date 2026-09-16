@@ -28,6 +28,15 @@ import {
 } from "./privacy.js";
 import { GUIDE, guideStep, createDemoState, demoApi, DEMO_OWNER } from "./demo.js";
 import { redactProposal, toText, leaks, formatExact } from "./redact.js";
+import {
+  minimise,
+  rehydrate,
+  residual,
+  summary as minimiseSummary,
+  keptKinds,
+  KIND_LABELS,
+  PROPOSE_KEEP,
+} from "./minimise.js";
 import { GATE_LABELS, explainGate, localChecks, localSummary } from "./checks.js";
 import { snapshot, appendVersion, versionTrail, pruneVersions, formatAmount } from "./history.js";
 import {
@@ -63,14 +72,17 @@ const serviceHost = (() => {
 const request = createApi(apiUrl);
 // Every service request is recorded for the privacy status centre before it is
 // sent. Field names only: no address, amount or message text enters the log.
-const api = async (path, body, options) => {
-  const entry = describeRequest(path, body);
+const api = async (path, body, options = {}) => {
+  // `privacy` records what this device did to the body before it was built —
+  // counts and flags only, never a value.
+  const { privacy, ...rest } = options;
+  const entry = { ...describeRequest(path, body), ...privacy };
   state.privacyLog = appendLog(
     state.privacyLog,
     state.demo ? { ...entry, simulated: true } : entry,
   );
   if (route() === "privacy") queueMicrotask(render);
-  if (!state.demo) return request(path, body, options);
+  if (!state.demo) return request(path, body, rest);
   // The guided demo answers locally under the same success contract as the
   // service, so every code path below behaves exactly as it does in production.
   const payload = demoApi(path, body, chainId);
@@ -132,6 +144,8 @@ const state = {
   vaultKey: null,
   agentSessionToken: "",
   vaultRetentionDays: 30,
+  minimise: true,
+  minimiseReview: true,
   demo: false,
   guide: 0,
   busy: false,
@@ -386,8 +400,40 @@ function registry() {
   );
   return `<form id="asset-filter" class="toolbar"><input class="search" name="query" aria-label="Search assets" placeholder="Search assets or symbols…" value="${esc(state.query)}"><select name="category" aria-label="Asset category">${["all", ...new Set(state.assets.map((a) => a.category))].map((c) => `<option ${state.category === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select><button class="btn">Search</button>${chip(`${state.assets.length} registry entries`)}</form><div class="table-scroll"><table><thead><tr><th>Asset</th><th>Type</th><th>Registry status</th><th>Contract</th><th>Details</th></tr></thead><tbody>${filtered.map((a) => `<tr><td><b>${esc(a.symbol)}</b><small>${esc(a.name)}</small></td><td>${esc(a.category)}</td><td>${chip(a.status, a.status !== "ACTIVE")}</td><td>${isAddress(a.address) ? esc(short(a.address)) : chip("Invalid address", true)}</td><td>${button("Inspect ↗", "asset", `data-symbol="${esc(a.symbol)}"`)}</td></tr>`).join("")}</tbody></table>${filtered.length ? "" : empty("No assets match your search.")}</div><p class="micro">Registry information is supplied by Tera. A registry entry does not establish transfer eligibility.</p>`;
 }
+function minimiseHint() {
+  return state.minimise
+    ? "Addresses, references, contact details and figures are replaced with placeholders on this device before the message is sent. The reply is re-hydrated here. This removes the values, not the context — it does not make you anonymous."
+    : "Your message is sent exactly as you typed it, including any address, reference or figure it contains.";
+}
+// Both sides of the same message, drawn from one segment list so the comparison
+// cannot drift from what is actually sent.
+function minimiseSegments(segments) {
+  return segments
+    .map((segment) =>
+      segment.kind
+        ? `<mark class="minimise-mark${segment.kept ? " kept" : ""}">${esc(segment.text)}</mark>`
+        : esc(segment.text),
+    )
+    .join("");
+}
+function chatBubble(message) {
+  if (message.role !== "user")
+    return `<div class="chat-bubble"><strong class="chat-role">Tera assistant</strong><div class="assistant-markdown">${renderAssistantMarkdown(message.text)}</div></div>`;
+  const replaced = message.removed?.length || 0;
+  const detail = message.minimised
+    ? `<details class="minimise-sent"><summary>${replaced} ${replaced === 1 ? "value" : "values"} replaced · what left this device</summary><pre>${esc(message.sent)}</pre>${message.kept?.length ? `<p class="micro">Kept as typed: ${esc(message.kept.map((kind) => KIND_LABELS[kind].toLowerCase()).join(", "))}.</p>` : ""}</details>`
+    : `<p class="micro minimise-sent-plain">Sent as typed.</p>`;
+  return `<div class="chat-bubble user"><strong class="chat-role">You</strong>${esc(message.text)}${detail}</div>`;
+}
 function chat() {
-  return `<div class="section-label">Agent assistant ${chip("Owner supervised")}</div><div class="note">Ask a question or request an action. Only the message you submit and the wallet address needed for a proposal are sent.</div><div class="toolbar">${state.agentSessionToken ? chip("Scoped token connected") + button("Disconnect token", "agent-token-disconnect") : button("Connect session token", "agent-token-connect", !state.owner ? "disabled" : "")}</div><div class="chat-feed" aria-live="polite">${state.chat.length ? state.chat.map((m) => `<div class="chat-bubble ${m.role === "user" ? "user" : ""}"><strong class="chat-role">${m.role === "user" ? "You" : "Tera assistant"}</strong>${m.role === "assistant" ? `<div class="assistant-markdown">${renderAssistantMarkdown(m.text)}</div>` : esc(m.text)}</div>`).join("") : '<p class="micro">Explore an asset or describe a proposal you want to review.</p>'}</div><form id="chat-form"><div class="field"><label for="chat-mode">Message type</label><select id="chat-mode" name="mode"><option value="chat">Ask a question</option><option value="propose">Prepare a proposal</option></select></div><div class="composer"><textarea name="message" aria-label="Message the agent" placeholder="Ask about an asset or describe an action…" required maxlength="1200"></textarea><button aria-label="Send message" ${state.busy ? "disabled" : ""}>↑</button></div><p class="micro">${state.agentSessionToken ? "This token is checked before Tera prepares a proposal. Wallet approval is still required." : "Messages are processed by Tera’s assistant service. Proposals always require your review."}</p></form>`;
+  return `<div class="section-label">Agent assistant ${chip("Owner supervised")}</div>
+    <div class="note">Ask a question or request an action. Only the message you submit and the wallet address needed for a proposal are sent.</div>
+    <div class="toolbar">${state.agentSessionToken ? chip("Scoped token connected") + button("Disconnect token", "agent-token-disconnect") : button("Connect session token", "agent-token-connect", !state.owner ? "disabled" : "")}<label class="share-toggle minimise-toggle"><input type="checkbox" data-action="minimise-toggle" ${state.minimise ? "checked" : ""}> Minimise before sending</label></div>
+    <p class="micro" id="minimise-hint">${esc(minimiseHint())}</p>
+    <div class="chat-feed" aria-live="polite">${state.chat.length ? state.chat.map(chatBubble).join("") : '<p class="micro">Explore an asset or describe a proposal you want to review.</p>'}</div>
+    <form id="chat-form"><div class="field"><label for="chat-mode">Message type</label><select id="chat-mode" name="mode"><option value="chat">Ask a question</option><option value="propose">Prepare a proposal</option></select></div>
+    <div class="composer"><textarea name="message" aria-label="Message the agent" placeholder="Ask about an asset or describe an action…" required maxlength="1200"></textarea><button aria-label="Send message" ${state.busy ? "disabled" : ""}>↑</button></div>
+    <p class="micro">${state.agentSessionToken ? "This token is checked before Tera prepares a proposal. Wallet approval is still required." : "Messages are processed by Tera’s assistant service. Proposals always require your review."}</p></form>`;
 }
 
 function connectAgentSessionToken() {
@@ -725,8 +771,10 @@ function privacyCentre() {
       ${totals.simulated ? `<div class="metric"><strong>${totals.simulated}</strong><small>Answered locally by the demo · never sent</small></div>` : ""}
       <div class="metric"><strong>${totals.identifying}</strong><small>Requests carrying your wallet address</small></div>
       <div class="metric"><strong>${totals.toModelProvider}</strong><small>Requests whose text reached the model provider</small></div>
+      <div class="metric"><strong>${totals.replaced}</strong><small>Values replaced on this device before sending</small></div>
       <div class="metric"><strong>${totals.fields}</strong><small>Distinct fields sent</small></div>
     </div>
+    <div class="note"><strong>Prompt minimisation</strong>${state.minimise ? "Assistant messages are scrubbed on this device before they are sent: addresses, references, contact details and figures are replaced with placeholders, and the reply is re-hydrated here. A proposal keeps the recipient and the figure, because Tera reads those out of the text to build the transaction." : "Prompt minimisation is off, so assistant messages are sent exactly as you type them."} It removes the values from the text. It does not hide that you are asking, and it does not hide the network address the request comes from.</div>
     <div class="note"><strong>Data boundary</strong>Requests go to ${esc(serviceHost)}. Balances and receipts are read directly through your wallet's network provider, so Tera does not see them. The log below records field names only — never an address, an amount or the text you typed.</div>
     ${
       state.demo
@@ -741,9 +789,9 @@ function privacyCentre() {
             ? state.privacyLog
                 .map(
                   (entry) => `<article class="panel privacy-entry">
-              <div class="proposal-top"><b>${esc(entry.label)}</b><span class="actions">${entry.simulated ? chip("Simulated · not sent") : ""}${chip(addressChip(entry), entry.identifies)}</span></div>
+              <div class="proposal-top"><b>${esc(entry.label)}</b><span class="actions">${entry.simulated ? chip("Simulated · not sent") : ""}${entry.minimised ? chip(`${entry.replaced} replaced locally`) : ""}${chip(addressChip(entry), entry.identifies)}</span></div>
               <p class="micro">${esc(entry.purpose)}</p>
-              ${pair("Sent", list(entry.sent, "No owner data"))}${pair("Request", `${entry.method} ${entry.path}`)}${pair("Goes to", entry.processors.join(" · "))}${pair("Withheld", list(entry.withheld, "Not documented"))}${pair("Recorded at", time(entry.at))}
+              ${pair("Sent", list(entry.sent, "No owner data"))}${entry.minimised ? pair("Minimised before sending", `${entry.replaced} ${entry.replaced === 1 ? "value" : "values"} replaced with placeholders`) : ""}${pair("Request", `${entry.method} ${entry.path}`)}${pair("Goes to", entry.processors.join(" · "))}${pair("Withheld", list(entry.withheld, "Not documented"))}${pair("Recorded at", time(entry.at))}
               <p class="micro">${esc(entry.retention)}</p>
             </article>`,
                 )
@@ -1190,7 +1238,7 @@ function bindForms() {
     };
   const form = document.getElementById("chat-form");
   if (form)
-    form.onsubmit = async (event) => {
+    form.onsubmit = (event) => {
       event.preventDefault();
       if (state.busy) return;
       const data = new FormData(form),
@@ -1203,62 +1251,137 @@ function bindForms() {
         showError(error);
         return;
       }
-      const version = generation;
-      state.chat.push({ role: "user", text: message });
-      state.busy = true;
-      render();
-      try {
-        let result;
-        try {
-          result = await api(
-            mode === "propose" ? "/api/agent/propose" : "/api/agent/chat",
-            mode === "propose"
-              ? {
-                  prompt: message,
-                  ownerAddress: state.owner,
-                  ...(state.agentSessionToken ? { sessionToken: state.agentSessionToken } : {}),
-                }
-              : { message },
-          );
-        } catch (error) {
-          if (!error.payload?.gates) throw error;
-          result = error.payload;
-        }
-        if (version !== generation) return;
-        state.chat.push({
-          role: "assistant",
-          text:
-            result.reply ||
-            result.explanation ||
-            result.error ||
-            "Review the proposal in Approvals.",
-        });
-        if (mode === "propose") {
-          try {
-            const locallyApprovedIntent = await prepareWithLocalPolicy(result.intent);
-            result.intent = locallyApprovedIntent;
-            if (result.preparedTransaction)
-              result.preparedTransaction.intent = locallyApprovedIntent;
-          } catch (error) {
-            result.error = errorMessage(error);
-          }
-          // Agent proposals are reviewed here; manual preparation persists the
-          // exact intent through the API before any executable approval.
-          state.drafts.unshift({
-            ...result,
-            preparedAt: Date.now(),
-            ...(result.error ? { error: result.error } : {}),
-          });
-          void persist();
-        }
-      } catch (error) {
-        if (version === generation)
-          state.chat.push({ role: "assistant", text: errorMessage(error) });
-      } finally {
-        state.busy = false;
-        render();
+      const plan = planMessage(message, mode);
+      // The side-by-side review is the point of the feature: the owner sees the
+      // skeleton before it is sent, not after.
+      if (plan.minimised && plan.result.placeholders.length && state.minimiseReview) {
+        reviewMessage(plan);
+        return;
       }
+      void sendMessage(plan);
     };
+}
+
+// What leaves the device is decided here, once, for both modes. A proposal
+// keeps the recipient and the figure because Tera reads them out of the text to
+// build the transaction; a question keeps nothing.
+function planMessage(message, mode) {
+  const keep = mode === "propose" ? PROPOSE_KEEP : [];
+  return {
+    message,
+    mode,
+    keep,
+    minimised: state.minimise,
+    result: minimise(message, { owner: state.owner, keep }),
+  };
+}
+
+let pendingMessage = null;
+function reviewMessage(plan) {
+  pendingMessage = plan;
+  const { result, keep } = plan;
+  const kept = keptKinds(result);
+  dialog(
+    "This is what leaves your device.",
+    `<p>Your message stays here. The skeleton on the right is what is sent to ${esc(serviceHost)} and on to the model provider. The reply is re-hydrated on this device, so you read your own values back.</p>
+     <div class="minimise-columns">
+       <section><div class="section-label">What you typed</div><div class="share-preview"><pre>${minimiseSegments(result.typed)}</pre></div></section>
+       <section><div class="section-label">What leaves this device</div><div class="share-preview"><pre>${minimiseSegments(result.sent)}</pre></div></section>
+     </div>
+     <div class="minimise-legend">${minimiseSummary(result)
+       .map((line) => chip(`${line} replaced`))
+       .join("")}${kept.map((kind) => chip(`${KIND_LABELS[kind]} kept`, true)).join("")}</div>
+     ${kept.length ? `<p class="micro">Kept as typed because Tera reads them out of this text to build the transaction you review: ${esc(kept.map((kind) => KIND_LABELS[kind].toLowerCase()).join(", "))}. A question keeps none of them.</p>` : ""}
+     <label class="share-toggle"><input type="checkbox" data-action="minimise-review-toggle" ${state.minimiseReview ? "checked" : ""}> Show me this before every message</label>
+     <p class="micro">Placeholders remove the values, not the context. The model still sees what you are asking, and can infer a great deal from it. ${keep.length ? "" : "Tera and the model provider also see the network address this request came from."}</p>
+     <div class="actions">${button("Send minimised", "minimise-send")}${button("Send as typed", "minimise-send-raw")}${button("Cancel", "close")}</div>`,
+  );
+}
+
+async function sendMessage(plan) {
+  const { message, mode, keep, result } = plan;
+  const minimised = plan.minimised && result.placeholders.length > 0;
+  // Never send a skeleton that still carries what it claimed to remove.
+  if (minimised) {
+    const left = residual(result.skeleton, keep);
+    if (left.length) {
+      state.notice = `This message could not be minimised safely (${left.map((kind) => KIND_LABELS[kind].toLowerCase()).join(", ")} still present). Nothing was sent.`;
+      render();
+      return;
+    }
+  }
+  const outgoing = minimised ? result.skeleton : message;
+  const version = generation;
+  // The chat entry keeps the placeholder names and never the values behind them.
+  state.chat.push({
+    role: "user",
+    text: message,
+    sent: outgoing,
+    minimised,
+    removed: minimised ? result.placeholders.map(({ token, kind }) => ({ token, kind })) : [],
+    kept: minimised ? keptKinds(result) : [],
+  });
+  state.busy = true;
+  render();
+  try {
+    let response;
+    const privacy = minimised
+      ? { minimised: true, replaced: result.placeholders.length }
+      : undefined;
+    try {
+      response = await api(
+        mode === "propose" ? "/api/agent/propose" : "/api/agent/chat",
+        mode === "propose"
+          ? {
+              prompt: outgoing,
+              ownerAddress: state.owner,
+              ...(state.agentSessionToken ? { sessionToken: state.agentSessionToken } : {}),
+            }
+          : { message: outgoing },
+        { privacy },
+      );
+    } catch (error) {
+      if (!error.payload?.gates) throw error;
+      response = error.payload;
+    }
+    if (version !== generation) return;
+    const restore = (text) => (minimised ? rehydrate(text, result.placeholders) : text);
+    state.chat.push({
+      role: "assistant",
+      text: restore(
+        response.reply ||
+          response.explanation ||
+          response.error ||
+          "Review the proposal in Approvals.",
+      ),
+    });
+    if (mode === "propose") {
+      // The explanation is shown beside the proposal too, so it is re-hydrated
+      // for the same reason the reply is.
+      if (response.explanation) response.explanation = restore(response.explanation);
+      try {
+        const locallyApprovedIntent = await prepareWithLocalPolicy(response.intent);
+        response.intent = locallyApprovedIntent;
+        if (response.preparedTransaction)
+          response.preparedTransaction.intent = locallyApprovedIntent;
+      } catch (error) {
+        response.error = errorMessage(error);
+      }
+      // Agent proposals are reviewed here; manual preparation persists the
+      // exact intent through the API before any executable approval.
+      state.drafts.unshift({
+        ...response,
+        preparedAt: Date.now(),
+        ...(response.error ? { error: response.error } : {}),
+      });
+      void persist();
+    }
+  } catch (error) {
+    if (version === generation) state.chat.push({ role: "assistant", text: errorMessage(error) });
+  } finally {
+    state.busy = false;
+    render();
+  }
 }
 
 async function approve(index) {
@@ -1556,6 +1679,19 @@ document.addEventListener("click", async (event) => {
       if (!window.confirm("Sign a wallet request to delete stored unconfirmed assistant proposal data? Confirmed receipts remain.")) return;
       await deleteServerAssistantData();
       render();
+    }
+    if (action === "minimise-toggle") {
+      state.minimise = target.checked;
+      // Updated in place so the message being composed is not thrown away.
+      const hint = document.getElementById("minimise-hint");
+      if (hint) hint.textContent = minimiseHint();
+    }
+    if (action === "minimise-review-toggle") state.minimiseReview = target.checked;
+    if (action === "minimise-send" || action === "minimise-send-raw") {
+      const plan = pendingMessage;
+      pendingMessage = null;
+      closeDialog();
+      if (plan) await sendMessage({ ...plan, minimised: action === "minimise-send" });
     }
     if (action === "agent-token-connect") connectAgentSessionToken();
     if (action === "agent-token-disconnect") {
