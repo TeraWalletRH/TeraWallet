@@ -28,6 +28,7 @@ import {
 import { GUIDE, guideStep, createDemoState, demoApi, DEMO_OWNER } from "./demo.js";
 import { redactProposal, toText, leaks, formatExact } from "./redact.js";
 import { GATE_LABELS, explainGate, localChecks, localSummary } from "./checks.js";
+import { snapshot, appendVersion, versionTrail, pruneVersions, formatAmount } from "./history.js";
 
 const config = JSON.parse(document.getElementById("tera-config")?.textContent || "{}");
 const chainId = Number(config.chainId || 4663);
@@ -101,6 +102,7 @@ const state = {
   chat: [],
   privacyLog: [],
   policyBundle: null,
+  versions: {},
   policyError: "",
   vaultKey: null,
   vaultRetentionDays: 30,
@@ -131,7 +133,7 @@ async function persist() {
   try {
     const vault = await encryptVault(
       state.vaultKey,
-      { records: state.records, drafts: state.drafts },
+      { records: state.records, drafts: state.drafts, versions: state.versions },
       state.vaultRetentionDays,
     );
     localStorage.setItem(vaultStorageKey(), JSON.stringify(vault));
@@ -143,6 +145,7 @@ async function persist() {
 function loadRecords() {
   state.records = [];
   state.drafts = [];
+  state.versions = {};
   const stored = Number(localStorage.getItem(vaultSettingsKey()));
   state.vaultRetentionDays = [7, 30, 90, 365].includes(stored) ? stored : 30;
 }
@@ -152,8 +155,14 @@ async function unlockEncryptedStorage() {
   const raw = localStorage.getItem(vaultStorageKey());
   const vault = raw ? await decryptVault(key, JSON.parse(raw)) : null;
   state.vaultKey = key;
-  state.records = Array.isArray(vault?.records) ? vault.records.filter((r) => isHash(r.txHash) && sameAddress(r.owner, state.owner) && r.chainId === chainId) : [];
+  state.records = Array.isArray(vault?.records)
+    ? vault.records.filter(
+        (r) => isHash(r.txHash) && sameAddress(r.owner, state.owner) && r.chainId === chainId,
+      )
+    : [];
   state.drafts = Array.isArray(vault?.drafts) ? vault.drafts : [];
+  // Version history follows the same retention window as the rest of the vault.
+  state.versions = pruneVersions(vault?.versions, state.vaultRetentionDays);
   // Remove the previous plaintext record store after the encrypted vault unlocks.
   localStorage.removeItem(storageKey());
 }
@@ -322,6 +331,51 @@ function registry() {
 function chat() {
   return `<div class="section-label">Agent assistant ${chip("Owner supervised")}</div><div class="note">Ask a question or request an action. Only the message you submit and the wallet address needed for a proposal are sent.</div><div class="chat-feed" aria-live="polite">${state.chat.length ? state.chat.map((m) => `<div class="chat-bubble ${m.role === "user" ? "user" : ""}"><strong class="chat-role">${m.role === "user" ? "You" : "Tera assistant"}</strong>${m.role === "assistant" ? `<div class="assistant-markdown">${renderAssistantMarkdown(m.text)}</div>` : esc(m.text)}</div>`).join("") : '<p class="micro">Explore an asset or describe a proposal you want to review.</p>'}</div><form id="chat-form"><div class="field"><label for="chat-mode">Message type</label><select id="chat-mode" name="mode"><option value="chat">Ask a question</option><option value="propose">Prepare a proposal</option></select></div><div class="composer"><textarea name="message" aria-label="Message the agent" placeholder="Ask about an asset or describe an action…" required maxlength="1200"></textarea><button aria-label="Send message" ${state.busy ? "disabled" : ""}>↑</button></div><p class="micro">Messages are processed by Tera’s assistant service. Proposals always require your review.</p></form>`;
 }
+// A local, owner-only record of how this action changed between preparations.
+function historyBlock(proposal) {
+  const lineage = proposal?.lineage;
+  const stored = lineage ? state.versions[lineage] : null;
+  if (!stored?.length) return "";
+  const intent = proposal.intent || proposal.preparedTransaction?.intent || {};
+  const trail = versionTrail(stored, snapshot(proposal, assetFor(intent.assetAddress)));
+  const when = (at) => new Date(at).toLocaleString();
+  return `<details class="version-history">
+    <summary><span>Version history</span><b>${trail.length} versions</b></summary>
+    <p class="micro">Kept on this device in your encrypted vault. No version of this proposal is sent anywhere.</p>
+    ${trail
+      .map(
+        (entry) => `<article class="version-entry">
+        <div class="version-top"><b>${esc(entry.label)}</b><time>${esc(when(entry.version.at))}</time></div>
+        ${pair("Amount", formatAmount(entry.version))}${entry.version.recipient ? pair("Recipient", entry.version.recipient) : ""}${pair("Decision", entry.version.decision)}
+        ${
+          entry.changes.length
+            ? `<ul class="version-diff">${entry.changes
+                .map(
+                  (change) =>
+                    `<li><span>${esc(change.label)}</span><span class="from">${esc(change.from)}</span><span class="arrow">→</span><span class="to">${esc(change.to)}</span>${change.note ? `<em>${esc(change.note)}</em>` : ""}</li>`,
+                )
+                .join("")}</ul>`
+            : entry.index === 0
+              ? '<p class="micro">First version prepared.</p>'
+              : '<p class="micro">No tracked field changed.</p>'
+        }
+      </article>`,
+      )
+      .join("")}
+    <div class="actions">${button("Forget this history", "history-clear", `data-lineage="${esc(lineage)}"`)}</div>
+  </details>`;
+}
+function newLineage() {
+  return `lineage-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+// Keep the version the owner is replacing, so the change is visible afterwards.
+function recordVersion(lineage, proposal) {
+  const intent = proposal?.intent || proposal?.preparedTransaction?.intent || {};
+  state.versions[lineage] = appendVersion(
+    state.versions[lineage],
+    snapshot(proposal, assetFor(intent.assetAddress)),
+  );
+}
 // The five checks are the service's account of the action. This block is the
 // wallet's own: comparisons it performs locally, which hold even if the service
 // is wrong or dishonest.
@@ -370,6 +424,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
         </div></details></li>`;
     }).join("")}</ul>
     ${localBlock(p)}
+    ${historyBlock(p)}
     ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", intent.recipient) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
     ${submitted ? `<p>Transaction: ${explorer(p.txHash)}</p>` : issue ? `<p class="live-blocked">${esc(issue)}</p>` : '<p class="micro">Review the token amount and recipient. Your wallet will ask you to sign and pay the network fee.</p>'}
     <div class="actions">${button("Approve in wallet ↗", "approve", `data-index="${index}" ${issue || submitted || state.busy || state.chain !== chainId ? "disabled" : ""}`)}${button("Prepare again", "reprepare", `data-index="${index}" ${state.busy || submitted || !intent ? "disabled" : ""}`)}${button("Share redacted", "share", `data-index="${index}"`)}${button("Dismiss", "draft-dismiss", `data-index="${index}" ${state.busy ? "disabled" : ""}`)}</div></article>`;
@@ -691,7 +746,9 @@ async function loadPolicyBundle(force = false) {
   return bundle;
 }
 
-async function prepare(intent) {
+// `lineage` carries a re-prepared action's history forward; a fresh proposal
+// starts its own.
+async function prepare(intent, lineage = "") {
   connected();
   if (state.busy) throw new Error("Wait for the current request to finish.");
   const version = generation;
@@ -708,7 +765,12 @@ async function prepare(intent) {
     if (version !== generation) throw new Error("Your wallet changed. Prepare a new proposal.");
     // Keep the owner's requested intent for calldata comparison, never replace it
     // with a service-supplied owner, recipient or amount.
-    state.drafts.unshift({ ...result, intent: locallyApprovedIntent, preparedAt: Date.now() });
+    state.drafts.unshift({
+      ...result,
+      intent: locallyApprovedIntent,
+      preparedAt: Date.now(),
+      lineage: lineage || newLineage(),
+    });
     void persist();
   } finally {
     state.busy = false;
@@ -1029,8 +1091,11 @@ document.addEventListener("click", async (event) => {
     if (action === "reprepare") {
       const p = state.drafts[index];
       if (p?.intent) {
-        await prepare(p.intent);
+        const lineage = p.lineage || newLineage();
+        recordVersion(lineage, p);
+        await prepare(p.intent, lineage);
         state.drafts = state.drafts.filter((d) => d !== p);
+        void persist();
         render();
       }
     }
@@ -1056,6 +1121,12 @@ document.addEventListener("click", async (event) => {
         state.guide += 1;
         navigate(guideStep(state.guide).route);
       }
+    }
+    if (action === "history-clear" && target.dataset.lineage) {
+      delete state.versions[target.dataset.lineage];
+      void persist();
+      state.notice = "Version history for that proposal was deleted from this device.";
+      render();
     }
     if (action === "share") shareProposal(index);
     if (action === "share-copy") await copyShare();

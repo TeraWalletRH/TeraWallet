@@ -450,3 +450,92 @@ h1:focus {
 .local-list li.blocked b {
   color: #945f3d;
 }
+.version-history {
+  border: 1px solid #b9c0ae;
+  padding: 14px 16px;
+  margin: 14px 0 4px;
+}
+.version-history summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font:
+    11px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  text-transform: uppercase;
+}
+.version-entry {
+  border-top: 1px dashed #c8cfbb;
+  padding: 14px 0 4px;
+}
+.version-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.version-top b {
+  font-size: 13px;
+  font-weight: 550;
+}
+.version-top time {
+  font:
+    11px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  color: #6b7563;
+}
+.version-diff {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+}
+.version-diff li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  padding: 8px 0;
+  border-top: 1px dotted #ccd2c1;
+  font-size: 12px;
+}
+.version-diff li > span:first-child {
+  min-width: 120px;
+  color: #6b7663;
+  font:
+    11px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  text-transform: uppercase;
+}
+.version-diff .from {
+  color: #8b7a63;
+  text-decoration: line-through;
+  overflow-wrap: anywhere;
+}
+.version-diff .arrow {
+  color: #768143;
+}
+.version-diff .to {
+  color: #2c4430;
+  font-weight: 550;
+  overflow-wrap: anywhere;
+}
+.version-diff em {
+  font-style: normal;
+  font:
+    10px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  text-transform: uppercase;
+  border: 1px solid #a7b197;
+  padding: 3px 6px;
+  color: #5d6b4b;
+}
+@media (max-width: 750px) {
+  .version-diff li > span:first-child {
+    min-width: 100%;
+  }
+}
