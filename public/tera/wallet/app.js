@@ -529,7 +529,56 @@ function policy() {
 }
 function sessions() {
   if (!state.owner) return accountPrompt();
-  return `<div class="note">Session records are read from Tera. Creating or revoking on-chain permissions requires a deployed smart account; this connected-wallet flow does not provide one.</div>${state.errors.sessions ? empty(state.errors.sessions) : state.sessions.map((s) => `<article class="panel live-session">${pair("Session key", s.session_key_address || s.sessionKeyAddress)}${pair("Expires", s.expires_at || s.expiresAt)}${chip(s.is_revoked || s.isRevoked ? "Recorded as revoked" : Date.parse(s.expires_at || s.expiresAt) <= Date.now() ? "Expired" : "Registered")}<p class="micro">Status from the service; on-chain authority has not been verified.</p></article>`).join("") || empty("No sessions returned for this wallet.")}<button class="btn" disabled>Create session unavailable</button>`;
+  const sessionCard = (s) => {
+    const key = s.session_key_address || s.sessionKeyAddress;
+    const expiry = s.expires_at || s.expiresAt;
+    const scope = s.scope || {};
+    const inactive = s.is_revoked || s.isRevoked || Date.parse(expiry) <= Date.now();
+    const serviceSession = scope.kind === "service";
+    return `<article class="panel live-session">${pair(serviceSession ? "Session ID" : "Session key", key)}${pair("Expires", new Date(expiry).toLocaleString())}${pair("Actions", Array.isArray(scope.allowedActions) ? scope.allowedActions.join(", ") : "On-chain scope")}${pair("Assets", Array.isArray(scope.assetAddresses) ? scope.assetAddresses.map(short).join(", ") : "On-chain scope")}${chip(s.is_revoked || s.isRevoked ? "Revoked" : inactive ? "Expired" : serviceSession ? "Active service token" : "Registered")}<p class="micro">${serviceSession ? "This token scopes Tera service requests only. Owner approval is still required for every transaction." : "On-chain authority has not been verified in this connected-wallet flow."}</p>${serviceSession && !inactive ? `<div class="actions">${button("Rotate token", "session-rotate", `data-session="${esc(key)}"`)}${button("Revoke now", "session-revoke", `data-session="${esc(key)}"`)}</div>` : ""}</article>`;
+  };
+  return `<div class="note">Service tokens are short-lived and limited to the action and asset you choose. They cannot sign or move funds; your wallet still approves every transaction.</div><div class="toolbar">${button("Create service token", "session-create")}</div>${state.errors.sessions ? empty(state.errors.sessions) : state.sessions.map(sessionCard).join("") || empty("No sessions returned for this wallet.")}`;
+}
+
+function showSessionToken(result, title = "Service token created") {
+  const token = result.token;
+  const session = result.session || {};
+  dialog(
+    title,
+    `<p>Copy this token now. Tera stores only a hash and will not show the token again.</p>${pair("Expires", new Date(session.expires_at || session.expiresAt).toLocaleString())}<div class="field"><label for="service-token">Service token</label><input id="service-token" readonly value="${esc(token)}"></div><p class="micro">It is restricted to ${esc((session.scope?.allowedActions || []).join(", "))} and the selected asset. Rotate or revoke it from Agent sessions at any time.</p><div class="actions">${button("Copy token", "session-copy-token")}${button("Close", "close")}</div>`,
+  );
+}
+
+function createServiceSession() {
+  connected();
+  const assets = state.assets.filter((asset) => isAddress(asset.address) && asset.status === "ACTIVE");
+  if (!assets.length) throw new Error("Load the asset registry before creating a service token.");
+  dialog(
+    "Create a short-lived service token",
+    `<form id="session-form"><div class="field"><label for="session-action">Allowed action</label><select id="session-action" name="action"><option>BUY</option><option>SELL</option><option>TRANSFER</option></select></div><div class="field"><label for="session-asset">Allowed asset</label><select id="session-asset" name="asset">${assets.map((asset) => `<option value="${esc(asset.address)}">${esc(asset.symbol)} · ${esc(asset.name)}</option>`).join("")}</select></div><div class="field"><label for="session-ttl">Expires after</label><select id="session-ttl" name="ttl"><option value="900">15 minutes</option><option value="3600">1 hour</option><option value="14400">4 hours</option><option value="86400">24 hours</option></select></div><div class="field"><label for="session-label">Label (optional)</label><input id="session-label" name="label" maxlength="80" placeholder="Example: research assistant"></div><p class="micro">The token can prepare only this kind of service request for this asset. It cannot approve or sign a transaction.</p><p class="live-form-error" role="alert"></p><button class="btn primary">Create token ↗</button></form>`,
+  );
+  const form = document.getElementById("session-form");
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const submit = form.querySelector("button");
+    submit.disabled = true;
+    try {
+      const data = new FormData(form);
+      const result = await api("/api/session/issue", {
+        accountAddress: state.owner,
+        allowedActions: [data.get("action")],
+        assetAddresses: [data.get("asset")],
+        ttlSeconds: Number(data.get("ttl")),
+        label: data.get("label").trim(),
+      });
+      showSessionToken(result);
+      await refreshAccount();
+    } catch (error) {
+      form.querySelector('[role="alert"]').textContent = errorMessage(error);
+    } finally {
+      submit.disabled = false;
+    }
+  };
 }
 function receipts() {
   if (!state.owner) return accountPrompt();
@@ -1185,6 +1234,31 @@ document.addEventListener("click", async (event) => {
       clearEncryptedStorage();
       state.notice = "Encrypted drafts and device-side records were cleared.";
       render();
+    }
+    if (action === "session-create") createServiceSession();
+    if (action === "session-copy-token") {
+      const token = document.getElementById("service-token")?.value;
+      if (!token) throw new Error("The session token is unavailable.");
+      await navigator.clipboard.writeText(token);
+      state.notice = "Service token copied. Store it somewhere secure; it will not be shown again.";
+      closeDialog();
+      render();
+    }
+    if (action === "session-revoke") {
+      await api("/api/session/revoke", {
+        accountAddress: state.owner,
+        sessionKeyAddress: target.dataset.session,
+      });
+      state.notice = "Service token revoked immediately.";
+      await refreshAccount();
+    }
+    if (action === "session-rotate") {
+      const result = await api("/api/session/rotate", {
+        accountAddress: state.owner,
+        sessionKeyAddress: target.dataset.session,
+      });
+      showSessionToken(result, "Service token rotated");
+      await refreshAccount();
     }
     if (action === "create" || action === "asset-propose") createProposal(target.dataset.symbol);
     if (action === "asset") inspectAsset(target.dataset.symbol);
