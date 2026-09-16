@@ -250,7 +250,7 @@ export const GUIDE = [
     id: "boundary",
     route: "privacy",
     title: "Start at the boundary",
-    body: "The demo just made the same calls a real connection makes — registry, account, history, sessions. Each is listed below with the fields it carries, and each was answered locally. Nothing left this page.",
+    body: "The demo just made the same calls a real connection makes — registry, account, history, sessions. Each is listed below with the fields it carries, and each was answered locally. Nothing left this page. Scroll to 'Who else can see you' for the parties a real session involves, and which of them would see the network address you are on.",
     action: "Open Privacy status",
   },
   {
