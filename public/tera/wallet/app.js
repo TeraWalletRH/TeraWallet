@@ -26,6 +26,7 @@ import {
 } from "./privacy.js";
 import { GUIDE, guideStep, createDemoState, demoApi, DEMO_OWNER } from "./demo.js";
 import { redactProposal, toText, leaks, formatExact } from "./redact.js";
+import { GATE_LABELS, explainGate, localChecks, localSummary } from "./checks.js";
 
 const config = JSON.parse(document.getElementById("tera-config")?.textContent || "{}");
 const chainId = Number(config.chainId || 4663);
@@ -73,13 +74,6 @@ const titles = {
   privacy: "Privacy status",
   settings: "Settings",
 };
-const gateLabels = [
-  "Asset registry",
-  "Eligibility preflight",
-  "Policy check",
-  "Risk check",
-  "Owner approval",
-];
 const route = () => location.pathname.replace(/\/$/, "").split("/").pop() || "dashboard";
 const href = (key) => `/dashboard/${key === "dashboard" ? "" : `${key}/`}`;
 const button = (label, action, extra = "") =>
@@ -186,10 +180,12 @@ function navigate(key) {
   history.pushState(null, "", href(key));
   render();
   if (key === "policy")
-    void loadPolicyBundle().then(render).catch((error) => {
-      state.policyError = errorMessage(error);
-      render();
-    });
+    void loadPolicyBundle()
+      .then(render)
+      .catch((error) => {
+        state.policyError = errorMessage(error);
+        render();
+      });
   document.querySelector("h1")?.focus();
   window.scrollTo(0, 0);
 }
@@ -300,6 +296,25 @@ function registry() {
 function chat() {
   return `<div class="section-label">Agent assistant ${chip("Owner supervised")}</div><div class="note">Ask a question or request an action. Only the message you submit and the wallet address needed for a proposal are sent.</div><div class="chat-feed" aria-live="polite">${state.chat.length ? state.chat.map((m) => `<div class="chat-bubble ${m.role === "user" ? "user" : ""}"><strong class="chat-role">${m.role === "user" ? "You" : "Tera assistant"}</strong>${m.role === "assistant" ? `<div class="assistant-markdown">${renderAssistantMarkdown(m.text)}</div>` : esc(m.text)}</div>`).join("") : '<p class="micro">Explore an asset or describe a proposal you want to review.</p>'}</div><form id="chat-form"><div class="field"><label for="chat-mode">Message type</label><select id="chat-mode" name="mode"><option value="chat">Ask a question</option><option value="propose">Prepare a proposal</option></select></div><div class="composer"><textarea name="message" aria-label="Message the agent" placeholder="Ask about an asset or describe an action…" required maxlength="1200"></textarea><button aria-label="Send message" ${state.busy ? "disabled" : ""}>↑</button></div><p class="micro">Messages are processed by Tera’s assistant service. Proposals always require your review.</p></form>`;
 }
+// The five checks are the service's account of the action. This block is the
+// wallet's own: comparisons it performs locally, which hold even if the service
+// is wrong or dishonest.
+function localBlock(proposal) {
+  const rows = localChecks(proposal, state.owner, chainId);
+  if (!rows.length) return "";
+  const summary = localSummary(rows);
+  return `<details class="local-verify ${summary.passed ? "" : "failed"}">
+    <summary><span>Verified by this wallet</span><b>${rows.filter((row) => row.passed).length}/${rows.length} match</b></summary>
+    <p class="micro">${esc(summary.text)}</p>
+    <ul class="local-list">${rows
+      .map(
+        (row) =>
+          `<li class="${row.passed ? "" : "blocked"}"><span>${esc(row.label)}<small>${esc(row.detail)}</small></span><b>${row.passed ? "MATCH" : "MISMATCH"}</b></li>`,
+      )
+      .join("")}</ul>
+    <p class="micro">These comparisons run in your browser against the action you reviewed. They do not ask Tera whether the transaction is correct.</p>
+  </details>`;
+}
 function proposalCard(p, index = state.drafts.indexOf(p)) {
   const intent = p.intent || p.preparedTransaction?.intent;
   const asset = assetFor(intent?.assetAddress);
@@ -319,9 +334,17 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
   return `<article class="proposal"><div class="proposal-top"><span class="eyebrow">${esc(intent?.actionType || "Proposal")}</span>${chip(submitted ? "Submitted" : issue ? "Needs attention" : "Awaiting owner", !submitted && !!issue)}</div><h2>${esc(asset?.name || "Action review")}</h2>${p.explanation ? `<p class="lead">${esc(p.explanation)}</p>` : ""}
     <ul class="status-list">${GATES.map((name, i) => {
       const g = p.gates?.find((g) => g.gate === name);
-      return `<li class="${g?.passed === false ? "blocked" : ""}"><span class="audit-num">0${i + 1}</span><span>${gateLabels[i]}${g?.reason ? `<small>${esc(g.reason)}</small>` : ""}</span><b>${i === 4 && g?.passed ? "AWAITING SIGNATURE" : g ? (g.passed ? "PASS" : "BLOCKED") : "NOT RUN"}</b></li>`;
+      const detail = explainGate(name, g);
+      const status = i === 4 && g?.passed ? "AWAITING SIGNATURE" : detail.result;
+      return `<li class="${g?.passed === false ? "blocked" : ""}"><details class="gate-detail"><summary><span class="audit-num">0${i + 1}</span><span class="gate-name">${esc(detail.label)}${g?.reason ? `<small>${esc(g.reason)}</small>` : ""}</span><b>${status}</b></summary>
+        <div class="gate-body">
+          ${pair("Rule evaluated", detail.rule)}${pair("Evaluated by", detail.evaluatedBy)}${pair("Inputs it received", detail.inputs.join(" · "))}${pair("Withheld from the assistant", detail.withheld.join(" · "))}
+          ${detail.nuance ? `<p class="micro gate-nuance">${esc(detail.nuance)}</p>` : ""}
+          <p class="micro">${esc(detail.meaning)}</p>
+        </div></details></li>`;
     }).join("")}</ul>
-    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${(intent?.actionType === "BUY" || intent?.actionType === "SELL") ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", intent.recipient) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
+    ${localBlock(p)}
+    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", intent.recipient) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
     ${submitted ? `<p>Transaction: ${explorer(p.txHash)}</p>` : issue ? `<p class="live-blocked">${esc(issue)}</p>` : '<p class="micro">Review the token amount and recipient. Your wallet will ask you to sign and pay the network fee.</p>'}
     <div class="actions">${button("Approve in wallet ↗", "approve", `data-index="${index}" ${issue || submitted || state.busy || state.chain !== chainId ? "disabled" : ""}`)}${button("Prepare again", "reprepare", `data-index="${index}" ${state.busy || submitted || !intent ? "disabled" : ""}`)}${button("Share redacted", "share", `data-index="${index}"`)}${button("Dismiss", "draft-dismiss", `data-index="${index}" ${state.busy ? "disabled" : ""}`)}</div></article>`;
 }
@@ -330,7 +353,8 @@ function approvals() {
 }
 function policy() {
   const bundle = state.policyBundle;
-  if (!bundle) return `<div class="content-grid"><section class="panel"><div class="eyebrow">Local policy</div><h2>Loading signed policy bundle…</h2>${state.policyError ? `<p class="live-blocked">${esc(state.policyError)}</p>` : ""}<div class="actions">${button("Refresh policy", "policy-refresh")}</div></section></div>`;
+  if (!bundle)
+    return `<div class="content-grid"><section class="panel"><div class="eyebrow">Local policy</div><h2>Loading signed policy bundle…</h2>${state.policyError ? `<p class="live-blocked">${esc(state.policyError)}</p>` : ""}<div class="actions">${button("Refresh policy", "policy-refresh")}</div></section></div>`;
   return `<div class="content-grid"><section class="panel"><div class="eyebrow">Local policy ${chip("Signed and active")}</div><h2>Rules run in this wallet before preparation.</h2>${pair("Bundle version", `v${bundle.version}`)}${pair("Signer", short(bundle.signer))}${pair("Expires", new Date(bundle.expiresAt).toLocaleString())}${pair("Single-trade cap", `$${(bundle.rules.maxSingleTradeUsdCents / 100).toLocaleString()}`)}${pair("Allowed actions", bundle.rules.allowedActions.join(", "))}<p class="micro">The browser recovered the signing address from the bundle signature before applying these rules. Tera evaluates the same rules again server-side.</p><div class="actions">${button("Refresh policy", "policy-refresh")}</div></section><aside class="panel"><h2>Your approval remains required.</h2><p>Local policy can block a proposal early. Only you can approve a transaction in your wallet.</p><a class="btn" href="${href("approvals")}">Review proposals ↗</a></aside></div>`;
 }
 function sessions() {
@@ -609,7 +633,12 @@ async function prepareWithLocalPolicy(intent) {
   const bundle = await loadPolicyBundle();
   const issue = evaluateLocalPolicy(intent, bundle, config.policySignerAddress || bundle.signer);
   if (issue) throw new Error(issue);
-  return { ...intent, policyVersion: bundle.version, policySigner: bundle.signer, policySignature: bundle.signature };
+  return {
+    ...intent,
+    policyVersion: bundle.version,
+    policySigner: bundle.signer,
+    policySignature: bundle.signature,
+  };
 }
 async function loadPolicyBundle(force = false) {
   if (state.policyBundle && !force && Date.parse(state.policyBundle.expiresAt) > Date.now())
@@ -617,12 +646,19 @@ async function loadPolicyBundle(force = false) {
   const url = config.policyBundleUrl || `${apiUrl.replace(/\/$/, "")}/policy-bundle.json`;
   state.privacyLog = appendLog(state.privacyLog, describeRequest("/policy-bundle.json"));
   let response;
-  try { response = await fetch(url, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(10000) }); }
-  catch { throw new Error("Cannot load the signed local policy bundle."); }
+  try {
+    response = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10000),
+    });
+  } catch {
+    throw new Error("Cannot load the signed local policy bundle.");
+  }
   if (!response.ok) throw new Error("The signed local policy bundle is unavailable.");
   const bundle = await response.json();
   const signer = config.policySignerAddress || bundle.signer;
-  if (!await verifyPolicyBundle(bundle, signer)) throw new Error("The signed local policy bundle failed signature verification.");
+  if (!(await verifyPolicyBundle(bundle, signer)))
+    throw new Error("The signed local policy bundle failed signature verification.");
   state.policyBundle = bundle;
   state.policyError = "";
   return bundle;
@@ -705,7 +741,8 @@ function bindForms() {
           try {
             const locallyApprovedIntent = await prepareWithLocalPolicy(result.intent);
             result.intent = locallyApprovedIntent;
-            if (result.preparedTransaction) result.preparedTransaction.intent = locallyApprovedIntent;
+            if (result.preparedTransaction)
+              result.preparedTransaction.intent = locallyApprovedIntent;
           } catch (error) {
             result.error = errorMessage(error);
           }
