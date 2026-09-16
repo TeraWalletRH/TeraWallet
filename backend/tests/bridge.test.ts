@@ -59,4 +59,14 @@ describe("Relay bridge validation (no live provider)", () => {
     expect(arc.destination.name).toBe("Arc");
     expect(arc.destination.symbol).toBe("USDC");
   });
+  it("preserves the exact native ETH value in the deposit step", () => {
+    const ethInput = bridgeInput({ ...input, originCurrency: "0x0000000000000000000000000000000000000000", amount: "10000000000000000" });
+    const q = fixture();
+    q.details.currencyIn.currency.address = "0x0000000000000000000000000000000000000000";
+    q.details.currencyIn.amount = ethInput.amount;
+    q.details.currencyOut.currency = { chainId: 8453, address: destinations[0].currency };
+    q.steps = [{ id: "deposit", kind: "transaction", items: [{ data: { from: owner, to: DEPOSITORY, chainId: 4663, value: ethInput.amount, data: `0x49290c1c${word(owner)}${"a".repeat(64)}` } }] }];
+    const normalized = validateQuote(q, ethInput, 0);
+    expect(normalized.steps[0].value).toBe("0x2386f26fc10000");
+  });
 });

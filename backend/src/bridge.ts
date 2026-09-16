@@ -78,7 +78,7 @@ export function validateQuote(raw: any, input: ReturnType<typeof bridgeInput>, s
       if (!same(tx.to, DEPOSITORY) || (input.source.native ? (!/^0x49290c1c[\da-f]{128}$/.test(data) || data.slice(0, 74) !== nativeData || BigInt(tx.value) !== BigInt(input.amount)) : (BigInt(tx.value) !== 0n || data.slice(0, 202) !== tokenData)))
         throw new Error("Relay deposit does not match the reviewed USDG input.");
     }
-    steps.push({ id: step.id, to: tx.to, data, value: "0x0", chainId: 4663 });
+    steps.push({ id: step.id, to: tx.to, data, value: input.source.native ? `0x${BigInt(tx.value).toString(16)}` : "0x0", chainId: 4663 });
   }
   if (steps.map(s => s.id).join(",") !== "approve,deposit" && steps.map(s => s.id).join(",") !== "deposit")
     throw new Error("Relay returned an incomplete deposit flow.");
