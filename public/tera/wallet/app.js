@@ -29,6 +29,13 @@ import {
 import { GUIDE, guideStep, createDemoState, demoApi, DEMO_OWNER } from "./demo.js";
 import { redactProposal, toText, leaks, formatExact } from "./redact.js";
 import {
+  parties,
+  egressStatus,
+  egressSummary,
+  exportableEgress,
+  REACH,
+} from "./egress.js";
+import {
   minimise,
   rehydrate,
   residual,
@@ -751,8 +758,29 @@ function receipts() {
   return `<div class="section-label">Transactions tracked on this device</div>${state.records.map((r, i) => `<article class="panel live-record"><div class="proposal-top"><b>${esc(r.action || "Transaction")}</b>${chip(r.status === "confirmed" ? (r.recorded ? "Confirmed · recorded" : "Confirmed · audit sync pending") : r.status, r.status === "reverted")}</div>${pair("Submitted", r.createdAt)}<p>${explorer(r.txHash)}</p>${r.error ? `<p class="micro">${esc(r.error)}</p>` : ""}<div class="actions">${r.status !== "reverted" && !r.recorded ? button("Check status / retry audit sync", "receipt-check", `data-index="${i}" ${state.busy ? "disabled" : ""}`) : ""}${button("Export receipt", "receipt-export", `data-index="${i}"`)}</div></article>`).join("") || empty("No transactions tracked on this device.")}
     <div class="section-label live-history-heading">Account history from Tera</div>${state.errors.history ? empty(state.errors.history) : `<div class="table-scroll"><table><thead><tr><th>Action</th><th>Service status</th><th>Created</th><th>Transaction</th></tr></thead><tbody>${state.history.map((r) => `<tr><td>${esc(r.intent_type || r.intent?.actionType || "—")}</td><td>${esc(r.status)}</td><td>${esc(r.created_at || r.createdAt)}</td><td>${r.tx_hash ? explorer(r.tx_hash) : "—"}</td></tr>`).join("")}</tbody></table>${state.history.length ? "" : empty("No history returned by the service.")}</div>`}`;
 }
+// The egress panel is derived once so the view and the export can never
+// disagree about who was contacted.
+function egressRows() {
+  return egressStatus(
+    parties({
+      apiUrl,
+      rpcUrl: config.rpcUrl,
+      explorerUrl: config.explorerUrl,
+      chainId,
+      siteHost: location.host,
+    }),
+    {
+      log: state.privacyLog,
+      owner: state.owner,
+      demo: state.demo,
+      records: state.records.length,
+    },
+  );
+}
 function privacyCentre() {
   const totals = summarize(state.privacyLog);
+  const egress = egressRows();
+  const reachTotals = egressSummary(egress);
   const time = (at) =>
     new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
   const list = (items, fallback) =>
@@ -772,10 +800,11 @@ function privacyCentre() {
       <div class="metric"><strong>${totals.identifying}</strong><small>Requests carrying your wallet address</small></div>
       <div class="metric"><strong>${totals.toModelProvider}</strong><small>Requests whose text reached the model provider</small></div>
       <div class="metric"><strong>${totals.replaced}</strong><small>Values replaced on this device before sending</small></div>
+      <div class="metric"><strong>${reachTotals.seeingYouNow}</strong><small>Parties in a position to see you right now</small></div>
       <div class="metric"><strong>${totals.fields}</strong><small>Distinct fields sent</small></div>
     </div>
     <div class="note"><strong>Prompt minimisation</strong>${state.minimise ? "Assistant messages are scrubbed on this device before they are sent: addresses, references, contact details and figures are replaced with placeholders, and the reply is re-hydrated here. A proposal keeps the recipient and the figure, because Tera reads those out of the text to build the transaction." : "Prompt minimisation is off, so assistant messages are sent exactly as you type them."} It removes the values from the text. It does not hide that you are asking, and it does not hide the network address the request comes from.</div>
-    <div class="note"><strong>Data boundary</strong>Requests go to ${esc(serviceHost)}. Balances and receipts are read directly through your wallet's network provider, so Tera does not see them. The log below records field names only — never an address, an amount or the text you typed.</div>
+    <div class="note"><strong>Data boundary</strong>Requests go to ${esc(serviceHost)}. Balances and receipts are read directly through your wallet's network provider, so Tera does not see them. The log below records field names only — never an address, an amount or the text you typed. Tera is not the only party involved: the panel further down names every other one.</div>
     ${
       state.demo
         ? `<div class="note"><strong>Guided demo</strong>Every request below was answered locally. Nothing reached ${esc(serviceHost)} and nothing was signed.</div>`
@@ -806,6 +835,24 @@ function privacyCentre() {
         ${LOCAL_ONLY.map((item) => `<article class="panel privacy-local"><b>${esc(item.label)}</b><p class="micro">${esc(item.detail)}</p></article>`).join("")}
       </aside>
     </div>
+    <div class="section-label privacy-catalogue-heading">Who else can see you<span class="micro">${reachTotals.seeingYouNow} of ${reachTotals.parties} parties involved right now</span></div>
+    <div class="note"><strong>Two different things</strong>A party that <b>connects to you</b> sees the network address you are on. A party that <b>receives your data through Tera</b> sees Tera's server address instead — it still gets the data, it just does not get you. The rows below say which, for each one.</div>
+    <div class="egress-grid">${egress
+      .map(
+        (party) => `<article class="panel egress-party ${party.seesYouNow ? "live" : ""}">
+          <div class="proposal-top"><b>${esc(party.name)}</b><span class="actions">${chip(REACH[party.reach].label, party.reach === "direct" || party.reach === "wallet")}${party.uncounted ? chip("Not counted here") : ""}</span></div>
+          <p class="micro egress-host">${esc(party.host)}</p>
+          <div class="section-label egress-label">What it learns</div>
+          <ul class="egress-list">${party.learns.map((line) => `<li>${esc(line)}</li>`).join("")}</ul>
+          <div class="section-label egress-label">What it does not get</div>
+          <p class="micro">${party.withheld.map((line) => esc(line)).join(" · ")}</p>
+          ${pair("This session", party.note)}
+          <p class="micro">${esc(REACH[party.reach].detail)}</p>
+          <p class="micro egress-control"><b>Your move:</b> ${esc(party.control)}</p>
+        </article>`,
+      )
+      .join("")}</div>
+    <p class="micro">${reachTotals.uncounted} of these cannot be counted from this page. Your wallet extension opens its own connections and this page never sees them, so those rows describe what that party is in a position to learn, not a measurement. Nothing here covers traffic from other tabs, other extensions, or your network operator.</p>
     <div class="section-label privacy-catalogue-heading">Every request this wallet can make</div>
     <div class="table-scroll"><table><thead><tr><th>Request</th><th>Fields sent</th><th>Goes to</th><th>Retention</th></tr></thead><tbody>${REQUESTS.map(
       (entry) =>
@@ -813,6 +860,7 @@ function privacyCentre() {
     ).join("")}</tbody></table></div>
     <p class="micro">Retention is described by the service and cannot be verified from this page. Deleting service-side records is not available yet; clearing the log above removes only this local copy.</p>`;
 }
+
 function settings() {
   return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
@@ -1552,7 +1600,10 @@ function downloadShare() {
 }
 function exportPrivacyLog() {
   if (!state.privacyLog.length) return;
-  downloadJson(exportable(state.privacyLog, serviceHost), `tera-privacy-log-${Date.now()}.json`);
+  downloadJson(
+    { ...exportable(state.privacyLog, serviceHost), egress: exportableEgress(egressRows()) },
+    `tera-privacy-log-${Date.now()}.json`,
+  );
 }
 function newPreset() {
   const symbols = [...new Set(state.assets.map((a) => a.symbol))];
