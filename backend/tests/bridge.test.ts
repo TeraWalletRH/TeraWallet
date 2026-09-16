@@ -21,7 +21,7 @@ function fixture() {
 describe("Relay bridge validation (no live provider)", () => {
   it("validates Base and exact 32-byte Solana addresses", () => {
     expect(validRecipient(8453, recipient)).toBe(true);
-    expect(validRecipient(792703809, destinations[1].currency)).toBe(true);
+    expect(validRecipient(792703809, destinations[2].currency)).toBe(true);
     for (const invalid of [recipient, "1".repeat(31), "1".repeat(32), "z".repeat(44), "O".repeat(32)])
       expect(validRecipient(792703809, invalid)).toBe(false);
     expect(() => bridgeInput({ ...input, amount: "-1" })).toThrow();
@@ -48,10 +48,15 @@ describe("Relay bridge validation (no live provider)", () => {
     for (const mutate of mutations) { const q = fixture(); mutate(q); expect(() => validateQuote(q, input, 0)).toThrow(); }
   });
   it("accepts Solana destination metadata without an EVM destination wallet", () => {
-    const solInput = bridgeInput({ ...input, destinationChainId: 792703809, recipient: destinations[1].currency });
+    const solInput = bridgeInput({ ...input, destinationChainId: 792703809, recipient: destinations[2].currency });
     const q = fixture();
     q.details.recipient = solInput.recipient;
-    q.details.currencyOut.currency = { chainId: 792703809, address: destinations[1].currency };
+    q.details.currencyOut.currency = { chainId: 792703809, address: destinations[2].currency };
     expect(validateQuote(q, solInput, 0).input.destinationChainId).toBe(792703809);
+  });
+  it("accepts Arc USDC as an EVM destination", () => {
+    const arc = bridgeInput({ ...input, destinationChainId: 5042, destinationCurrency: "0x3600000000000000000000000000000000000000" });
+    expect(arc.destination.name).toBe("Arc");
+    expect(arc.destination.symbol).toBe("USDC");
   });
 });

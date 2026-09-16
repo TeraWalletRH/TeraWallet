@@ -7,7 +7,7 @@ export function checkBridgeQuote(q, input, now = Date.now()) {
     if (q.input?.[field] !== input[field]) throw new Error("Bridge quote does not match your request.");
   if (q.input?.originCurrency && q.input.originCurrency !== input.originCurrency) throw new Error("Bridge quote does not match your source asset.");
   if (q.input?.destinationCurrency && q.input.destinationCurrency !== input.destinationCurrency) throw new Error("Bridge quote does not match your destination asset.");
-  if (![8453, 792703809].includes(input.destinationChainId) || !Array.isArray(q.steps) ||
+  if (![8453, 5042, 792703809].includes(input.destinationChainId) || !Array.isArray(q.steps) ||
       !["approve,deposit", "deposit"].includes(q.steps.map(s => s.id).join(",")))
     throw new Error("Unsupported bridge steps.");
   if (!/^\d+$/.test(q.amountOut) || !/^\d+$/.test(q.minimumAmountOut) || BigInt(q.minimumAmountOut) <= 0n ||
@@ -67,13 +67,13 @@ export function bridgeView({ esc, pair, button, records, owner, demo }) {
   return `<div class="note">Bridge ETH or USDG from Robinhood Chain to Base or Solana. Paste the destination address; your connected Robinhood wallet signs the deposit.</div>
   <section class="panel"><form id="bridge-form">
   <div class="field"><label for="bridge-source">From</label><select id="bridge-source" name="source"><option value="0x5fc5360d0400a0fd4f2af552add042d716f1d168">Robinhood Chain · USDG</option><option value="0x0000000000000000000000000000000000000000">Robinhood Chain · ETH</option></select></div>
-  <div class="field"><label for="bridge-chain">Destination chain</label><select id="bridge-chain" name="destination"><option value="8453">Base</option><option value="792703809">Solana</option></select></div>
+  <div class="field"><label for="bridge-chain">Destination chain</label><select id="bridge-chain" name="destination"><option value="8453">Base</option><option value="5042">Arc</option><option value="792703809">Solana</option></select></div>
   <div class="field"><label for="bridge-token">Destination token</label><select id="bridge-token" name="destinationCurrency"><option value="0x0000000000000000000000000000000000000000">ETH</option><option value="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913">USDC</option></select></div>
   <div class="field"><label for="bridge-recipient">Destination wallet address</label><input id="bridge-recipient" name="recipient" autocomplete="off" required placeholder="Paste the receiving wallet address"></div>
   <div class="field"><label for="bridge-amount">Amount</label><input id="bridge-amount" name="amount" inputmode="decimal" required placeholder="10.00"></div>
   <p class="micro">The token list updates for the selected chain. Review the full address carefully. Relay receives your source and destination addresses and amount.</p>
   <p role="alert"></p><button class="btn" ${!owner || demo ? "disabled" : ""}>Get bridge quote ↗</button></form></section>
-  <div class="section-label">Bridge delivery history</div>${records.map((r, i) => `<article class="panel">${pair("Destination", r.destinationChainId === 8453 ? "Base · USDC" : "Solana · USDC")}${pair("Recipient", r.recipient)}${pair("USDG input", formatUnits(r.amount, 6))}${pair("Delivery status", r.status || "waiting")}${pair("Relay reference", r.requestId)}${r.depositHash ? pair("Source deposit", r.depositHash) : ""}${(r.destinationHashes || []).map(h => pair(r.status === "refund" ? "Refund transaction" : "Delivery transaction", h)).join("")}${r.error ? `<p role="alert">${esc(r.error)}</p>` : ""}${button("Refresh delivery status", "bridge-status", `data-index="${i}"`)}</article>`).join("") || '<p class="micro">No bridges on this device. Unlock the encrypted vault to restore saved tracking.</p>'}`;
+  <div class="section-label">Bridge delivery history</div>${records.map((r, i) => `<article class="panel">${pair("Destination", r.destinationChainId === 8453 ? "Base · USDC" : r.destinationChainId === 5042 ? "Arc · USDC" : "Solana")}${pair("Recipient", r.recipient)}${pair("USDG input", formatUnits(r.amount, 6))}${pair("Delivery status", r.status || "waiting")}${pair("Relay reference", r.requestId)}${r.depositHash ? pair("Source deposit", r.depositHash) : ""}${(r.destinationHashes || []).map(h => pair(r.status === "refund" ? "Refund transaction" : "Delivery transaction", h)).join("")}${r.error ? `<p role="alert">${esc(r.error)}</p>` : ""}${button("Refresh delivery status", "bridge-status", `data-index="${i}"`)}</article>`).join("") || '<p class="micro">No bridges on this device. Unlock the encrypted vault to restore saved tracking.</p>'}`;
 }
 
 export function bridgeFormInput(form, ownerAddress) {

@@ -10,11 +10,12 @@ export const sourceAssets = [
 ];
 export const destinations = [
   { id: 8453, name: "Base", currency: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", tokens: [{ currency: NATIVE, symbol: "ETH", decimals: 18, native: true }, { currency: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", symbol: "USDC", decimals: 6, native: false }] },
+  { id: 5042, name: "Arc", currency: "0x3600000000000000000000000000000000000000", tokens: [{ currency: "0x3600000000000000000000000000000000000000", symbol: "USDC", decimals: 6, native: false }] },
   { id: 792703809, name: "Solana", currency: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", tokens: [{ currency: "11111111111111111111111111111111", symbol: "SOL", decimals: 9, native: true }, { currency: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", symbol: "USDC", decimals: 6, native: false }, { currency: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", symbol: "USDT", decimals: 6, native: false }] },
 ];
 export function validRecipient(chain: number, address: unknown): address is string {
   if (typeof address !== "string") return false;
-  if (chain === 8453) return isAddress(address, { strict: false }) && !/^0x0{40}$/i.test(address);
+  if (chain === 8453 || chain === 5042) return isAddress(address, { strict: false }) && !/^0x0{40}$/i.test(address);
   if (chain !== 792703809 || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)) return false;
   const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
   let n = 0n;

@@ -1116,6 +1116,8 @@ function bindForms() {
     const sol = bridgeChain.value === "792703809";
     bridgeToken.innerHTML = sol
       ? '<option value="11111111111111111111111111111111">SOL</option><option value="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v">USDC</option><option value="Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB">USDT</option>'
+      : bridgeChain.value === "5042"
+        ? '<option value="0x3600000000000000000000000000000000000000">USDC</option>'
       : '<option value="0x0000000000000000000000000000000000000000">ETH</option><option value="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913">USDC</option>';
   };
   const filter = document.getElementById("asset-filter");
