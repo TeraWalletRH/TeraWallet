@@ -3,7 +3,7 @@ const $=(s,r=document)=>r.querySelector(s), $$=(s,r=document)=>[...r.querySelect
 const icons={x:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.9 2H22l-6.8 7.8L23.2 22h-6.3l-5-7.5L5.3 22H2.1l7.9-9L1 2h6.5l4.6 6.8L18.9 2ZM17.9 20h1.7L6.5 3.9H4.7L17.9 20Z"/></svg>',telegram:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.8 3.5-3.3 16c-.2 1.1-.9 1.3-1.8.8l-5-3.7-2.4 2.3c-.3.3-.5.5-1 .5l.4-5.1L18 6c.4-.4-.1-.6-.6-.3L5.9 12.9 1 11.4c-1.1-.3-1.1-1.1.2-1.6L20.3 2.4c.9-.3 1.7.2 1.5 1.1Z"/></svg>'};
 let lastFocus;
 const zhText={
- 'Home':'首页','About Tera':'关于 Tera','Capabilities':'能力','Wallet workflows':'钱包工作流','Roadmap':'路线图','Community':'社区',
+ 'Home':'首页','About Tera':'关于 Tera','Capabilities':'能力','Wallet workflows':'钱包工作流','Android app':'Android 应用','Roadmap':'路线图','Community':'社区',
  'Explore Tera Wallet':'探索 Tera Wallet','Open wallet ↗':'打开钱包 ↗','Wallet ↗':'钱包 ↗','Tera Wallet':'Tera 钱包',
  'Private authorization.':'私密授权。','Your wallet, your authority.':'你的钱包，你的权限。','Explore wallet ↗':'探索钱包 ↗','Community · coming soon ↗':'社区 · 即将推出 ↗',
  'Owner approved':'所有者已批准','Designed for':'专为','Private by default':'默认保护隐私','Coming soon.':'即将推出。',
@@ -108,7 +108,7 @@ function installMenu(){
  if($('#tera-header'))return;
  document.documentElement.classList.add('tera-menu-ready');document.documentElement.classList.toggle('tera-is-home',location.pathname==='/');
  const h=document.createElement('header');h.id='tera-header';h.className='tera-header';
- const links=[['Home','/'],['About Tera','/about/'],['Capabilities','/solutions/'],['Wallet workflows','/projects/'],['Roadmap','/roadmap/'],['Community','/contacts/']];
+const links=[['Home','/'],['About Tera','/about/'],['Capabilities','/solutions/'],['Wallet workflows','/projects/'],['Android app','/mobile/'],['Roadmap','/roadmap/'],['Community','/contacts/']];
  h.innerHTML=`<a class="tera-header-brand" href="/" aria-label="Tera Wallet home"><img src="/tera/logo.png" alt="">TERA WALLET</a><div class="tera-header-controls"><a class="tera-header-cta" href="/dashboard/">Open wallet ↗</a><button class="tera-menu-toggle" aria-label="Open navigation" aria-controls="tera-menu-panel" aria-expanded="false"><span class="tera-menu-word">Menu</span><span class="tera-menu-glyph" aria-hidden="true"></span></button></div><div class="tera-menu-panel" id="tera-menu-panel" hidden><p class="tera-menu-label">Explore Tera Wallet</p><nav aria-label="Main navigation">${links.map(([label,href],i)=>`<a href="${href}" ${location.pathname.replace(/\/$/,'')===href.replace(/\/$/,'')?'aria-current="page"':''}><span>0${i+1}</span>${label}</a>`).join('')}</nav><div class="tera-menu-bottom"><a class="tera-menu-wallet" href="/dashboard/">Wallet ↗</a><div class="tera-menu-socials"><button aria-label="X — coming soon" data-community="X">${icons.x}</button><button aria-label="Telegram — coming soon" data-community="Telegram">${icons.telegram}</button></div></div><div class="tera-menu-locale">${localeControl()}</div></div>`;
  document.body.append(h);
  let contrastQueued=false;
