@@ -40,7 +40,13 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
+      # Ubuntu runners already provide an Android SDK. Avoid the setup action:
+      # it has intermittently failed before the app build begins.
+      - name: Use runner Android SDK
+        run: |
+          test -n "$ANDROID_SDK_ROOT"
+          echo "ANDROID_HOME=$ANDROID_SDK_ROOT" >> "$GITHUB_ENV"
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.2"
