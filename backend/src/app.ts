@@ -9,6 +9,7 @@ import { requestIdMiddleware } from "./logging";
 import policyRouter from "./routes/policy";
 import bridgeRouter from "./routes/bridge";
 import retentionRouter from "./routes/retention";
+import mobileRouter from "./routes/mobile";
 
 const app = express();
 
@@ -31,6 +32,7 @@ app.use(healthRouter);
 app.use(policyRouter);
 app.use(bridgeRouter);
 app.use(retentionRouter);
+app.use(mobileRouter);
 app.use(assetsRouter);
 app.use(intentRouter);
 app.use(agentRouter);
