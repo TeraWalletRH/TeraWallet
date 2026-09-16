@@ -21,6 +21,11 @@ export const LOCAL_ONLY = [
       "Drafts and transaction records are encrypted in this browser after you unlock the local vault with a wallet signature. The decrypted key stays only in page memory.",
   },
   {
+    label: "Proposal version history",
+    detail:
+      "Each earlier version of a proposal — amount, recipient, asset, check results and expiry — kept in the encrypted local vault so you can see what changed. No version is sent to the service.",
+  },
+  {
     label: "Balance visibility and filters",
     detail: "Interface state that stays in the page and is never transmitted.",
   },

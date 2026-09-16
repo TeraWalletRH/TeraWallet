@@ -2,7 +2,10 @@
 // network and no transaction can be signed, so the full privacy boundary can be
 // shown without a real account. Sample addresses are documentation values.
 
+import { snapshot } from "./history.js";
+
 export const DEMO_OWNER = "0xde300000000000000000000000000000000000a1";
+export const DEMO_LINEAGE = "tera-demo-lineage";
 const DEMO_USDG = "0xde300000000000000000000000000000000000b2";
 const DEMO_SPCX = "0xde300000000000000000000000000000000000c3";
 const DEMO_RECIPIENT = "0xde300000000000000000000000000000000000d4";
@@ -303,7 +306,21 @@ export function createDemoState(chainId) {
     history: demoApi(`/api/account/${DEMO_OWNER}/history`, undefined, chainId).history,
     sessions: demoApi(`/api/session/${DEMO_OWNER}`, undefined, chainId).sessions,
     balances: {},
-    drafts: [demoProposal(chainId), demoProposal(chainId, { amount: "2500000000" }, true)],
+    drafts: [
+      { ...demoProposal(chainId), lineage: DEMO_LINEAGE },
+      demoProposal(chainId, { amount: "2500000000" }, true),
+    ],
+    // The sample action was prepared once above the policy limit, then again
+    // below it, so the guided demo can show a real local diff.
+    versions: {
+      [DEMO_LINEAGE]: [
+        snapshot(
+          demoProposal(chainId, { amount: "2500000000" }, true),
+          DEMO_ASSETS[0],
+          Date.now() - 9 * 60000,
+        ),
+      ],
+    },
     records: [],
     chat: [{ role: "assistant", text: DEMO_REPLIES.default }],
     errors: {},
