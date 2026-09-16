@@ -18,7 +18,7 @@ export const LOCAL_ONLY = [
   {
     label: "Transaction records",
     detail:
-      "Transaction hash, action reference, target, status and audit-sync flag saved in this browser's local storage, scoped to this wallet and network.",
+      "Drafts and transaction records are encrypted in this browser after you unlock the local vault with a wallet signature. The decrypted key stays only in page memory.",
   },
   {
     label: "Balance visibility and filters",

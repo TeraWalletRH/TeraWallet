@@ -16,6 +16,7 @@ import {
 } from "./core.js";
 import { renderAssistantMarkdown } from "./markdown.js";
 import { verifyPolicyBundle } from "/tera/connect/policy-verify.js";
+import { decryptVault, encryptVault, unlockVault } from "./vault.js";
 import {
   LOCAL_ONLY,
   REQUESTS,
@@ -106,6 +107,8 @@ const state = {
   privacyLog: [],
   policyBundle: null,
   policyError: "",
+  vaultKey: null,
+  vaultRetentionDays: 30,
   demo: false,
   guide: 0,
   busy: false,
@@ -122,26 +125,49 @@ const receiptChecks = new Set();
 function storageKey() {
   return `tera-wallet-v1:${config.apiUrl || "production"}:${chainId}:${state.owner.toLowerCase()}`;
 }
-function persist() {
-  if (!state.owner) return;
+function vaultStorageKey() {
+  return `${storageKey()}:encrypted`;
+}
+function vaultSettingsKey() {
+  return `${storageKey()}:retention`;
+}
+async function persist() {
+  if (!state.owner || !state.vaultKey) return;
   try {
-    localStorage.setItem(storageKey(), JSON.stringify(state.records));
+    const vault = await encryptVault(
+      state.vaultKey,
+      { records: state.records, drafts: state.drafts },
+      state.vaultRetentionDays,
+    );
+    localStorage.setItem(vaultStorageKey(), JSON.stringify(vault));
   } catch {
     state.notice =
-      "Browser storage is unavailable. Keep this page open while transactions are pending.";
+      "Encrypted browser storage is unavailable. Keep this page open while transactions are pending.";
   }
 }
 function loadRecords() {
-  try {
-    const rows = JSON.parse(localStorage.getItem(storageKey()) || "[]");
-    state.records = Array.isArray(rows)
-      ? rows.filter(
-          (r) => isHash(r.txHash) && sameAddress(r.owner, state.owner) && r.chainId === chainId,
-        )
-      : [];
-  } catch {
-    state.records = [];
-  }
+  state.records = [];
+  state.drafts = [];
+  const stored = Number(localStorage.getItem(vaultSettingsKey()));
+  state.vaultRetentionDays = [7, 30, 90, 365].includes(stored) ? stored : 30;
+}
+async function unlockEncryptedStorage() {
+  connected();
+  const key = await unlockVault(state.provider, state.owner, chainId);
+  const raw = localStorage.getItem(vaultStorageKey());
+  const vault = raw ? await decryptVault(key, JSON.parse(raw)) : null;
+  state.vaultKey = key;
+  state.records = Array.isArray(vault?.records) ? vault.records.filter((r) => isHash(r.txHash) && sameAddress(r.owner, state.owner) && r.chainId === chainId) : [];
+  state.drafts = Array.isArray(vault?.drafts) ? vault.drafts : [];
+  // Remove the previous plaintext record store after the encrypted vault unlocks.
+  localStorage.removeItem(storageKey());
+}
+function clearEncryptedStorage() {
+  if (!state.owner) return;
+  localStorage.removeItem(vaultStorageKey());
+  localStorage.removeItem(storageKey());
+  state.records = [];
+  state.drafts = [];
 }
 function showError(error) {
   state.notice = errorMessage(error);
@@ -402,7 +428,7 @@ function privacyCentre() {
     <p class="micro">Retention is described by the service and cannot be verified from this page. Deleting service-side records is not available yet; clearing the log above removes only this local copy.</p>`;
 }
 function settings() {
-  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside><aside class="panel"><h2>Data on this device</h2><p>Transaction hashes and audit-sync status are saved to resume tracking after a reload. Proposals and chat stay in this page session. No wallet keys are stored by Tera.</p><p class="micro">Disconnecting clears the current account view. Your wallet extension manages site permissions.</p></aside></div>`;
+  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
 async function loadAssets() {
@@ -497,6 +523,7 @@ function clearAccount() {
   state.chat = [];
   state.errors = {};
   state.loading = false;
+  state.vaultKey = null;
   closeDialog();
 }
 function clearConnection() {
@@ -645,6 +672,7 @@ async function prepare(intent) {
     // Keep the owner's requested intent for calldata comparison, never replace it
     // with a service-supplied owner, recipient or amount.
     state.drafts.unshift({ ...result, intent: locallyApprovedIntent, preparedAt: Date.now() });
+    void persist();
   } finally {
     state.busy = false;
     render();
@@ -715,6 +743,7 @@ function bindForms() {
             preparedAt: Date.now(),
             ...(result.error ? { error: result.error } : {}),
           });
+          void persist();
         }
       } catch (error) {
         if (version === generation)
@@ -757,18 +786,11 @@ async function approve(index) {
     };
     if (version === generation) {
       state.records.unshift(record);
-      persist();
+      void persist();
       state.notice = "Transaction submitted. Waiting for on-chain confirmation.";
       navigate("receipts");
     } else {
-      // A wallet event during the confirmation popup must not lose the hash.
-      const key = `tera-wallet-v1:${config.apiUrl || "production"}:${chainId}:${owner.toLowerCase()}`;
-      try {
-        const rows = JSON.parse(localStorage.getItem(key) || "[]");
-        localStorage.setItem(key, JSON.stringify([record, ...(Array.isArray(rows) ? rows : [])]));
-      } catch {
-        state.notice = `Transaction submitted: ${hash}. Keep this hash to check it in your wallet.`;
-      }
+      state.notice = `Transaction submitted: ${hash}. Reconnect this wallet and unlock its encrypted vault to retain the local record.`;
     }
   } catch (error) {
     if (version === generation) {
@@ -808,7 +830,7 @@ async function updateReceipt(record) {
     receiptChecks.delete(record.txHash);
   }
   if (version === generation) {
-    persist();
+    void persist();
     render();
   }
 }
@@ -903,10 +925,21 @@ document.addEventListener("click", async (event) => {
       await loadPolicyBundle(true);
       render();
     }
+    if (action === "vault-unlock") {
+      await unlockEncryptedStorage();
+      state.notice = "Encrypted local storage unlocked.";
+      render();
+    }
+    if (action === "vault-clear") {
+      clearEncryptedStorage();
+      state.notice = "Encrypted drafts and device-side records were cleared.";
+      render();
+    }
     if (action === "create" || action === "asset-propose") createProposal(target.dataset.symbol);
     if (action === "asset") inspectAsset(target.dataset.symbol);
     if (action === "draft-dismiss") {
       state.drafts.splice(index, 1);
+      void persist();
       render();
     }
     if (action === "reprepare") {
@@ -966,6 +999,15 @@ document.addEventListener("click", async (event) => {
   } catch (error) {
     showError(error);
   }
+});
+document.addEventListener("change", (event) => {
+  if (event.target?.id !== "vault-retention") return;
+  const days = Number(event.target.value);
+  if (![7, 30, 90, 365].includes(days)) return;
+  state.vaultRetentionDays = days;
+  if (state.owner) localStorage.setItem(vaultSettingsKey(), String(days));
+  void persist();
+  render();
 });
 window.addEventListener("tera:wallet-change", (event) => {
   const connection = event.detail;
