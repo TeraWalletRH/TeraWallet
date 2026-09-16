@@ -40,6 +40,14 @@ import {
   boundaryIndex,
 } from "./boundary.js";
 import { describeTransaction } from "./preview.js";
+import {
+  ACTIONS,
+  createPreset,
+  upsertPreset,
+  removePreset,
+  simulate,
+  presetSummary,
+} from "./simulator.js";
 
 const config = JSON.parse(document.getElementById("tera-config")?.textContent || "{}");
 const chainId = Number(config.chainId || 4663);
@@ -115,6 +123,8 @@ const state = {
   policyBundle: null,
   versions: {},
   approval: null,
+  presets: [],
+  simulation: null,
   policyError: "",
   vaultKey: null,
   agentSessionToken: "",
@@ -151,6 +161,7 @@ async function persist() {
         drafts: state.drafts,
         versions: state.versions,
         agentSessionToken: state.agentSessionToken,
+        presets: state.presets,
       },
       state.vaultRetentionDays,
     );
@@ -164,6 +175,8 @@ function loadRecords() {
   state.records = [];
   state.drafts = [];
   state.versions = {};
+  state.presets = [];
+  state.simulation = null;
   const stored = Number(localStorage.getItem(vaultSettingsKey()));
   state.vaultRetentionDays = [7, 30, 90, 365].includes(stored) ? stored : 30;
 }
@@ -182,6 +195,7 @@ async function unlockEncryptedStorage() {
   // Version history follows the same retention window as the rest of the vault.
   state.versions = pruneVersions(vault?.versions, state.vaultRetentionDays);
   state.agentSessionToken = typeof vault?.agentSessionToken === "string" ? vault.agentSessionToken : "";
+  state.presets = Array.isArray(vault?.presets) ? vault.presets.map(createPreset) : [];
   // Remove the previous plaintext record store after the encrypted vault unlocks.
   localStorage.removeItem(storageKey());
 }
@@ -555,10 +569,60 @@ function approvals() {
 }
 function policy() {
   const bundle = state.policyBundle;
-  if (!bundle)
-    return `<div class="content-grid"><section class="panel"><div class="eyebrow">Local policy</div><h2>Loading signed policy bundle…</h2>${state.policyError ? `<p class="live-blocked">${esc(state.policyError)}</p>` : ""}<div class="actions">${button("Refresh policy", "policy-refresh")}</div></section></div>`;
-  return `<div class="content-grid"><section class="panel"><div class="eyebrow">Local policy ${chip("Signed and active")}</div><h2>Rules run in this wallet before preparation.</h2>${pair("Bundle version", `v${bundle.version}`)}${pair("Signer", short(bundle.signer))}${pair("Expires", new Date(bundle.expiresAt).toLocaleString())}${pair("Single-trade cap", `$${(bundle.rules.maxSingleTradeUsdCents / 100).toLocaleString()}`)}${pair("Allowed actions", bundle.rules.allowedActions.join(", "))}<p class="micro">The browser recovered the signing address from the bundle signature before applying these rules. Tera evaluates the same rules again server-side.</p><div class="actions">${button("Refresh policy", "policy-refresh")}</div></section><aside class="panel"><h2>Your approval remains required.</h2><p>Local policy can block a proposal early. Only you can approve a transaction in your wallet.</p><a class="btn" href="${href("approvals")}">Review proposals ↗</a></aside></div>`;
+  const bundlePanel = !bundle
+    ? `<section class="panel"><div class="eyebrow">Local policy</div><h2>Loading signed policy bundle…</h2>${state.policyError ? `<p class="live-blocked">${esc(state.policyError)}</p>` : ""}<div class="actions">${button("Refresh policy", "policy-refresh")}</div></section>`
+    : `<section class="panel"><div class="eyebrow">Local policy ${chip("Signed and active")}</div><h2>Rules run in this wallet before preparation.</h2>${pair("Bundle version", `v${bundle.version}`)}${pair("Signer", short(bundle.signer))}${pair("Expires", new Date(bundle.expiresAt).toLocaleString())}${pair("Single-trade cap", `$${(bundle.rules.maxSingleTradeUsdCents / 100).toLocaleString()}`)}${pair("Allowed actions", bundle.rules.allowedActions.join(", "))}<p class="micro">The browser recovered the signing address from the bundle signature before applying these rules. Tera evaluates the same rules again server-side.</p><div class="actions">${button("Refresh policy", "policy-refresh")}</div></section>`;
+  const assets = state.assets.filter((a) => isAddress(a.address));
+  const result = state.simulation;
+  return `<div class="content-grid">${bundlePanel}<aside class="panel"><h2>Your approval remains required.</h2><p>Local policy can block a proposal early. Only you can approve a transaction in your wallet.</p><a class="btn" href="${href("approvals")}">Review proposals ↗</a></aside></div>
+  <div class="section-label simulator-heading"><span>Policy simulator</span>${chip("Nothing is sent")}</div>
+  <div class="content-grid">
+    <section class="panel">
+      <h2>Test an action before you propose it.</h2>
+      <p class="micro">This runs entirely in your browser against the signed bundle and your own presets. No proposal is created, nothing is sent to Tera, and no signature is requested.</p>
+      <form id="simulator-form">
+        <div class="field"><label for="sim-asset">Asset</label><select id="sim-asset" name="asset">${assets.map((a) => `<option value="${esc(a.symbol)}">${esc(a.symbol)} · ${esc(a.name)}</option>`).join("")}</select></div>
+        <div class="field"><label for="sim-action">Action</label><select id="sim-action" name="action">${ACTIONS.map((action) => `<option>${esc(action)}</option>`).join("")}</select></div>
+        <div class="field"><label for="sim-amount">Amount</label><input id="sim-amount" name="amount" inputmode="decimal" placeholder="0.00" pattern="[0-9]+(\\.[0-9]+)?" required></div>
+        <div class="field"><label for="sim-recipient">Recipient (optional)</label><input id="sim-recipient" name="recipient" placeholder="0x…" autocomplete="off"></div>
+        <p class="live-form-error" role="alert"></p>
+        <button class="btn primary">Simulate locally ↗</button>
+      </form>
+      ${
+        result
+          ? `<div class="sim-result ${result.passed ? "" : "blocked"}" role="status">
+              <div class="proposal-top"><b>${result.passed ? "Would be allowed" : "Would be blocked"}</b>${chip(result.passed ? "No rule blocks it" : `Blocked by ${esc(result.blockedBy.rule)}`, !result.passed)}</div>
+              <p class="micro">${esc(result.summary)}</p>
+              <ul class="sim-rules">${result.rows
+                .map(
+                  (row) =>
+                    `<li class="${row.passed ? "" : "blocked"}"><span class="sim-scope">${esc(row.scope)}</span><span class="sim-rule"><b>${esc(row.rule)}</b><small>${esc(row.detail)}</small></span><em>${row.passed ? "ALLOWS" : "BLOCKS"}</em></li>`,
+                )
+                .join("")}</ul>
+            </div>`
+          : ""
+      }
+    </section>
+    <aside class="panel">
+      <div class="section-label"><span>Your presets</span>${button("+ Add preset", "preset-new")}</div>
+      <p class="micro">Named limits kept in your encrypted vault on this device. They are never uploaded, and Tera cannot read or enforce them — they run here, before a proposal exists.</p>
+      ${
+        state.presets.length
+          ? state.presets
+              .map(
+                (preset) => `<article class="preset ${preset.enabled ? "" : "off"}">
+          <div class="proposal-top"><b>${esc(preset.name)}</b>${chip(preset.enabled ? "Active" : "Paused", !preset.enabled)}</div>
+          <p class="micro">${esc(presetSummary(preset))}</p>
+          <div class="actions">${button(preset.enabled ? "Pause" : "Activate", "preset-toggle", `data-id="${esc(preset.id)}"`)}${button("Delete", "preset-delete", `data-id="${esc(preset.id)}"`)}</div>
+        </article>`,
+              )
+              .join("")
+          : empty("No presets yet. Add one to test actions against your own limits.")
+      }
+    </aside>
+  </div>`;
 }
+
 function sessions() {
   if (!state.owner) return accountPrompt();
   const sessionCard = (s) => {
@@ -959,6 +1023,50 @@ function bindForms() {
       state.category = data.get("category");
       render();
     };
+  const simulator = document.getElementById("simulator-form");
+  if (simulator)
+    simulator.onsubmit = (event) => {
+      event.preventDefault();
+      const error = simulator.querySelector('[role="alert"]');
+      try {
+        const data = new FormData(simulator);
+        const asset = state.assets.find((a) => a.symbol === data.get("asset"));
+        if (!asset) throw new Error("Select an asset to simulate.");
+        const recipient = String(data.get("recipient") || "").trim();
+        if (recipient && !isAddress(recipient))
+          throw new Error("Enter a valid recipient address, or leave it blank.");
+        const amount = parseUnits(String(data.get("amount")).trim(), asset.decimals);
+        const actionType = data.get("action");
+        // Mirrors what a proposal would declare, without preparing one.
+        const action = {
+          actionType,
+          assetSymbol: asset.symbol,
+          assetAddress: asset.address,
+          amount,
+          recipient,
+          ...(actionType === "BUY"
+            ? { maxSpendUsdCents: Number(parseUnits(String(data.get("amount")).trim(), 2)) }
+            : {}),
+        };
+        state.simulation = simulate({
+          action,
+          presets: state.presets,
+          asset,
+          bundle: state.policyBundle,
+          bundleIssue: state.policyBundle
+            ? evaluateLocalPolicy(
+                { actionType, maxSpendUsdCents: action.maxSpendUsdCents },
+                state.policyBundle,
+                config.policySignerAddress || state.policyBundle.signer,
+              )
+            : null,
+        });
+        error.textContent = "";
+        render();
+      } catch (issue) {
+        error.textContent = errorMessage(issue);
+      }
+    };
   const form = document.getElementById("chat-form");
   if (form)
     form.onsubmit = async (event) => {
@@ -1202,6 +1310,48 @@ function exportPrivacyLog() {
   if (!state.privacyLog.length) return;
   downloadJson(exportable(state.privacyLog, serviceHost), `tera-privacy-log-${Date.now()}.json`);
 }
+function newPreset() {
+  const symbols = [...new Set(state.assets.map((a) => a.symbol))];
+  dialog(
+    "Add a personal limit.",
+    `<form id="preset-form"><p class="micro">Kept encrypted on this device. Tera never receives it, so it cannot enforce it for you — the wallet applies it here, before a proposal is prepared.</p>
+      <div class="field"><label for="preset-name">Name</label><input id="preset-name" name="name" required maxlength="60" placeholder="Daily operations"></div>
+      <div class="field"><label for="preset-max">Maximum per action (optional)</label><input id="preset-max" name="max" inputmode="decimal" placeholder="500" pattern="[0-9]+(\\.[0-9]+)?"></div>
+      <div class="field"><label for="preset-asset">Applies to asset</label><select id="preset-asset" name="asset"><option value="">Any asset</option>${symbols.map((symbol) => `<option>${esc(symbol)}</option>`).join("")}</select></div>
+      <div class="field"><label for="preset-actions">Allowed actions (optional)</label><select id="preset-actions" name="actions" multiple size="4">${ACTIONS.map((action) => `<option>${esc(action)}</option>`).join("")}</select></div>
+      <div class="field"><label for="preset-recipients">Allowed recipients (optional, one per line)</label><textarea id="preset-recipients" name="recipients" rows="3" placeholder="0x…"></textarea></div>
+      <p class="live-form-error" role="alert"></p>
+      <button class="btn primary">Save preset</button></form>`,
+  );
+  const form = document.getElementById("preset-form");
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    const error = form.querySelector('[role="alert"]');
+    try {
+      const data = new FormData(form);
+      const recipients = String(data.get("recipients") || "")
+        .split(/\s+/)
+        .map((row) => row.trim())
+        .filter(Boolean);
+      const invalid = recipients.filter((address) => !isAddress(address));
+      if (invalid.length) throw new Error("One or more recipient addresses are not valid.");
+      const preset = createPreset({
+        name: data.get("name"),
+        maxPerAction: data.get("max"),
+        assetSymbol: data.get("asset"),
+        allowedActions: data.getAll("actions"),
+        recipients,
+      });
+      state.presets = upsertPreset(state.presets, preset);
+      state.simulation = null;
+      void persist();
+      closeDialog();
+      render();
+    } catch (issue) {
+      error.textContent = errorMessage(issue);
+    }
+  };
+}
 function inspectAsset(symbol) {
   const a = state.assets.find((a) => a.symbol === symbol);
   if (!a) return;
@@ -1351,6 +1501,22 @@ document.addEventListener("click", async (event) => {
       delete state.versions[target.dataset.lineage];
       void persist();
       state.notice = "Version history for that proposal was deleted from this device.";
+      render();
+    }
+    if (action === "preset-new") newPreset();
+    if (action === "preset-toggle" && target.dataset.id) {
+      const preset = state.presets.find((row) => row.id === target.dataset.id);
+      if (preset) {
+        state.presets = upsertPreset(state.presets, { ...preset, enabled: !preset.enabled });
+        state.simulation = null;
+        void persist();
+        render();
+      }
+    }
+    if (action === "preset-delete" && target.dataset.id) {
+      state.presets = removePreset(state.presets, target.dataset.id);
+      state.simulation = null;
+      void persist();
       render();
     }
     if (action === "share") shareProposal(index);
