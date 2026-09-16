@@ -257,7 +257,7 @@ export const GUIDE = [
     id: "ask",
     route: "agent",
     title: "Ask the assistant something",
-    body: "Send a question. Then return to Privacy status: the request carries your message and nothing else. No address, no balances, no history.",
+    body: "Send a question with an address and a figure in it. Before anything is sent you are shown both sides — what you typed, and the skeleton that leaves this device with every value replaced by a placeholder. The reply is re-hydrated here. Then return to Privacy status: the request carries your message and nothing else. No address, no balances, no history.",
     action: "Open the assistant",
   },
   {
