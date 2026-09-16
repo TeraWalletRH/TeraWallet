@@ -222,6 +222,32 @@ export const REQUESTS = [
     retention: "Stored assistant proposal fields are redacted; confirmed transaction receipts remain for audit history.",
     withheld: ["Private keys", "Seed phrase"],
   },
+  {
+    id: "privacy-audit",
+    method: "GET",
+    path: "/api/privacy/audit",
+    match: (path) => path.startsWith("/api/privacy/audit"),
+    label: "Privacy audit report",
+    purpose: "Retrieve a machine-readable record of data categories collected, retention periods, processors, and deletion status.",
+    fields: [],
+    identifies: false,
+    processors: ["Tera service"],
+    retention: "Read-only disclosure endpoint.",
+    withheld: ["Private keys", "Seed phrase", "Wallet balances"],
+  },
+  {
+    id: "account-privacy-audit",
+    method: "GET",
+    path: "/api/account/{address}/privacy-audit",
+    match: (path) => /^\/api\/account\/0x[\da-f]{40}\/privacy-audit$/i.test(path),
+    label: "Account privacy audit",
+    purpose: "Retrieve real-time data retention and deletion status for this wallet.",
+    fields: ["ownerAddress (in the request path)"],
+    identifies: true,
+    processors: ["Tera service"],
+    retention: "Read-only status lookup.",
+    withheld: ["Private keys", "Seed phrase", "Balances"],
+  },
 ];
 
 const UNKNOWN = {
