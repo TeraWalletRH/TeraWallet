@@ -63,4 +63,27 @@ describe("AI Agent Proposal Layer", () => {
     expect(res.status).toBe(403);
     expect(res.body.error).toBe("Session token is outside its permitted action or asset scope.");
   }, 15000);
+
+  it("binds a transfer proposal to the recipient supplied in the request", async () => {
+    const recipient = "0xB988903293BC6F0F0AF79c6D2dc9A978c9Fc9d02";
+    const res = await request(app).post("/api/agent/propose").send({
+      prompt: `Send 10 USDG to ${recipient}`,
+      ownerAddress: sampleOwner,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.intent.actionType).toBe("TRANSFER");
+    expect(res.body.intent.recipient).toBe(recipient);
+    expect(res.body.preparedTransaction.data.toLowerCase()).toContain(recipient.slice(2).toLowerCase());
+  }, 15000);
+
+  it("rejects a transfer request without a valid recipient", async () => {
+    const res = await request(app).post("/api/agent/propose").send({
+      prompt: "Send 10 USDG",
+      ownerAddress: sampleOwner,
+    });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe("Transfers require a valid recipient address in the request.");
+  }, 15000);
 });
