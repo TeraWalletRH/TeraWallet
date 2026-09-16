@@ -40,6 +40,23 @@ export const LOCAL_ONLY = [
 // request can carry; the live log records the field names actually present.
 export const REQUESTS = [
   {
+    id: "bridge-quote", method: "POST", path: "/api/bridge/quote",
+    match: path => path === "/api/bridge/quote", label: "Bridge quote",
+    purpose: "Quote a USDG bridge to the destination address you entered.",
+    fields: ["ownerAddress", "recipient", "amount", "destinationChainId"], identifies: true,
+    processors: ["Tera service", "Relay"],
+    retention: "Relay receives the source and destination addresses and amount. Bridge tracking is saved locally in the encrypted vault when unlocked.",
+    withheld: ["Assistant messages", "Session token", "Private keys", "Portfolio"],
+  },
+  {
+    id: "bridge-status", method: "GET", path: "/api/bridge/status/{reference}",
+    match: path => /^\/api\/bridge\/status\/0x[\da-f]{64}$/i.test(path), label: "Bridge delivery",
+    purpose: "Check destination delivery or refund using the Relay request reference.",
+    fields: ["requestId (in the request path)"], identifies: true,
+    processors: ["Tera service", "Relay"], retention: "Relay looks up its bridge record using this reference.",
+    withheld: ["Assistant messages", "Session token", "Private keys"],
+  },
+  {
     id: "policy-bundle",
     method: "GET",
     path: "/policy-bundle.json",

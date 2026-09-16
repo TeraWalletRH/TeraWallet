@@ -17,6 +17,7 @@ import {
 import { renderAssistantMarkdown } from "./markdown.js";
 import { verifyPolicyBundle } from "/tera/connect/policy-verify.js";
 import { decryptVault, encryptVault, unlockVault } from "./vault.js";
+import { bridgeView, bridgeFormInput, checkBridgeQuote, sendBridge } from "./bridge.js";
 import {
   LOCAL_ONLY,
   REQUESTS,
@@ -89,6 +90,7 @@ const titles = {
   assets: "Asset registry",
   agent: "Agent assistant",
   approvals: "Approvals",
+  bridge: "Bridge",
   policy: "Private policy",
   sessions: "Agent sessions",
   receipts: "Receipts",
@@ -118,6 +120,7 @@ const state = {
   balances: {},
   drafts: [],
   records: [],
+  bridges: [],
   chat: [],
   privacyLog: [],
   policyBundle: null,
@@ -153,11 +156,13 @@ function vaultSettingsKey() {
 }
 async function persist() {
   if (!state.owner || !state.vaultKey) return;
+  const targetStorageKey = vaultStorageKey();
   try {
     const vault = await encryptVault(
       state.vaultKey,
       {
         records: state.records,
+        bridges: state.bridges,
         drafts: state.drafts,
         versions: state.versions,
         agentSessionToken: state.agentSessionToken,
@@ -165,13 +170,14 @@ async function persist() {
       },
       state.vaultRetentionDays,
     );
-    localStorage.setItem(vaultStorageKey(), JSON.stringify(vault));
+    localStorage.setItem(targetStorageKey, JSON.stringify(vault));
   } catch {
     state.notice =
       "Encrypted browser storage is unavailable. Keep this page open while transactions are pending.";
   }
 }
 function loadRecords() {
+  state.bridges = [];
   state.records = [];
   state.drafts = [];
   state.versions = {};
@@ -192,6 +198,7 @@ async function unlockEncryptedStorage() {
       )
     : [];
   state.drafts = Array.isArray(vault?.drafts) ? vault.drafts : [];
+  state.bridges = Array.isArray(vault?.bridges) ? vault.bridges.filter(r => sameAddress(r.ownerAddress, state.owner) && isHash(r.requestId)) : [];
   // Version history follows the same retention window as the rest of the vault.
   state.versions = pruneVersions(vault?.versions, state.vaultRetentionDays);
   state.agentSessionToken = typeof vault?.agentSessionToken === "string" ? vault.agentSessionToken : "";
@@ -204,6 +211,7 @@ function clearEncryptedStorage() {
   localStorage.removeItem(vaultStorageKey());
   localStorage.removeItem(storageKey());
   state.records = [];
+  state.bridges = [];
   state.drafts = [];
   state.agentSessionToken = "";
 }
@@ -267,6 +275,7 @@ function render() {
       assets: registry,
       agent: () => `<div class="live-agent panel">${chat()}</div>`,
       approvals,
+      bridge: () => bridgeView({ esc, pair, button, records: state.bridges, owner: state.owner, demo: state.demo }),
       policy,
       sessions,
       receipts,
@@ -826,6 +835,7 @@ async function loadBalances(version = generation) {
 }
 function clearAccount() {
   generation++;
+  state.bridges = [];
   state.owner = "";
   state.chain = null;
   state.account = null;
@@ -1013,7 +1023,88 @@ async function prepare(intent, lineage = "") {
   }
 }
 
+async function refreshBridge(record) {
+  if (!record) return;
+  const version = generation;
+  try {
+    const { status } = await api(`/api/bridge/status/${record.requestId}`);
+    if (version !== generation) return;
+    if (status.originChainId && status.originChainId !== 4663) throw new Error("Unexpected bridge origin.");
+    if (status.destinationChainId && status.destinationChainId !== record.destinationChainId) throw new Error("Unexpected bridge destination.");
+    record.status = status.status;
+    record.destinationHashes = Array.isArray(status.txHashes) ? status.txHashes : [];
+    record.error = status.failReason && status.failReason !== "N/A" ? status.failReason : "";
+  } catch (error) { if (version === generation) record.error = errorMessage(error); }
+  if (version === generation) { await persist(); render(); }
+}
+
+function reviewBridge(quote, input, version) {
+  const fee = entry => entry?.currency ? `${formatUnits(entry.amount, entry.currency.decimals)} ${entry.currency.symbol}` : "Unavailable";
+  const panel = dialog("Review your bridge", `${pair("From", "Robinhood Chain · USDG")}${pair("To", input.destinationChainId === 8453 ? "Base · USDC" : "Solana · USDC")}${pair("Receiving address", input.recipient)}${pair("USDG input", formatUnits(input.amount, 6))}${pair("Expected USDC", formatUnits(quote.amountOut, 6))}${pair("Minimum USDC", formatUnits(quote.minimumAmountOut, 6))}${pair("Relay fee (included in quote)", fee(quote.fees?.relayer))}${pair("Estimated network fee (additional)", fee(quote.fees?.gas))}${pair("Quote expires", new Date(quote.expiresAt).toLocaleTimeString())}<p class="micro">Relay handles delivery to this address. Source confirmation alone does not mean delivery is complete. Delivery or refund progress will appear below. ${state.vaultKey ? "Tracking is saved in your encrypted vault." : "Unlock the vault in Settings to save tracking across reloads."}</p><p id="bridge-progress" role="status"></p><button class="btn" id="bridge-sign">Approve bridge in wallet ↗</button>`);
+  const sign = panel.querySelector("#bridge-sign");
+  sign.onclick = async () => {
+    if (state.busy) return;
+    sign.disabled = true;
+    state.busy = true;
+    let record;
+    const progress = message => { panel.querySelector("#bridge-progress").textContent = message; };
+    const active = () => {
+      if (version !== generation || !panel.open) throw new Error("Wallet or review changed. Request a fresh bridge quote.");
+    };
+    try {
+      active();
+      correctNetwork();
+      await sendBridge(state.provider, quote, input, active, async (step, hash) => {
+        // Capture submitted hashes before any subsequent network operation.
+        if (version !== generation) {
+          progress(`Transaction submitted: ${hash}. Track Relay reference ${quote.requestId}.`);
+          throw new Error(`Wallet changed after submission. Relay reference: ${quote.requestId}; transaction: ${hash}`);
+        }
+        if (!record) {
+          record = { ...input, requestId: quote.requestId, status: "waiting", createdAt: new Date().toISOString() };
+          state.bridges.unshift(record);
+        }
+        if (step === "deposit") { record.depositHash = hash; record.status = "depositing"; }
+        else record.approvalHash = hash;
+        await persist();
+      }, progress);
+      progress("Deposit submitted. Tracking destination delivery.");
+      await refreshBridge(record);
+    } catch (error) {
+      progress(`${errorMessage(error)} Request a fresh quote only if no deposit was submitted.`);
+      if (record) { record.error = errorMessage(error); await persist(); }
+    } finally { state.busy = false; render(); }
+  };
+}
+
+setInterval(() => {
+  if (route() !== "bridge" || state.busy || document.hidden) return;
+  const record = state.bridges.find(r => r.depositHash && !["success", "failure", "refund"].includes(r.status));
+  if (record && !polling) {
+    polling = true;
+    void refreshBridge(record).finally(() => { polling = false; });
+  }
+}, 10000);
+
 function bindForms() {
+  const bridgeForm = document.getElementById("bridge-form");
+  if (bridgeForm) bridgeForm.onsubmit = async (event) => {
+    event.preventDefault();
+    if (state.busy || state.demo) return;
+    const version = generation;
+    const submit = bridgeForm.querySelector("button");
+    submit.disabled = true;
+    try {
+      correctNetwork();
+      const input = bridgeFormInput(bridgeForm, state.owner);
+      const { quote } = await api("/api/bridge/quote", input);
+      if (version !== generation) return;
+      checkBridgeQuote(quote, input);
+      reviewBridge(quote, input, version);
+    } catch (error) {
+      bridgeForm.querySelector('[role="alert"]').textContent = errorMessage(error);
+    } finally { submit.disabled = false; }
+  };
   const filter = document.getElementById("asset-filter");
   if (filter)
     filter.onsubmit = (event) => {
@@ -1476,6 +1567,7 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "approve") await approve(index);
     if (action === "receipt-export") exportReceipt(index);
+    if (action === "bridge-status") await refreshBridge(state.bridges[index]);
     if (action === "demo-start") startDemo();
     if (action === "demo-exit") exitDemo();
     if (action === "demo-reset") resetDemo();

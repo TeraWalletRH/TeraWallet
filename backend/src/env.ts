@@ -7,6 +7,7 @@ export const env = {
   rhcRpcUrl: process.env.RHC_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
   rhcChainId: Number(process.env.RHC_CHAIN_ID ?? process.env.RHC_ID ?? 4663),
   groqApiKey: process.env.GROQ_API_KEY ?? "",
+  relayApiKey: process.env.RELAY_API_KEY ?? "",
   groqModel: process.env.GROQ_MODEL ?? "qwen/qwen3.8-27b",
   policySignerPrivateKey: process.env.POLICY_SIGNER_PRIVATE_KEY ?? "",
   policySignerAddress: process.env.POLICY_SIGNER_ADDRESS ?? "",
@@ -15,4 +16,3 @@ export const env = {
 } as const;
 
 export const isProduction = env.nodeEnv === "production";
-
