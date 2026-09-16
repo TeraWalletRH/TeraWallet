@@ -26,6 +26,7 @@ import {
   exportable,
 } from "./privacy.js";
 import { GUIDE, guideStep, createDemoState, demoApi, DEMO_OWNER } from "./demo.js";
+import { redactProposal, toText, leaks, formatExact } from "./redact.js";
 
 const config = JSON.parse(document.getElementById("tera-config")?.textContent || "{}");
 const chainId = Number(config.chainId || 4663);
@@ -348,7 +349,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
     }).join("")}</ul>
     ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${(intent?.actionType === "BUY" || intent?.actionType === "SELL") ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", intent.recipient) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
     ${submitted ? `<p>Transaction: ${explorer(p.txHash)}</p>` : issue ? `<p class="live-blocked">${esc(issue)}</p>` : '<p class="micro">Review the token amount and recipient. Your wallet will ask you to sign and pay the network fee.</p>'}
-    <div class="actions">${button("Approve in wallet ↗", "approve", `data-index="${index}" ${issue || submitted || state.busy || state.chain !== chainId ? "disabled" : ""}`)}${button("Prepare again", "reprepare", `data-index="${index}" ${state.busy || submitted || !intent ? "disabled" : ""}`)}${button("Dismiss", "draft-dismiss", `data-index="${index}" ${state.busy ? "disabled" : ""}`)}</div></article>`;
+    <div class="actions">${button("Approve in wallet ↗", "approve", `data-index="${index}" ${issue || submitted || state.busy || state.chain !== chainId ? "disabled" : ""}`)}${button("Prepare again", "reprepare", `data-index="${index}" ${state.busy || submitted || !intent ? "disabled" : ""}`)}${button("Share redacted", "share", `data-index="${index}"`)}${button("Dismiss", "draft-dismiss", `data-index="${index}" ${state.busy ? "disabled" : ""}`)}</div></article>`;
 }
 function approvals() {
   return `<div class="toolbar">${button("+ New proposal", "create")}${chip("Review before signing")}</div>${state.drafts.map(proposalCard).join("") || empty("No proposals in this session. Create a new proposal to run the checks.")}<p class="micro">Quote-based proposals may expire when the backend supplies an expiry. Transfers remain reviewable until you dismiss them. Pending transactions remain in Receipts.</p>`;
@@ -859,6 +860,52 @@ function exportReceipt(index) {
     `tera-${record.txHash.slice(0, 12)}.json`,
   );
 }
+// Held between renders of the share dialog so the reference toggle can rebuild
+// the same preview without re-deriving which proposal was being shared.
+const shareState = { index: -1, reference: false, document: null };
+function shareProposal(index, includeReference = false) {
+  const proposal = state.drafts[index];
+  if (!proposal) return;
+  const intent = proposal.intent || proposal.preparedTransaction?.intent || {};
+  const asset = assetFor(intent.assetAddress);
+  const document = redactProposal(proposal, asset, { includeReference, chainId });
+  const found = leaks(document, intent);
+  // Never show, copy or download a document that still carries owner data.
+  if (found.length) {
+    state.notice = `This proposal could not be redacted safely (${found.join(", ")}). Nothing was prepared for sharing.`;
+    render();
+    return;
+  }
+  Object.assign(shareState, { index, reference: includeReference, document });
+  const exact =
+    asset && Number.isInteger(asset.decimals)
+      ? `${formatExact(intent.amount, asset.decimals)} ${asset.symbol}`
+      : "the exact amount";
+  dialog(
+    "Share without revealing yourself.",
+    `<p>This is exactly what leaves your device. The checks and the decision are kept; your addresses, ${esc(exact)} and the transaction calldata are not.</p>
+     <div class="share-preview"><pre>${esc(toText(document))}</pre></div>
+     <label class="share-toggle"><input type="checkbox" data-action="share-reference" ${shareState.reference ? "checked" : ""}> Include a short action reference</label>
+     <p class="micro">The reference lets Tera match this document to the original proposal. Leave it off to share with someone who should not be able to.</p>
+     <div class="actions">${button("Copy", "share-copy")}${button("Download .json", "share-download")}${button("Close", "close")}</div>`,
+  );
+}
+async function copyShare() {
+  if (!shareState.document) return;
+  try {
+    await navigator.clipboard.writeText(toText(shareState.document));
+    state.notice = "Redacted proposal copied. Paste it wherever you need to.";
+  } catch {
+    state.notice = "This browser blocked the clipboard. Use Download instead.";
+  }
+  closeDialog();
+  render();
+}
+function downloadShare() {
+  if (!shareState.document) return;
+  downloadJson(shareState.document, `tera-redacted-proposal-${Date.now()}.json`);
+  closeDialog();
+}
 function exportPrivacyLog() {
   if (!state.privacyLog.length) return;
   downloadJson(exportable(state.privacyLog, serviceHost), `tera-privacy-log-${Date.now()}.json`);
@@ -973,6 +1020,10 @@ document.addEventListener("click", async (event) => {
         navigate(guideStep(state.guide).route);
       }
     }
+    if (action === "share") shareProposal(index);
+    if (action === "share-copy") await copyShare();
+    if (action === "share-download") downloadShare();
+    if (action === "share-reference") shareProposal(shareState.index, !shareState.reference);
     if (action === "privacy-export") exportPrivacyLog();
     if (action === "privacy-clear") {
       state.privacyLog = [];

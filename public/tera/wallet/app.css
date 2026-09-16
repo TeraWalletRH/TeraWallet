@@ -317,3 +317,30 @@ h1:focus {
     flex: 1 1 auto;
   }
 }
+.share-preview {
+  border: 1px solid #b5bfa8;
+  background: #e9ecdf;
+  max-height: 46vh;
+  overflow: auto;
+  margin: 18px 0;
+}
+.share-preview pre {
+  margin: 0;
+  padding: 16px;
+  font:
+    12px/1.7 "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.share-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  margin: 4px 0 10px;
+}
+.share-toggle input {
+  flex: none;
+}
