@@ -1,4 +1,5 @@
 import { Router, type Request, type Response } from "express";
+import { isAddress } from "viem";
 import { env } from "../env";
 import { SUPPORTED_RWA_ASSETS, findAsset } from "../data/assets";
 import { runGatePipeline } from "../pipeline/gates";
@@ -33,6 +34,7 @@ ${JSON.stringify(
 Determine the intent actionType (BUY, SELL, TRANSFER, CLAIM_YIELD).
 Determine the token amount in base units (e.g. 18 decimals for equities/WETH/ETH, 6 decimals for USDG).
 Calculate maxSpendUsdCents (e.g. $100 = 10000 cents).
+For TRANSFER, extract the exact recipient address from the user's request. Never invent an address.
 
 You MUST respond strictly with a valid JSON object matching this schema:
 {
@@ -41,9 +43,11 @@ You MUST respond strictly with a valid JSON object matching this schema:
     "assetAddress": "0x...",
     "actionType": "BUY" | "SELL" | "TRANSFER" | "CLAIM_YIELD",
     "amount": "1000000000000000000",
-    "maxSpendUsdCents": 10000
+    "maxSpendUsdCents": 10000,
+    "recipient": "0x..."
   }
 }
+For BUY, SELL, and CLAIM_YIELD, use null for recipient. For TRANSFER, recipient is required and must be a 20-byte EVM address copied from the user's request.
 Do not include markdown formatting or backticks around the JSON.
 `;
 
@@ -91,6 +95,7 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
             Authorization: `Bearer ${env.groqApiKey}`,
             "Content-Type": "application/json",
           },
+          signal: AbortSignal.timeout(5000),
           body: JSON.stringify({
             model: env.groqModel,
             messages: [
@@ -168,6 +173,9 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
         actionType: action,
         amount: amountUnits,
         maxSpendUsdCents: Math.floor(parsedDollars * 100),
+        ...(action === "TRANSFER"
+          ? { recipient: prompt.match(/0x[a-fA-F0-9]{40}/)?.[0] as `0x${string}` | undefined }
+          : {}),
       };
 
       explanation = `Drafted proposal to ${action} $${parsedDollars} worth of ${matchedAsset.symbol} (${matchedAsset.name}) on Robinhood Chain. Verified through deterministic compliance checks before owner signature.`;
@@ -175,13 +183,25 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
 
 
     const walletAddress = ownerAddress as `0x${string}`;
+    const actionType = (intentDraft.actionType as UserIntent["actionType"]) ?? "BUY";
+    // A transfer destination is owner-critical data. Only take it from the
+    // submitted request, never from an AI-generated explanation or fallback.
+    const recipient = prompt.match(/0x[a-fA-F0-9]{40}/)?.[0] as `0x${string}` | undefined;
+    if (actionType === "TRANSFER" && (!recipient || !isAddress(recipient))) {
+      res.status(422).json({
+        success: false,
+        error: "Transfers require a valid recipient address in the request.",
+      });
+      return;
+    }
     const fullIntent: UserIntent = {
       ownerAddress: walletAddress,
       accountAddress: walletAddress,
       assetAddress: intentDraft.assetAddress as `0x${string}`,
-      actionType: (intentDraft.actionType as any) ?? "BUY",
+      actionType,
       amount: String(intentDraft.amount ?? "100000000"),
       maxSpendUsdCents: intentDraft.maxSpendUsdCents ?? 10000,
+      ...(actionType === "TRANSFER" ? { recipient } : {}),
     };
 
     // A connected agent token can prepare only the action and asset selected
@@ -284,6 +304,7 @@ router.post("/api/agent/chat", async (req: Request, res: Response) => {
         Authorization: `Bearer ${env.groqApiKey}`,
         "Content-Type": "application/json",
       },
+      signal: AbortSignal.timeout(5000),
       body: JSON.stringify({
         model: env.groqModel,
         messages: [
@@ -312,9 +333,10 @@ router.post("/api/agent/chat", async (req: Request, res: Response) => {
     });
   } catch (error) {
     logger.error(req, "agent.chat_failed", error);
-    res.status(500).json({
-      success: false,
-      error: "Chat service unavailable",
+    res.status(200).json({
+      success: true,
+      reply:
+        "Tera Wallet keeps approval with the owner. The assistant can prepare a typed proposal, but Tera checks the asset, eligibility, policy, and risk conditions before your wallet is asked to sign.",
     });
   }
 });
