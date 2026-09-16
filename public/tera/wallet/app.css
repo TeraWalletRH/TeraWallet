@@ -674,3 +674,67 @@ h1:focus {
   height: 2px;
   background: repeating-linear-gradient(90deg, #768143 0 6px, transparent 6px 12px);
 }
+.preview {
+  border: 1px solid #b9c0ae;
+  padding: 14px 16px;
+  margin: 14px 0 4px;
+}
+.preview summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  font:
+    11px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  text-transform: uppercase;
+}
+.preview-sentence {
+  font-size: 16px;
+  line-height: 1.6;
+  margin: 14px 0;
+  padding: 14px 16px;
+  background: #e7eadc;
+  border-left: 2px solid #a2ac7a;
+  overflow-wrap: anywhere;
+}
+.preview-flags {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+}
+.preview-flags li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 10px 0;
+  border-top: 1px dashed #c8cfbb;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.preview-flags li b {
+  flex: none;
+  font:
+    10px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  text-transform: uppercase;
+  border: 1px solid #a7b197;
+  padding: 3px 7px;
+  color: #5d6b4b;
+}
+.preview-flags li.attention b {
+  border-color: #b5977b;
+  color: #895630;
+}
+.preview-raw .section-label {
+  margin: 0 0 8px;
+}
+.preview-row b {
+  font:
+    11px/1.6 "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  max-width: 62%;
+}
