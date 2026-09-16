@@ -29,6 +29,18 @@ router.post("/api/intent/prepare", async (req: Request, res: Response) => {
       return;
     }
 
+    // Yield claims are no longer part of Tera's product surface. Reject before
+    // any registry or RPC work so the response is deterministic and immediate.
+    if (intent.actionType === "CLAIM_YIELD") {
+      res.status(501).json({
+        success: false,
+        error: "Yield claims are discontinued and are not supported.",
+        action: "CLAIM_YIELD",
+        supported: false,
+      });
+      return;
+    }
+
     // Run the 5 deterministic gates
     const gates = await runGatePipeline(intent);
     const hasFailedGate = gates.some((g) => !g.passed);
