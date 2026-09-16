@@ -5,7 +5,9 @@ import { findAsset, SUPPORTED_RWA_ASSETS } from "../data/assets";
 import { evaluatePolicy } from "../policy";
 
 const publicClient = createPublicClient({
-  transport: http(env.rhcRpcUrl),
+  // Registry fallback is deterministic. Do not let an optional preflight RPC
+  // stall a policy rejection or the API response when the chain is slow.
+  transport: http(env.rhcRpcUrl, { timeout: 2_000, retryCount: 0 }),
 });
 
 export async function runGatePipeline(intent: UserIntent): Promise<GateResult[]> {
@@ -42,7 +44,10 @@ export async function runGatePipeline(intent: UserIntent): Promise<GateResult[]>
 }
 
 export async function checkAssetRegistry(intent: UserIntent): Promise<GateResult> {
-  if (!intent.assetAddress || intent.assetAddress === "0x0000000000000000000000000000000000000000") {
+  if (
+    !intent.assetAddress ||
+    intent.assetAddress === "0x0000000000000000000000000000000000000000"
+  ) {
     // Native ETH is valid
     const isEth = intent.actionType === "BUY" || intent.actionType === "TRANSFER";
     if (!isEth) {
@@ -97,7 +102,9 @@ export async function checkEligibilityPreflight(intent: UserIntent): Promise<Gat
   }
 
   const asset = findAsset(intent.assetAddress);
-  const isNativeEth = asset?.tokenStandard === "native" || intent.assetAddress === "0x0000000000000000000000000000000000000000";
+  const isNativeEth =
+    asset?.tokenStandard === "native" ||
+    intent.assetAddress === "0x0000000000000000000000000000000000000000";
 
   if (isNativeEth) {
     return {
@@ -154,7 +161,8 @@ export async function checkEligibilityPreflight(intent: UserIntent): Promise<Gat
     return {
       gate: "eligibility_preflight",
       passed: false,
-      reason: "Failed to verify asset contract on Robinhood Chain and asset is not in static registry",
+      reason:
+        "Failed to verify asset contract on Robinhood Chain and asset is not in static registry",
     };
   }
 }
