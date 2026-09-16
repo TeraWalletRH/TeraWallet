@@ -1,10 +1,10 @@
 import { Router } from "express";
-import { bridgeInput, destinations, relay, USDG, validateQuote } from "../bridge";
+import { bridgeInput, destinations, sourceAssets, relay, validateQuote } from "../bridge";
 import { logger } from "../logging";
 
 const router = Router();
 router.get("/api/bridge/config", (_req, res) => {
-  res.json({ success: true, originChainId: 4663, originCurrency: USDG, destinations });
+  res.json({ success: true, originChainId: 4663, sourceAssets, destinations });
 });
 router.post("/api/bridge/quote", async (req, res) => {
   let input;
@@ -14,7 +14,7 @@ router.post("/api/bridge/quote", async (req, res) => {
     const startedAt = Date.now();
     const raw = await relay("/quote/v2", {
       user: input.ownerAddress, recipient: input.recipient, originChainId: 4663,
-      destinationChainId: input.destinationChainId, originCurrency: USDG,
+      destinationChainId: input.destinationChainId, originCurrency: input.originCurrency,
       destinationCurrency: input.destination.currency, amount: input.amount, tradeType: "EXACT_INPUT",
       slippageTolerance: "50", ttl: 120, usePermit: false, explicitDeposit: true,
       refundTo: input.ownerAddress,
