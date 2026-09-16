@@ -21,7 +21,24 @@ import {
   badge as integrityBadge,
   summary as integritySummary,
 } from "./integrity.js";
-import { decryptVault, encryptVault, unlockVault } from "./vault.js";
+import {
+  decryptVault,
+  encryptVault,
+  unlockVault,
+  newKeyInfo,
+  isKeyInfo,
+  nextEpoch,
+  scopeFor,
+  requestSignature,
+  deriveVaultKey,
+} from "./vault.js";
+import {
+  exportBundle,
+  importBundle,
+  createRecovery,
+  recoverFromShares,
+  passphraseIssue,
+} from "./recovery.js";
 import { bridgeView, bridgeFormInput, checkBridgeQuote, sendBridge } from "./bridge.js";
 import {
   LOCAL_ONLY,
@@ -167,6 +184,9 @@ const state = {
   rpcError: "",
   rpcReads: 0,
   integrity: null,
+  keyInfo: null,
+  vaultKeyEpoch: 1,
+  recovery: null,
   demo: false,
   guide: 0,
   busy: false,
@@ -189,23 +209,53 @@ function vaultStorageKey() {
 function vaultSettingsKey() {
   return `${storageKey()}:retention`;
 }
+function keyInfoStorageKey() {
+  return `${storageKey()}:keyinfo`;
+}
+function recoveryStorageKey() {
+  return `${storageKey()}:recovery`;
+}
+// The key parameters are not secret: an epoch, a salt and whether a passphrase
+// is required. They are stored in the clear because the vault cannot be opened
+// without them, including after a rotation that this tab did not perform.
+function readKeyInfo() {
+  try {
+    const raw = localStorage.getItem(keyInfoStorageKey());
+    const info = raw ? JSON.parse(raw) : null;
+    return isKeyInfo(info) ? info : null;
+  } catch {
+    return null;
+  }
+}
+function writeKeyInfo(info) {
+  localStorage.setItem(keyInfoStorageKey(), JSON.stringify(info));
+}
+function readRecoveryBlob() {
+  try {
+    const raw = localStorage.getItem(recoveryStorageKey());
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+// Everything the vault holds, in one place, so export, recovery and rotation
+// all carry exactly what persist() writes.
+function vaultPayload() {
+  return {
+    records: state.records,
+    bridges: state.bridges,
+    drafts: state.drafts,
+    versions: state.versions,
+    agentSessionToken: state.agentSessionToken,
+    presets: state.presets,
+    rpcEndpoint: state.rpcEndpoint,
+  };
+}
 async function persist() {
   if (!state.owner || !state.vaultKey) return;
   const targetStorageKey = vaultStorageKey();
   try {
-    const vault = await encryptVault(
-      state.vaultKey,
-      {
-        records: state.records,
-        bridges: state.bridges,
-        drafts: state.drafts,
-        versions: state.versions,
-        agentSessionToken: state.agentSessionToken,
-        presets: state.presets,
-        rpcEndpoint: state.rpcEndpoint,
-      },
-      state.vaultRetentionDays,
-    );
+    const vault = await encryptVault(state.vaultKey, vaultPayload(), state.vaultRetentionDays);
     localStorage.setItem(targetStorageKey, JSON.stringify(vault));
   } catch {
     state.notice =
@@ -223,15 +273,33 @@ function loadRecords() {
   state.rpcChecked = null;
   state.rpcError = "";
   state.rpcReads = 0;
+  state.keyInfo = null;
+  state.vaultKeyEpoch = 1;
+  state.recovery = null;
   const stored = Number(localStorage.getItem(vaultSettingsKey()));
   state.vaultRetentionDays = [7, 30, 90, 365].includes(stored) ? stored : 30;
 }
-async function unlockEncryptedStorage() {
+async function unlockEncryptedStorage(passphrase = "") {
   connected();
-  const key = await unlockVault(state.provider, state.owner, chainId);
+  const info = readKeyInfo();
+  const key = await unlockVault(state.provider, state.owner, chainId, info, passphrase);
   const raw = localStorage.getItem(vaultStorageKey());
-  const vault = raw ? await decryptVault(key, JSON.parse(raw)) : null;
+  let vault;
+  try {
+    vault = raw ? await decryptVault(key, JSON.parse(raw)) : null;
+  } catch {
+    // The key derived, but it does not open this vault. With a passphrase set
+    // that is overwhelmingly a wrong passphrase; say so instead of reporting a
+    // decryption failure the owner cannot act on.
+    throw new Error(
+      info?.passphrase
+        ? "That passphrase did not open your vault. Your wallet signature was accepted, so check the passphrase."
+        : "Your encrypted vault could not be opened with this wallet. It may belong to another account.",
+    );
+  }
   state.vaultKey = key;
+  state.keyInfo = info;
+  state.vaultKeyEpoch = info?.epoch || 1;
   state.records = Array.isArray(vault?.records)
     ? vault.records.filter(
         (r) => isHash(r.txHash) && sameAddress(r.owner, state.owner) && r.chainId === chainId,
@@ -254,6 +322,7 @@ async function unlockEncryptedStorage() {
         "The saved balance endpoint is no longer acceptable and was not restored. Balance reads are going through your wallet.";
     }
   }
+  state.recovery = readRecoveryBlob();
   // Remove the previous plaintext record store after the encrypted vault unlocks.
   localStorage.removeItem(storageKey());
 }
@@ -261,6 +330,11 @@ function clearEncryptedStorage() {
   if (!state.owner) return;
   localStorage.removeItem(vaultStorageKey());
   localStorage.removeItem(storageKey());
+  localStorage.removeItem(keyInfoStorageKey());
+  localStorage.removeItem(recoveryStorageKey());
+  state.keyInfo = null;
+  state.vaultKeyEpoch = 1;
+  state.recovery = null;
   state.records = [];
   state.bridges = [];
   state.drafts = [];
@@ -268,6 +342,45 @@ function clearEncryptedStorage() {
   state.rpcEndpoint = "";
   state.rpcChecked = null;
 }
+/**
+ * Retire the current vault key and write the same contents under a new one.
+ * The new key needs its own wallet signature, because the epoch is part of the
+ * signed message. The vault and its parameters are replaced together: if the
+ * signature is declined nothing is touched, and the old key still works.
+ */
+async function rotateVaultKey({ passphrase = "", keepPassphrase = null } = {}) {
+  connected();
+  if (!state.vaultKey) throw new Error("Unlock the vault before rotating its key.");
+  const wantsPassphrase =
+    keepPassphrase === null ? Boolean(state.keyInfo?.passphrase) : keepPassphrase;
+  if (wantsPassphrase) {
+    const issue = passphraseIssue(passphrase);
+    if (issue) throw new Error(issue);
+  }
+  const payload = vaultPayload();
+  const info = newKeyInfo({ epoch: nextEpoch(state.keyInfo), passphrase: wantsPassphrase });
+  const scope = scopeFor(state.owner, chainId);
+  const signature = await requestSignature(state.provider, state.owner, scope, info.epoch);
+  const key = await deriveVaultKey({
+    signature,
+    scope,
+    info,
+    passphrase: wantsPassphrase ? passphrase : "",
+  });
+  const vault = await encryptVault(key, payload, state.vaultRetentionDays);
+  // Written in this order so a failure never leaves parameters that describe a
+  // key no stored vault was encrypted under.
+  localStorage.setItem(vaultStorageKey(), JSON.stringify(vault));
+  writeKeyInfo(info);
+  state.vaultKey = key;
+  state.keyInfo = info;
+  state.vaultKeyEpoch = info.epoch;
+  // A recovery set made from the old key still decrypts to the same contents,
+  // but it is no longer a copy of what the vault holds now.
+  if (state.recovery) state.recovery = { ...state.recovery, stale: true };
+  return info;
+}
+
 async function deleteServerAssistantData() {
   connected();
   const timestamp = Date.now();
@@ -931,6 +1044,206 @@ function codeTransparencyPanel() {
     <div class="share-preview"><pre>curl -s https://${esc(location.host)}/tera/wallet/app.js | openssl dgst -binary -sha256 | openssl base64 -A</pre></div>`;
 }
 
+function vaultKeyPanel() {
+  const info = state.keyInfo;
+  const locked = !state.vaultKey;
+  const recovery = state.recovery;
+  return `<p>The key that opens this browser's vault is derived from a wallet signature. It can be retired and replaced, given a passphrase as a second factor, carried to another device, or split into recovery shares.</p>
+    ${pair("Key epoch", locked ? "Vault locked" : String(state.vaultKeyEpoch))}
+    ${pair("Second factor", info?.passphrase ? "Passphrase required" : "Wallet signature only")}
+    ${info?.createdAt ? pair("Key created", new Date(info.createdAt).toLocaleString()) : ""}
+    ${recovery ? pair("Recovery set", `${recovery.threshold} of ${recovery.shares} shares${recovery.stale ? " · made before the last rotation" : ""}`) : ""}
+    <div class="actions">${button("Rotate key", "vault-rotate", locked ? "disabled" : "")}${button(info?.passphrase ? "Change or remove passphrase" : "Add a passphrase", "vault-passphrase", locked ? "disabled" : "")}</div>
+    <div class="actions">${button("Export for another device", "vault-export", locked ? "disabled" : "")}${button("Import an export", "vault-import", locked ? "disabled" : "")}</div>
+    <div class="actions">${button(recovery ? "Replace recovery shares" : "Create recovery shares", "vault-recovery-create", locked ? "disabled" : "")}${button("Recover from shares", "vault-recovery-use", locked ? "disabled" : "")}</div>
+    <p class="micro">Rotation asks for a new wallet signature, because the epoch is part of what you sign. The old signature stops deriving the key, so a copy of it is no longer enough to open this vault.</p>
+    <p class="micro">A passphrase protects this browser's copy. It is not a second factor for anything Tera holds, it never leaves this device, and it cannot be reset — if you lose it, these contents are gone and nothing here brings them back.</p>
+    <p class="micro"><b>Recovery shares are people.</b> Any ${recovery ? recovery.threshold : "threshold"} holders acting together open the vault without you. Nothing here prevents that, detects it, or tells you it happened. Choose holders on that basis.</p>
+    <p class="micro">None of this recovers your wallet or moves funds. It covers what this browser stored: drafts, presets, version history, bridge tracking and device-side records.</p>`;
+}
+function passphrasePrompt(title, body, onSubmit) {
+  dialog(
+    title,
+    `<form id="vault-pass-form">${body}<div class="field"><label for="vault-pass">Passphrase</label><input id="vault-pass" name="passphrase" type="password" autocomplete="off" required></div><p class="live-form-error" role="alert"></p><button class="btn primary">Continue ↗</button></form>`,
+  );
+  const form = document.getElementById("vault-pass-form");
+  const error = form.querySelector('[role="alert"]');
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    error.textContent = "";
+    try {
+      await onSubmit(new FormData(form).get("passphrase"));
+    } catch (issue) {
+      error.textContent = errorMessage(issue);
+    }
+  };
+}
+function rotateVaultKeyDialog() {
+  if (!state.keyInfo?.passphrase) {
+    dialog(
+      "Rotate the vault key",
+      `<p>Your wallet will ask you to sign for key epoch ${esc(nextEpoch(state.keyInfo))}. The vault is re-encrypted under the new key, and the old signature stops opening it.</p><p class="micro">This does not approve a transaction and sends nothing to Tera.</p><div class="actions">${button("Sign and rotate", "vault-rotate-confirm")}${button("Cancel", "close")}</div>`,
+    );
+    return;
+  }
+  passphrasePrompt(
+    "Rotate the vault key",
+    `<p>Enter the passphrase to keep on the new key, then sign for epoch ${esc(nextEpoch(state.keyInfo))} in your wallet.</p>`,
+    async (passphrase) => {
+      await rotateVaultKey({ passphrase, keepPassphrase: true });
+      closeDialog();
+      state.notice = `Vault key rotated to epoch ${state.vaultKeyEpoch}. The previous signature no longer opens it.`;
+      render();
+    },
+  );
+}
+function passphraseDialog() {
+  if (!state.keyInfo?.passphrase) {
+    passphrasePrompt(
+      "Add a passphrase",
+      `<p>The vault will then need this passphrase as well as your wallet signature. Your wallet will ask you to sign for the new key epoch.</p><p class="micro">There is no reset. Write it down somewhere you will still have it.</p>`,
+      async (passphrase) => {
+        await rotateVaultKey({ passphrase, keepPassphrase: true });
+        closeDialog();
+        state.notice =
+          "A passphrase is now required to open this vault, with your wallet signature.";
+        render();
+      },
+    );
+    return;
+  }
+  dialog(
+    "Passphrase",
+    `<p>This vault currently needs a passphrase as well as your wallet signature.</p><div class="actions">${button("Set a new one", "vault-passphrase-set")}${button("Remove it", "vault-passphrase-remove")}${button("Cancel", "close")}</div><p class="micro">Either way the key is rotated, so your wallet will ask for a signature.</p>`,
+  );
+}
+function exportVaultDialog() {
+  passphrasePrompt(
+    "Export for another device",
+    `<p>The file is your vault contents encrypted under a passphrase you choose here — not your wallet signature, so another browser can open it.</p><p class="micro">Whoever has the file and this passphrase can read its contents. It holds no private key and cannot move funds.</p>`,
+    async (passphrase) => {
+      downloadJson(
+        await exportBundle(vaultPayload(), passphrase),
+        `tera-vault-export-${Date.now()}.json`,
+      );
+      closeDialog();
+      state.notice = "Vault export downloaded. It is only as safe as the passphrase you chose.";
+      render();
+    },
+  );
+}
+// Imported and recovered contents pass the same filters as an unlock, so a file
+// cannot introduce a record for another account or an endpoint this wallet
+// would refuse.
+function applyVaultPayload(payload) {
+  if (!payload || typeof payload !== "object")
+    throw new Error("That file holds no vault contents.");
+  if (Array.isArray(payload.records))
+    state.records = payload.records.filter(
+      (r) => isHash(r.txHash) && sameAddress(r.owner, state.owner) && r.chainId === chainId,
+    );
+  if (Array.isArray(payload.bridges))
+    state.bridges = payload.bridges.filter(
+      (r) => sameAddress(r.ownerAddress, state.owner) && isHash(r.requestId),
+    );
+  if (Array.isArray(payload.drafts)) state.drafts = payload.drafts;
+  if (payload.versions) state.versions = pruneVersions(payload.versions, state.vaultRetentionDays);
+  if (Array.isArray(payload.presets)) state.presets = payload.presets.map(createPreset);
+  if (typeof payload.agentSessionToken === "string")
+    state.agentSessionToken = payload.agentSessionToken;
+  if (typeof payload.rpcEndpoint === "string" && payload.rpcEndpoint) {
+    try {
+      state.rpcEndpoint = normaliseEndpoint(payload.rpcEndpoint);
+    } catch {
+      state.notice = "The balance endpoint in that file was not acceptable and was not restored.";
+    }
+  }
+}
+function importVaultDialog() {
+  dialog(
+    "Import an export",
+    `<form id="vault-import-form"><p>Choose an export file and the passphrase it was made with. Its contents are merged into this device's vault and re-encrypted under this device's key.</p><div class="field"><label for="vault-file">Export file</label><input id="vault-file" name="file" type="file" accept="application/json,.json" required></div><div class="field"><label for="vault-import-pass">Passphrase</label><input id="vault-import-pass" name="passphrase" type="password" autocomplete="off" required></div><p class="live-form-error" role="alert"></p><button class="btn primary">Import ↗</button></form>`,
+  );
+  const form = document.getElementById("vault-import-form");
+  const error = form.querySelector('[role="alert"]');
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    error.textContent = "";
+    try {
+      const data = new FormData(form);
+      const file = data.get("file");
+      if (!file || !file.size) throw new Error("Choose the export file first.");
+      applyVaultPayload(await importBundle(JSON.parse(await file.text()), data.get("passphrase")));
+      await persist();
+      closeDialog();
+      state.notice = "Vault export imported and re-encrypted under this device's key.";
+      render();
+    } catch (issue) {
+      error.textContent = errorMessage(issue);
+    }
+  };
+}
+const recoveryState = { shares: [], blob: null };
+function createRecoveryDialog() {
+  dialog(
+    "Create recovery shares",
+    `<form id="vault-recovery-form"><p>Your vault contents are encrypted under a fresh random key, and that key is split. Any threshold of the shares rebuilds it.</p><div class="field"><label for="recovery-shares">Number of shares</label><select id="recovery-shares" name="shares">${[3, 4, 5, 6, 7].map((n) => `<option ${n === 3 ? "selected" : ""}>${n}</option>`).join("")}</select></div><div class="field"><label for="recovery-threshold">Shares needed to recover</label><select id="recovery-threshold" name="threshold">${[2, 3, 4, 5].map((n) => `<option ${n === 2 ? "selected" : ""}>${n}</option>`).join("")}</select></div><p class="micro">Any group of that size opens the vault without you, and you will not know. Give the shares to people who would not act together against you.</p><p class="live-form-error" role="alert"></p><button class="btn primary">Create shares ↗</button></form>`,
+  );
+  const form = document.getElementById("vault-recovery-form");
+  const error = form.querySelector('[role="alert"]');
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    error.textContent = "";
+    try {
+      const data = new FormData(form);
+      const shares = Number(data.get("shares"));
+      const threshold = Number(data.get("threshold"));
+      if (threshold > shares)
+        throw new Error("The threshold cannot be larger than the number of shares.");
+      const result = await createRecovery(vaultPayload(), { shares, threshold });
+      localStorage.setItem(recoveryStorageKey(), JSON.stringify(result.blob));
+      state.recovery = result.blob;
+      recoveryState.shares = result.shares;
+      recoveryState.blob = result.blob;
+      dialog(
+        "Your recovery shares",
+        `<p>These are shown once. Give each to a different holder, and keep the recovery file somewhere you will still have it.</p><div class="share-preview"><pre>${esc(result.shares.join("\n\n"))}</pre></div><p class="micro">Any ${esc(threshold)} of these ${esc(shares)} open the vault. Fewer reveal nothing about it.</p><div class="actions">${button("Copy shares", "recovery-copy")}${button("Download recovery file", "recovery-download")}${button("Done", "close")}</div>`,
+      );
+    } catch (issue) {
+      error.textContent = errorMessage(issue);
+    }
+  };
+}
+function useRecoveryDialog() {
+  const blob = state.recovery || readRecoveryBlob();
+  dialog(
+    "Recover from shares",
+    `<form id="vault-recover-form"><p>Paste the shares, one per line. ${blob ? `This device holds a recovery file needing ${esc(blob.threshold)} of ${esc(blob.shares)}.` : "Choose the recovery file as well."}</p>${blob ? "" : '<div class="field"><label for="recover-file">Recovery file</label><input id="recover-file" name="file" type="file" accept="application/json,.json" required></div>'}<div class="field"><label for="recover-shares">Shares</label><textarea id="recover-shares" name="shares" rows="5" placeholder="TERA-R1.2.3.…" required></textarea></div><p class="live-form-error" role="alert"></p><button class="btn primary">Recover ↗</button></form>`,
+  );
+  const form = document.getElementById("vault-recover-form");
+  const error = form.querySelector('[role="alert"]');
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    error.textContent = "";
+    try {
+      const data = new FormData(form);
+      const file = data.get("file");
+      const source = blob || JSON.parse(await file.text());
+      const shares = String(data.get("shares"))
+        .split(/[\r\n]+/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+      applyVaultPayload(await recoverFromShares(source, shares));
+      await persist();
+      closeDialog();
+      state.notice = "Vault contents recovered and re-encrypted under this device's key.";
+      render();
+    } catch (issue) {
+      error.textContent = errorMessage(issue);
+    }
+  };
+}
+
 function balanceReadsPanel() {
   const own = Boolean(state.rpcEndpoint);
   const described = own ? describeEndpoint(state.rpcEndpoint) : null;
@@ -974,7 +1287,7 @@ async function saveBalanceEndpoint() {
 }
 
 function settings() {
-  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
+  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
 async function loadAssets() {
@@ -1883,9 +2196,68 @@ document.addEventListener("click", async (event) => {
       render();
     }
     if (action === "vault-unlock") {
-      await unlockEncryptedStorage();
-      state.notice = "Encrypted local storage unlocked.";
+      const stored = readKeyInfo();
+      if (stored?.passphrase) {
+        passphrasePrompt(
+          "Unlock the vault",
+          "<p>This vault needs its passphrase as well as your wallet signature.</p>",
+          async (passphrase) => {
+            await unlockEncryptedStorage(passphrase);
+            closeDialog();
+            state.notice = "Encrypted local storage unlocked.";
+            render();
+          },
+        );
+      } else {
+        await unlockEncryptedStorage();
+        state.notice = "Encrypted local storage unlocked.";
+        render();
+      }
+    }
+    if (action === "vault-rotate") rotateVaultKeyDialog();
+    if (action === "vault-rotate-confirm") {
+      closeDialog();
+      await rotateVaultKey();
+      state.notice = `Vault key rotated to epoch ${state.vaultKeyEpoch}. The previous signature no longer opens it.`;
       render();
+    }
+    if (action === "vault-passphrase") passphraseDialog();
+    if (action === "vault-passphrase-set")
+      passphrasePrompt(
+        "Set a new passphrase",
+        "<p>The vault key is rotated and the new passphrase takes effect with it. Your wallet will ask you to sign for the new epoch.</p>",
+        async (passphrase) => {
+          await rotateVaultKey({ passphrase, keepPassphrase: true });
+          closeDialog();
+          state.notice = "The vault passphrase was replaced and the key rotated.";
+          render();
+        },
+      );
+    if (action === "vault-passphrase-remove") {
+      if (
+        !window.confirm(
+          "Remove the passphrase? The vault will then open with your wallet signature alone.",
+        )
+      )
+        return;
+      closeDialog();
+      await rotateVaultKey({ keepPassphrase: false });
+      state.notice =
+        "The passphrase was removed. This vault now opens with your wallet signature alone.";
+      render();
+    }
+    if (action === "vault-export") exportVaultDialog();
+    if (action === "vault-import") importVaultDialog();
+    if (action === "vault-recovery-create") createRecoveryDialog();
+    if (action === "vault-recovery-use") useRecoveryDialog();
+    if (action === "recovery-copy") {
+      if (!recoveryState.shares.length) throw new Error("There are no shares to copy.");
+      await navigator.clipboard.writeText(recoveryState.shares.join("\n"));
+      state.notice = "Recovery shares copied. Give each one to a different holder.";
+    }
+    if (action === "recovery-download") {
+      if (!recoveryState.blob) throw new Error("There is no recovery file to download.");
+      downloadJson(recoveryState.blob, `tera-vault-recovery-${Date.now()}.json`);
     }
     if (action === "vault-clear") {
       clearEncryptedStorage();
