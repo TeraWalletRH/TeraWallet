@@ -648,15 +648,17 @@ function Wallet() {
             label={t("Gas balance", "手续费余额")}
             value={balance ? `${formatUnits(BigInt(balance.ETH), 18)} ETH` : "—"}
           />
-          <View style={s.wrap}>
+          <View style={s.quickActions}>
             {[
               ["Send", "发送", "send"],
               ["Receive", "收款", "receive"],
               ["Swap", "兑换", "swap"],
               ["Bridge", "跨链", "bridge"],
             ].map(([en, zh, p]) => (
-              <Button
+              <Pressable
                 key={p}
+                accessibilityRole="button"
+                style={({ pressed }) => [s.quickAction, { opacity: pressed ? 0.65 : 1 }]}
                 onPress={() => {
                   setAssetSymbol(p === "swap" ? "AAPL" : "USDG");
                   setAmount("");
@@ -664,8 +666,8 @@ function Wallet() {
                   setPage(p);
                 }}
               >
-                {t(en, zh)} ↗
-              </Button>
+                <Text style={s.buttonText}>{t(en, zh)}</Text>
+              </Pressable>
             ))}
           </View>
           <View style={s.panel}>
