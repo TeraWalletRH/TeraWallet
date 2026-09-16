@@ -39,6 +39,7 @@ import {
   progressSummary,
   boundaryIndex,
 } from "./boundary.js";
+import { describeTransaction } from "./preview.js";
 
 const config = JSON.parse(document.getElementById("tera-config")?.textContent || "{}");
 const chainId = Number(config.chainId || 4663);
@@ -342,6 +343,42 @@ function registry() {
 function chat() {
   return `<div class="section-label">Agent assistant ${chip("Owner supervised")}</div><div class="note">Ask a question or request an action. Only the message you submit and the wallet address needed for a proposal are sent.</div><div class="chat-feed" aria-live="polite">${state.chat.length ? state.chat.map((m) => `<div class="chat-bubble ${m.role === "user" ? "user" : ""}"><strong class="chat-role">${m.role === "user" ? "You" : "Tera assistant"}</strong>${m.role === "assistant" ? `<div class="assistant-markdown">${renderAssistantMarkdown(m.text)}</div>` : esc(m.text)}</div>`).join("") : '<p class="micro">Explore an asset or describe a proposal you want to review.</p>'}</div><form id="chat-form"><div class="field"><label for="chat-mode">Message type</label><select id="chat-mode" name="mode"><option value="chat">Ask a question</option><option value="propose">Prepare a proposal</option></select></div><div class="composer"><textarea name="message" aria-label="Message the agent" placeholder="Ask about an asset or describe an action…" required maxlength="1200"></textarea><button aria-label="Send message" ${state.busy ? "disabled" : ""}>↑</button></div><p class="micro">Messages are processed by Tera’s assistant service. Proposals always require your review.</p></form>`;
 }
+// What the wallet will actually be asked to sign, in words and in raw fields.
+function previewBlock(proposal) {
+  const tx = proposal.preparedTransaction;
+  const intent = proposal.intent || tx?.intent;
+  if (!tx || !intent) return "";
+  const preview = describeTransaction({
+    tx,
+    intent,
+    asset: assetFor(intent.assetAddress),
+    chainId,
+    networkName: config.networkName || "Robinhood Chain",
+  });
+  if (!preview) return "";
+  const attention = preview.flags.filter((entry) => entry.level === "attention").length;
+  return `<details class="preview">
+    <summary><span>What you are signing</span><b>${attention ? `${attention} to check` : "Decoded"}</b></summary>
+    <p class="preview-sentence">${esc(preview.sentence)}</p>
+    ${
+      preview.flags.length
+        ? `<ul class="preview-flags">${preview.flags
+            .map(
+              (entry) =>
+                `<li class="${entry.level}"><b>${entry.level === "attention" ? "Check" : "Note"}</b><span>${esc(entry.text)}</span></li>`,
+            )
+            .join("")}</ul>`
+        : ""
+    }
+    <div class="preview-raw"><div class="section-label">Raw transaction</div>${preview.rows
+      .map(
+        (row) =>
+          `<div class="pair preview-row"><span>${esc(row.label)}</span><b>${esc(row.value)}</b></div>`,
+      )
+      .join("")}</div>
+    <p class="micro">Decoded in this page from the calldata itself. The sentence above never says more than the payload proves.</p>
+  </details>`;
+}
 // The approval boundary: every stage that runs when this action is approved,
 // with the single line where authority stops being Tera's and becomes yours.
 function boundaryBlock(proposal, index) {
@@ -474,6 +511,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
         </div></details></li>`;
     }).join("")}</ul>
     ${localBlock(p)}
+    ${previewBlock(p)}
     ${historyBlock(p)}
     ${boundaryBlock(p, index)}
     ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", intent.recipient) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
