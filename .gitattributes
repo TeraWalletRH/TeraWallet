@@ -1,0 +1,8 @@
+# The wallet modules are published with SHA-256 hashes in
+# public/tera/wallet/manifest.json, and the page checks itself against them.
+# A checkout that rewrites their line endings changes their bytes and so their
+# hashes, which would report a healthy build as modified. Pin them to LF so the
+# published hashes are reproducible from a checkout on any platform.
+public/tera/wallet/*.js text eol=lf
+public/tera/wallet/*.css text eol=lf
+public/tera/wallet/manifest.json text eol=lf
