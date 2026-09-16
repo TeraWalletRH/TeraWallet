@@ -63,14 +63,14 @@ const serviceHost = (() => {
 const request = createApi(apiUrl);
 // Every service request is recorded for the privacy status centre before it is
 // sent. Field names only: no address, amount or message text enters the log.
-const api = async (path, body) => {
+const api = async (path, body, options) => {
   const entry = describeRequest(path, body);
   state.privacyLog = appendLog(
     state.privacyLog,
     state.demo ? { ...entry, simulated: true } : entry,
   );
   if (route() === "privacy") queueMicrotask(render);
-  if (!state.demo) return request(path, body);
+  if (!state.demo) return request(path, body, options);
   // The guided demo answers locally under the same success contract as the
   // service, so every code path below behaves exactly as it does in production.
   const payload = demoApi(path, body, chainId);
@@ -214,6 +214,21 @@ function clearEncryptedStorage() {
   state.bridges = [];
   state.drafts = [];
   state.agentSessionToken = "";
+}
+async function deleteServerAssistantData() {
+  connected();
+  const timestamp = Date.now();
+  const message = `Tera Wallet data deletion\nWallet: ${state.owner.toLowerCase()}\nTimestamp: ${timestamp}`;
+  const signature = await state.provider.request({ method: "personal_sign", params: [message, state.owner] });
+  const result = await api(`/api/account/${state.owner}/assistant-data`, { signature, timestamp }, { method: "DELETE" });
+  state.notice = `Stored assistant proposal data deleted (${result.redactedIntents} redacted). Confirmed receipts remain.`;
+}
+function clearLocalAssistantData() {
+  state.chat = [];
+  state.drafts = [];
+  state.versions = {};
+  state.presets = [];
+  state.privacyLog = [];
 }
 function showError(error) {
   state.notice = errorMessage(error);
@@ -751,7 +766,7 @@ function privacyCentre() {
     <p class="micro">Retention is described by the service and cannot be verified from this page. Deleting service-side records is not available yet; clearing the log above removes only this local copy.</p>`;
 }
 function settings() {
-  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
+  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
 async function loadAssets() {
@@ -1528,6 +1543,18 @@ document.addEventListener("click", async (event) => {
     if (action === "vault-clear") {
       clearEncryptedStorage();
       state.notice = "Encrypted drafts and device-side records were cleared.";
+      render();
+    }
+    if (action === "assistant-local-clear") {
+      if (!window.confirm("Delete assistant messages, drafts, proposal versions, presets, and local request metadata from this device?")) return;
+      clearLocalAssistantData();
+      await persist();
+      state.notice = "Local assistant data was deleted from this device.";
+      render();
+    }
+    if (action === "assistant-server-clear") {
+      if (!window.confirm("Sign a wallet request to delete stored unconfirmed assistant proposal data? Confirmed receipts remain.")) return;
+      await deleteServerAssistantData();
       render();
     }
     if (action === "agent-token-connect") connectAgentSessionToken();

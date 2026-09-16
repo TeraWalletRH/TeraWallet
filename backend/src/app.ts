@@ -8,6 +8,7 @@ import accountRouter from "./routes/account";
 import { requestIdMiddleware } from "./logging";
 import policyRouter from "./routes/policy";
 import bridgeRouter from "./routes/bridge";
+import retentionRouter from "./routes/retention";
 
 const app = express();
 
@@ -29,6 +30,7 @@ app.use(express.json());
 app.use(healthRouter);
 app.use(policyRouter);
 app.use(bridgeRouter);
+app.use(retentionRouter);
 app.use(assetsRouter);
 app.use(intentRouter);
 app.use(agentRouter);

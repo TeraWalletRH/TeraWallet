@@ -209,6 +209,19 @@ export const REQUESTS = [
       "The prompt text reaches the model provider. The address and optional session token stay with Tera for scope checks and the resulting intent record.",
     withheld: ["Balances", "Local transaction records", "Private keys", "Session token from the model provider"],
   },
+  {
+    id: "retention-delete",
+    method: "DELETE",
+    path: "/api/account/{address}/assistant-data",
+    match: (path) => /^\/api\/account\/0x[\da-f]{40}\/assistant-data$/i.test(path),
+    label: "Assistant data deletion",
+    purpose: "Delete stored unconfirmed assistant proposal data after wallet authorization.",
+    fields: ["ownerAddress (in the request path)", "wallet signature", "timestamp"],
+    identifies: true,
+    processors: ["Tera service"],
+    retention: "Stored assistant proposal fields are redacted; confirmed transaction receipts remain for audit history.",
+    withheld: ["Private keys", "Seed phrase"],
+  },
 ];
 
 const UNKNOWN = {
