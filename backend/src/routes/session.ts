@@ -34,6 +34,24 @@ type ServiceScope = {
   rotatedFrom?: string;
 };
 
+export class ServiceSessionAuthorizationError extends Error {
+  constructor(
+    public readonly status: 401 | 403,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ServiceSessionAuthorizationError";
+  }
+}
+
+export type ServiceSessionAuthorization = {
+  accountAddress: string;
+  sessionKeyAddress: string;
+  allowedActions: ActionType[];
+  assetAddresses: string[];
+  expiresAt: string;
+};
+
 const asAddress = (value: unknown) =>
   typeof value === "string" && addressPattern.test(value) ? value.toLowerCase() : null;
 
@@ -127,6 +145,53 @@ async function revokeServiceSession(accountAddress: string, sessionKeyAddress: s
   );
   if (session) session.isRevoked = true;
   return Boolean(session);
+}
+
+export async function authorizeServiceSession(
+  token: string,
+  actionType: ActionType,
+  assetAddress: string,
+): Promise<ServiceSessionAuthorization> {
+  const normalizedAsset = asAddress(assetAddress);
+  if (!token || !SERVICE_ACTIONS.includes(actionType) || !normalizedAsset)
+    throw new ServiceSessionAuthorizationError(
+      401,
+      "Session token is invalid, expired, or revoked.",
+    );
+
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  let session: Record<string, unknown> | undefined;
+  if (pool) {
+    const result = await pool.query(
+      `SELECT id, account_address, session_key_address, scope, is_revoked, expires_at, created_at
+       FROM session_keys
+       WHERE scope ->> 'tokenHash' = $1
+       LIMIT 1`,
+      [tokenHash],
+    );
+    session = result.rows[0];
+  } else {
+    session = memorySessions.find((candidate) => candidate.scope.tokenHash === tokenHash);
+  }
+  const scope = session?.scope as ServiceScope | undefined;
+  const expiresAt = String(session?.expires_at ?? session?.expiresAt ?? "");
+  if (!session || !scope || scope.kind !== "service" || session.is_revoked || session.isRevoked || Date.parse(expiresAt) <= Date.now())
+    throw new ServiceSessionAuthorizationError(
+      401,
+      "Session token is invalid, expired, or revoked.",
+    );
+  if (!scope.allowedActions.includes(actionType) || !scope.assetAddresses.includes(normalizedAsset))
+    throw new ServiceSessionAuthorizationError(
+      403,
+      "Session token is outside its permitted action or asset scope.",
+    );
+  return {
+    accountAddress: String(session.account_address ?? session.accountAddress),
+    sessionKeyAddress: String(session.session_key_address ?? session.sessionKeyAddress),
+    allowedActions: scope.allowedActions,
+    assetAddresses: scope.assetAddresses,
+    expiresAt,
+  };
 }
 
 /**
@@ -366,46 +431,21 @@ router.post("/api/session/authorize", async (req: Request, res: Response) => {
   try {
     const token = typeof req.body.token === "string" ? req.body.token : "";
     const actionType = req.body.actionType as ActionType;
-    const assetAddress = asAddress(req.body.assetAddress);
-    if (!token || !SERVICE_ACTIONS.includes(actionType) || !assetAddress) {
+    const assetAddress = typeof req.body.assetAddress === "string" ? req.body.assetAddress : "";
+    if (!token || !SERVICE_ACTIONS.includes(actionType) || !asAddress(assetAddress)) {
       res.status(400).json({ success: false, error: "token, supported actionType, and assetAddress are required." });
       return;
     }
-    const tokenHash = createHash("sha256").update(token).digest("hex");
-    let session: Record<string, unknown> | undefined;
-    if (pool) {
-      const result = await pool.query(
-        `SELECT id, account_address, session_key_address, scope, is_revoked, expires_at, created_at
-         FROM session_keys
-         WHERE scope ->> 'tokenHash' = $1
-         LIMIT 1`,
-        [tokenHash],
-      );
-      session = result.rows[0];
-    } else {
-      session = memorySessions.find((candidate) => candidate.scope.tokenHash === tokenHash);
-    }
-    const scope = session?.scope as ServiceScope | undefined;
-    const expiresAt = String(session?.expires_at ?? session?.expiresAt ?? "");
-    if (!session || !scope || scope.kind !== "service" || session.is_revoked || session.isRevoked || Date.parse(expiresAt) <= Date.now()) {
-      res.status(401).json({ success: false, error: "Session token is invalid, expired, or revoked." });
-      return;
-    }
-    if (!scope.allowedActions.includes(actionType) || !scope.assetAddresses.includes(assetAddress)) {
-      res.status(403).json({ success: false, error: "Session token is outside its permitted action or asset scope." });
-      return;
-    }
+    const authorization = await authorizeServiceSession(token, actionType, assetAddress);
     res.status(200).json({
       success: true,
-      authorization: {
-        accountAddress: session.account_address ?? session.accountAddress,
-        sessionKeyAddress: session.session_key_address ?? session.sessionKeyAddress,
-        allowedActions: scope.allowedActions,
-        assetAddresses: scope.assetAddresses,
-        expiresAt,
-      },
+      authorization,
     });
   } catch (error) {
+    if (error instanceof ServiceSessionAuthorizationError) {
+      res.status(error.status).json({ success: false, error: error.message });
+      return;
+    }
     logger.error(req, "session.authorize_failed", error);
     res.status(500).json({ success: false, error: "Failed to authorize session token." });
   }

@@ -26,6 +26,11 @@ export const LOCAL_ONLY = [
       "Each earlier version of a proposal — amount, recipient, asset, check results and expiry — kept in the encrypted local vault so you can see what changed. No version is sent to the service.",
   },
   {
+    label: "Connected session token",
+    detail:
+      "Kept only in the encrypted local vault after you connect it. It is sent to Tera only when you prepare an assistant proposal and is never sent to the model provider.",
+  },
+  {
     label: "Balance visibility and filters",
     detail: "Interface state that stays in the page and is never transmitted.",
   },
@@ -180,12 +185,12 @@ export const REQUESTS = [
     match: (path) => path === "/api/agent/propose",
     label: "Assistant proposal",
     purpose: "Draft a typed proposal from your description and run the checks.",
-    fields: ["prompt", "ownerAddress", "accountAddress"],
+    fields: ["prompt", "ownerAddress", "sessionToken"],
     identifies: true,
     processors: ["Tera service", "Assistant model provider"],
     retention:
-      "The prompt text reaches the model provider. The address stays with Tera for the checks and the resulting intent record.",
-    withheld: ["Balances", "Local transaction records", "Private keys"],
+      "The prompt text reaches the model provider. The address and optional session token stay with Tera for scope checks and the resulting intent record.",
+    withheld: ["Balances", "Local transaction records", "Private keys", "Session token from the model provider"],
   },
 ];
 

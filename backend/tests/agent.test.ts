@@ -41,7 +41,26 @@ describe("AI Agent Proposal Layer", () => {
     });
 
     expect(res.status).toBe(400);
-    expect(res.body.error).toBe("Proposal payload only accepts prompt and ownerAddress");
+    expect(res.body.error).toBe("Proposal payload only accepts prompt, ownerAddress, and an optional sessionToken");
     expect(res.body.unsupportedFields).toEqual(["portfolio"]);
   });
+
+  it("enforces a connected session token before preparing an agent proposal", async () => {
+    const issued = await request(app).post("/api/session/issue").send({
+      accountAddress: sampleOwner,
+      allowedActions: ["TRANSFER"],
+      assetAddresses: ["0x1111111111111111111111111111111111111111"],
+      ttlSeconds: 900,
+    });
+    expect(issued.status).toBe(201);
+
+    const res = await request(app).post("/api/agent/propose").send({
+      prompt: "Buy $10 of SpaceX",
+      ownerAddress: sampleOwner,
+      sessionToken: issued.body.token,
+    });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toBe("Session token is outside its permitted action or asset scope.");
+  }, 15000);
 });

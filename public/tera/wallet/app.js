@@ -117,6 +117,7 @@ const state = {
   approval: null,
   policyError: "",
   vaultKey: null,
+  agentSessionToken: "",
   vaultRetentionDays: 30,
   demo: false,
   guide: 0,
@@ -145,7 +146,12 @@ async function persist() {
   try {
     const vault = await encryptVault(
       state.vaultKey,
-      { records: state.records, drafts: state.drafts, versions: state.versions },
+      {
+        records: state.records,
+        drafts: state.drafts,
+        versions: state.versions,
+        agentSessionToken: state.agentSessionToken,
+      },
       state.vaultRetentionDays,
     );
     localStorage.setItem(vaultStorageKey(), JSON.stringify(vault));
@@ -175,6 +181,7 @@ async function unlockEncryptedStorage() {
   state.drafts = Array.isArray(vault?.drafts) ? vault.drafts : [];
   // Version history follows the same retention window as the rest of the vault.
   state.versions = pruneVersions(vault?.versions, state.vaultRetentionDays);
+  state.agentSessionToken = typeof vault?.agentSessionToken === "string" ? vault.agentSessionToken : "";
   // Remove the previous plaintext record store after the encrypted vault unlocks.
   localStorage.removeItem(storageKey());
 }
@@ -184,6 +191,7 @@ function clearEncryptedStorage() {
   localStorage.removeItem(storageKey());
   state.records = [];
   state.drafts = [];
+  state.agentSessionToken = "";
 }
 function showError(error) {
   state.notice = errorMessage(error);
@@ -341,7 +349,31 @@ function registry() {
   return `<form id="asset-filter" class="toolbar"><input class="search" name="query" aria-label="Search assets" placeholder="Search assets or symbols…" value="${esc(state.query)}"><select name="category" aria-label="Asset category">${["all", ...new Set(state.assets.map((a) => a.category))].map((c) => `<option ${state.category === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select><button class="btn">Search</button>${chip(`${state.assets.length} registry entries`)}</form><div class="table-scroll"><table><thead><tr><th>Asset</th><th>Type</th><th>Registry status</th><th>Contract</th><th>Details</th></tr></thead><tbody>${filtered.map((a) => `<tr><td><b>${esc(a.symbol)}</b><small>${esc(a.name)}</small></td><td>${esc(a.category)}</td><td>${chip(a.status, a.status !== "ACTIVE")}</td><td>${isAddress(a.address) ? esc(short(a.address)) : chip("Invalid address", true)}</td><td>${button("Inspect ↗", "asset", `data-symbol="${esc(a.symbol)}"`)}</td></tr>`).join("")}</tbody></table>${filtered.length ? "" : empty("No assets match your search.")}</div><p class="micro">Registry information is supplied by Tera. A registry entry does not establish transfer eligibility.</p>`;
 }
 function chat() {
-  return `<div class="section-label">Agent assistant ${chip("Owner supervised")}</div><div class="note">Ask a question or request an action. Only the message you submit and the wallet address needed for a proposal are sent.</div><div class="chat-feed" aria-live="polite">${state.chat.length ? state.chat.map((m) => `<div class="chat-bubble ${m.role === "user" ? "user" : ""}"><strong class="chat-role">${m.role === "user" ? "You" : "Tera assistant"}</strong>${m.role === "assistant" ? `<div class="assistant-markdown">${renderAssistantMarkdown(m.text)}</div>` : esc(m.text)}</div>`).join("") : '<p class="micro">Explore an asset or describe a proposal you want to review.</p>'}</div><form id="chat-form"><div class="field"><label for="chat-mode">Message type</label><select id="chat-mode" name="mode"><option value="chat">Ask a question</option><option value="propose">Prepare a proposal</option></select></div><div class="composer"><textarea name="message" aria-label="Message the agent" placeholder="Ask about an asset or describe an action…" required maxlength="1200"></textarea><button aria-label="Send message" ${state.busy ? "disabled" : ""}>↑</button></div><p class="micro">Messages are processed by Tera’s assistant service. Proposals always require your review.</p></form>`;
+  return `<div class="section-label">Agent assistant ${chip("Owner supervised")}</div><div class="note">Ask a question or request an action. Only the message you submit and the wallet address needed for a proposal are sent.</div><div class="toolbar">${state.agentSessionToken ? chip("Scoped token connected") + button("Disconnect token", "agent-token-disconnect") : button("Connect session token", "agent-token-connect", !state.owner ? "disabled" : "")}</div><div class="chat-feed" aria-live="polite">${state.chat.length ? state.chat.map((m) => `<div class="chat-bubble ${m.role === "user" ? "user" : ""}"><strong class="chat-role">${m.role === "user" ? "You" : "Tera assistant"}</strong>${m.role === "assistant" ? `<div class="assistant-markdown">${renderAssistantMarkdown(m.text)}</div>` : esc(m.text)}</div>`).join("") : '<p class="micro">Explore an asset or describe a proposal you want to review.</p>'}</div><form id="chat-form"><div class="field"><label for="chat-mode">Message type</label><select id="chat-mode" name="mode"><option value="chat">Ask a question</option><option value="propose">Prepare a proposal</option></select></div><div class="composer"><textarea name="message" aria-label="Message the agent" placeholder="Ask about an asset or describe an action…" required maxlength="1200"></textarea><button aria-label="Send message" ${state.busy ? "disabled" : ""}>↑</button></div><p class="micro">${state.agentSessionToken ? "This token is checked before Tera prepares a proposal. Wallet approval is still required." : "Messages are processed by Tera’s assistant service. Proposals always require your review."}</p></form>`;
+}
+
+function connectAgentSessionToken() {
+  connected();
+  if (!state.vaultKey)
+    throw new Error("Unlock encrypted local storage in Settings before connecting a session token.");
+  dialog(
+    "Connect a scoped session token",
+    `<form id="agent-token-form"><div class="field"><label for="agent-token">Session token</label><input id="agent-token" name="token" autocomplete="off" required></div><p class="micro">The token is kept only in Tera's encrypted local vault and sent to Tera when you prepare an assistant proposal. It is never sent to the model provider.</p><p class="live-form-error" role="alert"></p><button class="btn primary">Connect token ↗</button></form>`,
+  );
+  const form = document.getElementById("agent-token-form");
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const token = new FormData(form).get("token")?.trim();
+    if (!/^[A-Za-z0-9_-]{32,}$/.test(token)) {
+      form.querySelector('[role="alert"]').textContent = "Enter a valid session token.";
+      return;
+    }
+    state.agentSessionToken = token;
+    await persist();
+    closeDialog();
+    state.notice = "Scoped session token connected to assistant proposals.";
+    render();
+  };
 }
 // What the wallet will actually be asked to sign, in words and in raw fields.
 function previewBlock(proposal) {
@@ -742,6 +774,7 @@ function clearAccount() {
   state.errors = {};
   state.loading = false;
   state.vaultKey = null;
+  state.agentSessionToken = "";
   closeDialog();
 }
 function clearConnection() {
@@ -950,7 +983,13 @@ function bindForms() {
         try {
           result = await api(
             mode === "propose" ? "/api/agent/propose" : "/api/agent/chat",
-            mode === "propose" ? { prompt: message, ownerAddress: state.owner } : { message },
+            mode === "propose"
+              ? {
+                  prompt: message,
+                  ownerAddress: state.owner,
+                  ...(state.agentSessionToken ? { sessionToken: state.agentSessionToken } : {}),
+                }
+              : { message },
           );
         } catch (error) {
           if (!error.payload?.gates) throw error;
@@ -1233,6 +1272,13 @@ document.addEventListener("click", async (event) => {
     if (action === "vault-clear") {
       clearEncryptedStorage();
       state.notice = "Encrypted drafts and device-side records were cleared.";
+      render();
+    }
+    if (action === "agent-token-connect") connectAgentSessionToken();
+    if (action === "agent-token-disconnect") {
+      state.agentSessionToken = "";
+      await persist();
+      state.notice = "Scoped session token disconnected from assistant proposals.";
       render();
     }
     if (action === "session-create") createServiceSession();

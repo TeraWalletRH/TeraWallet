@@ -5,6 +5,7 @@ import { runGatePipeline } from "../pipeline/gates";
 import { buildPreparedTransaction, UnsupportedActionError } from "../pipeline/builder";
 import { type UserIntent } from "../pipeline/types";
 import { logger } from "../logging";
+import { authorizeServiceSession, ServiceSessionAuthorizationError } from "./session";
 
 const router = Router();
 
@@ -54,17 +55,21 @@ Do not include markdown formatting or backticks around the JSON.
 router.post("/api/agent/propose", async (req: Request, res: Response) => {
   try {
     const body = req.body && typeof req.body === "object" ? req.body as Record<string, unknown> : {};
-    const unsupportedFields = Object.keys(body).filter((field) => !["prompt", "ownerAddress"].includes(field));
+    const unsupportedFields = Object.keys(body).filter((field) => !["prompt", "ownerAddress", "sessionToken"].includes(field));
     if (unsupportedFields.length > 0) {
       res.status(400).json({
         success: false,
-        error: "Proposal payload only accepts prompt and ownerAddress",
+        error: "Proposal payload only accepts prompt, ownerAddress, and an optional sessionToken",
         unsupportedFields,
       });
       return;
     }
 
-    const { prompt, ownerAddress } = body as { prompt?: string; ownerAddress?: string };
+    const { prompt, ownerAddress, sessionToken } = body as {
+      prompt?: string;
+      ownerAddress?: string;
+      sessionToken?: string;
+    };
 
     if (!prompt || !ownerAddress) {
       res.status(400).json({
@@ -179,6 +184,24 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
       maxSpendUsdCents: intentDraft.maxSpendUsdCents ?? 10000,
     };
 
+    // A connected agent token can prepare only the action and asset selected
+    // by its owner. This is an API capability check, never wallet authority.
+    let sessionAuthorization;
+    if (sessionToken) {
+      sessionAuthorization = await authorizeServiceSession(
+        sessionToken,
+        fullIntent.actionType,
+        fullIntent.assetAddress,
+      );
+      if (sessionAuthorization.accountAddress.toLowerCase() !== walletAddress.toLowerCase()) {
+        res.status(403).json({
+          success: false,
+          error: "Session token belongs to a different wallet.",
+        });
+        return;
+      }
+    }
+
     // 2. Evaluate all 5 deterministic gates
     const gates = await runGatePipeline(fullIntent);
     const hasFailedGate = gates.some((g) => !g.passed);
@@ -208,8 +231,13 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
       intent: fullIntent,
       gates,
       preparedTransaction,
+      ...(sessionAuthorization ? { sessionAuthorization } : {}),
     });
   } catch (error) {
+    if (error instanceof ServiceSessionAuthorizationError) {
+      res.status(error.status).json({ success: false, error: error.message });
+      return;
+    }
     if (error instanceof UnsupportedActionError) {
       const status = error.action === "SWAP_QUOTE_RPC_UNAVAILABLE" ? 503 : error.action.startsWith("SWAP") ? 422 : 501;
       res.status(status).json({
