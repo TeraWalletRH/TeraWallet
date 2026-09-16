@@ -738,3 +738,85 @@ h1:focus {
     monospace;
   max-width: 62%;
 }
+.simulator-heading {
+  margin: 38px 0 18px;
+}
+.sim-result {
+  border: 1px solid #aeb9a2;
+  padding: 18px;
+  margin-top: 22px;
+}
+.sim-result.blocked {
+  border-color: #b5977b;
+}
+.sim-rules {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+}
+.sim-rules li {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 12px 0;
+  border-top: 1px dashed #c8cfbb;
+  font-size: 13px;
+}
+.sim-scope {
+  flex: none;
+  width: 120px;
+  font:
+    10px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  text-transform: uppercase;
+  color: #6b7663;
+  line-height: 1.5;
+}
+.sim-rule {
+  flex: 1;
+  min-width: 0;
+}
+.sim-rule b {
+  display: block;
+  font-weight: 550;
+}
+.sim-rule small {
+  display: block;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #717c65;
+  margin-top: 5px;
+}
+.sim-rules li em {
+  font-style: normal;
+  font:
+    10px "IBM Plex Mono",
+    "Courier New",
+    monospace;
+  color: #566b3e;
+  white-space: nowrap;
+}
+.sim-rules li.blocked em {
+  color: #945f3d;
+}
+.preset {
+  border: 1px solid #bac3ac;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+.preset.off {
+  opacity: 0.65;
+}
+.wallet-dialog select[multiple] {
+  width: 100%;
+  padding: 6px;
+}
+@media (max-width: 750px) {
+  .sim-scope {
+    width: 100%;
+  }
+  .sim-rules li {
+    flex-wrap: wrap;
+  }
+}
