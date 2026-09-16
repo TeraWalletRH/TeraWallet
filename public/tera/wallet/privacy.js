@@ -16,6 +16,11 @@ export const LOCAL_ONLY = [
     detail: "Kept in this page session only. Reloading the page clears them.",
   },
   {
+    label: "The message you typed",
+    detail:
+      "With prompt minimisation on, addresses, references, contact details and figures are replaced with placeholders before an assistant message is sent. The original text and the mapping back to it stay in this page, and the reply is re-hydrated here.",
+  },
+  {
     label: "Transaction records",
     detail:
       "Drafts and transaction records are encrypted in this browser after you unlock the local vault with a wallet signature. The decrypted key stays only in page memory.",
@@ -192,8 +197,14 @@ export const REQUESTS = [
     identifies: false,
     processors: ["Tera service", "Assistant model provider"],
     retention:
-      "The message text is sent to Tera's model provider to generate the reply. Your wallet address is not part of this request.",
-    withheld: ["Wallet address", "Balances", "Proposal history", "Local transaction records"],
+      "The message text is sent to Tera's model provider to generate the reply. With prompt minimisation on, what is sent is the placeholder skeleton and not the text you typed. Your wallet address is not part of this request.",
+    withheld: [
+      "Wallet address",
+      "Balances",
+      "Proposal history",
+      "Local transaction records",
+      "Values replaced by prompt minimisation",
+    ],
   },
   {
     id: "agent-propose",
@@ -206,7 +217,7 @@ export const REQUESTS = [
     identifies: true,
     processors: ["Tera service", "Assistant model provider"],
     retention:
-      "The prompt text reaches the model provider. The address and optional session token stay with Tera for scope checks and the resulting intent record.",
+      "The prompt text reaches the model provider. Prompt minimisation removes contact details, references and call data from it, but keeps the recipient address and the figure, because Tera reads those out of the text to build the transaction. The address and optional session token stay with Tera for scope checks and the resulting intent record.",
     withheld: ["Balances", "Local transaction records", "Private keys", "Session token from the model provider"],
   },
   {
@@ -312,6 +323,9 @@ export function summarize(log) {
     identifying: log.filter((entry) => entry.identifies).length,
     toModelProvider: log.filter((entry) => entry.processors.includes("Assistant model provider"))
       .length,
+    // Values replaced on this device before the request was built.
+    minimised: log.filter((entry) => entry.minimised).length,
+    replaced: log.reduce((total, entry) => total + (entry.replaced || 0), 0),
     fields: new Set(log.flatMap((entry) => entry.sent)).size,
   };
 }
@@ -328,6 +342,8 @@ export function exportable(log, destination) {
       path: entry.path,
       fieldsSent: entry.sent,
       simulated: Boolean(entry.simulated),
+      minimisedBeforeSending: Boolean(entry.minimised),
+      valuesReplacedOnDevice: entry.replaced || 0,
       processors: entry.processors,
       retention: entry.retention,
       withheldFromThisRequest: entry.withheld,

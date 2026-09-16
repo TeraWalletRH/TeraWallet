@@ -125,8 +125,25 @@ test("summarize counts identifying requests and model-provider requests", () => 
     simulated: 0,
     identifying: 1,
     toModelProvider: 1,
+    minimised: 0,
+    replaced: 0,
     fields: 3,
   });
+});
+
+test("summarize and the export report what was minimised before sending", () => {
+  const log = [
+    { ...describeRequest("/api/agent/chat", { message: "hello" }), minimised: true, replaced: 3 },
+    describeRequest("/api/assets"),
+  ];
+  const totals = summarize(log);
+  assert.equal(totals.minimised, 1);
+  assert.equal(totals.replaced, 3);
+  const output = exportable(log, "api.terawallet.app");
+  assert.equal(output.requests[0].minimisedBeforeSending, true);
+  assert.equal(output.requests[0].valuesReplacedOnDevice, 3);
+  assert.equal(output.requests[1].minimisedBeforeSending, false);
+  assert.equal(output.requests[1].valuesReplacedOnDevice, 0);
 });
 
 test("the export carries field names, destination and retention only", () => {
