@@ -126,3 +126,53 @@ test("the export keeps the reach distinction and carries no owner data", () => {
   assert.equal(serialized.includes(owner), false);
   assert.equal(serialized.includes("buy SPCX"), false);
 });
+
+test("an owner-supplied endpoint appears and takes the balance reads with it", () => {
+  const withOwn = parties({ ...config, balanceEndpointHost: "node.example.test" });
+  const own = row(withOwn, "owner-endpoint");
+  assert.ok(own, "the owner's endpoint is missing from the panel");
+  assert.equal(own.host, "node.example.test");
+  assert.equal(own.reach, "direct");
+  assert.equal(own.owned, true);
+  assert.ok(own.withheld.includes("Anything you sign"));
+
+  const wallet = row(withOwn, "wallet-rpc");
+  const looksAt = (entry) => entry.learns.some((line) => line.includes("balance you view"));
+  assert.equal(looksAt(wallet), false, "the wallet provider still claims the balance reads");
+  assert.equal(looksAt(own), true);
+  assert.ok(wallet.withheld.some((line) => line.includes("your own endpoint")));
+  // The signing path is unchanged and still belongs to the wallet.
+  assert.ok(wallet.learns.some((line) => line.includes("transaction you submit")));
+});
+
+test("without an endpoint the wallet provider keeps the balance reads", () => {
+  const wallet = row(parties(config), "wallet-rpc");
+  assert.ok(wallet.learns.some((line) => line.includes("balance you view")));
+  assert.equal(row(parties(config), "owner-endpoint"), undefined);
+});
+
+test("reads to the owner's endpoint are counted, because this page makes them", () => {
+  const list = egressStatus(parties({ ...config, balanceEndpointHost: "node.example.test" }), {
+    log: [],
+    balanceReads: 3,
+  });
+  assert.equal(row(list, "owner-endpoint").requests, 3);
+  assert.equal(row(list, "owner-endpoint").seesYouNow, true);
+  assert.equal(row(list, "owner-endpoint").uncounted, undefined);
+  const idle = egressStatus(parties({ ...config, balanceEndpointHost: "node.example.test" }), {
+    log: [],
+  });
+  assert.equal(row(idle, "owner-endpoint").seesYouNow, false);
+  assert.match(row(idle, "owner-endpoint").note, /no balance has been read/);
+});
+
+test("the export names the owner's endpoint by host only", () => {
+  const list = egressStatus(parties({ ...config, balanceEndpointHost: "node.example.test" }), {
+    log: [],
+    balanceReads: 1,
+  });
+  const output = exportableEgress(list);
+  const own = output.parties.find((entry) => entry.host === "node.example.test");
+  assert.equal(own.seesYourNetworkAddress, true);
+  assert.equal(own.countedByThisPage, true);
+});

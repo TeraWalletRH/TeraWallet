@@ -29,12 +29,14 @@ import {
 import { GUIDE, guideStep, createDemoState, demoApi, DEMO_OWNER } from "./demo.js";
 import { redactProposal, toText, leaks, formatExact } from "./redact.js";
 import {
-  parties,
-  egressStatus,
-  egressSummary,
-  exportableEgress,
-  REACH,
-} from "./egress.js";
+  normaliseEndpoint,
+  describeEndpoint,
+  createRpc,
+  probeEndpoint,
+  balanceReader,
+  EndpointError,
+} from "./endpoint.js";
+import { parties, egressStatus, egressSummary, exportableEgress, REACH } from "./egress.js";
 import {
   minimise,
   rehydrate,
@@ -153,6 +155,12 @@ const state = {
   vaultRetentionDays: 30,
   minimise: true,
   minimiseReview: true,
+  // The owner's endpoint for balance reads. Held in the encrypted vault because
+  // the URL can carry their API key.
+  rpcEndpoint: "",
+  rpcChecked: null,
+  rpcError: "",
+  rpcReads: 0,
   demo: false,
   guide: 0,
   busy: false,
@@ -188,6 +196,7 @@ async function persist() {
         versions: state.versions,
         agentSessionToken: state.agentSessionToken,
         presets: state.presets,
+        rpcEndpoint: state.rpcEndpoint,
       },
       state.vaultRetentionDays,
     );
@@ -204,6 +213,10 @@ function loadRecords() {
   state.versions = {};
   state.presets = [];
   state.simulation = null;
+  state.rpcEndpoint = "";
+  state.rpcChecked = null;
+  state.rpcError = "";
+  state.rpcReads = 0;
   const stored = Number(localStorage.getItem(vaultSettingsKey()));
   state.vaultRetentionDays = [7, 30, 90, 365].includes(stored) ? stored : 30;
 }
@@ -224,6 +237,17 @@ async function unlockEncryptedStorage() {
   state.versions = pruneVersions(vault?.versions, state.vaultRetentionDays);
   state.agentSessionToken = typeof vault?.agentSessionToken === "string" ? vault.agentSessionToken : "";
   state.presets = Array.isArray(vault?.presets) ? vault.presets.map(createPreset) : [];
+  // A stored endpoint is re-validated on unlock rather than trusted, so an old
+  // or edited vault cannot point balance reads somewhere this wallet refuses.
+  state.rpcEndpoint = "";
+  if (typeof vault?.rpcEndpoint === "string" && vault.rpcEndpoint) {
+    try {
+      state.rpcEndpoint = normaliseEndpoint(vault.rpcEndpoint);
+    } catch {
+      state.notice =
+        "The saved balance endpoint is no longer acceptable and was not restored. Balance reads are going through your wallet.";
+    }
+  }
   // Remove the previous plaintext record store after the encrypted vault unlocks.
   localStorage.removeItem(storageKey());
 }
@@ -235,6 +259,8 @@ function clearEncryptedStorage() {
   state.bridges = [];
   state.drafts = [];
   state.agentSessionToken = "";
+  state.rpcEndpoint = "";
+  state.rpcChecked = null;
 }
 async function deleteServerAssistantData() {
   connected();
@@ -768,12 +794,14 @@ function egressRows() {
       explorerUrl: config.explorerUrl,
       chainId,
       siteHost: location.host,
+      balanceEndpointHost: ownEndpointActive() ? describeEndpoint(state.rpcEndpoint).host : "",
     }),
     {
       log: state.privacyLog,
       owner: state.owner,
       demo: state.demo,
       records: state.records.length,
+      balanceReads: state.rpcReads,
     },
   );
 }
@@ -861,8 +889,50 @@ function privacyCentre() {
     <p class="micro">Retention is described by the service and cannot be verified from this page. Deleting service-side records is not available yet; clearing the log above removes only this local copy.</p>`;
 }
 
+function balanceReadsPanel() {
+  const own = Boolean(state.rpcEndpoint);
+  const described = own ? describeEndpoint(state.rpcEndpoint) : null;
+  const where = own
+    ? `${esc(described.host)}${described.local ? " · on this machine" : ""}`
+    : "Your wallet extension's own provider";
+  return `<p>Every balance in this wallet is read from somewhere. By default that is your wallet extension's provider, which learns each address you look at — including ones you only look at. Point these reads at your own node instead.</p>
+    ${pair("Balances read from", where)}
+    ${state.rpcChecked ? pair("Checked", `Network ${state.rpcChecked.chainId} · ${new Date(state.rpcChecked.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`) : ""}
+    ${own ? pair("Reads this session", String(state.rpcReads)) : ""}
+    <div class="field"><label for="rpc-endpoint">Your JSON-RPC endpoint</label><input id="rpc-endpoint" name="endpoint" autocomplete="off" spellcheck="false" placeholder="https://… or http://localhost:8545" value="${esc(state.rpcEndpoint)}" ${!state.vaultKey ? "disabled" : ""}></div>
+    ${state.rpcError ? `<p class="live-form-error" role="alert">${esc(state.rpcError)}</p>` : ""}
+    <div class="actions">${button(own ? "Check and save again" : "Check and use", "rpc-save", !state.vaultKey || state.busy ? "disabled" : "")}${own ? button("Remove", "rpc-clear") : ""}</div>
+    <p class="micro">${state.vaultKey ? "The endpoint is kept in the encrypted local vault, because the URL can carry your API key. It is never sent to Tera and never appears in the request log or its export — only its host is shown." : "Unlock encrypted local storage above to set an endpoint. The URL can carry an API key, so it is only kept encrypted."}</p>
+    <p class="micro">Only balance reads move. Signing, simulation, gas estimation and receipt checks stay with your wallet, because what your wallet signs has to be what your wallet saw. This wallet will not send any other method to your endpoint.</p>
+    <p class="micro">If your endpoint fails, balances are not quietly read somewhere else — you are told, and nothing is sent to the provider you moved away from.</p>`;
+}
+async function saveBalanceEndpoint() {
+  if (!state.vaultKey)
+    throw new Error("Unlock encrypted local storage before setting a balance endpoint.");
+  const input = document.getElementById("rpc-endpoint");
+  state.rpcError = "";
+  try {
+    const url = normaliseEndpoint(input?.value);
+    // Checked before it is saved: an endpoint on the wrong network would report
+    // balances that look real and are not.
+    const id = await probeEndpoint(createRpc(url), chainId);
+    state.rpcEndpoint = url;
+    state.rpcChecked = { chainId: id, at: Date.now() };
+    state.rpcReads = 0;
+    await persist();
+    state.notice = `Balance reads now go to ${describeEndpoint(url).host}. Your wallet extension's provider no longer sees which addresses you look at.`;
+  } catch (error) {
+    if (!(error instanceof EndpointError)) throw error;
+    state.rpcError = error.message;
+    render();
+    return;
+  }
+  render();
+  await loadBalances();
+}
+
 function settings() {
-  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
+  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
 async function loadAssets() {
@@ -914,36 +984,53 @@ async function refreshAccount() {
   render();
   await loadBalances(version);
 }
+// The owner's endpoint is used only when one is configured and this is not the
+// guided demo, which answers everything locally.
+function ownEndpointActive() {
+  return Boolean(state.rpcEndpoint) && !state.demo;
+}
 async function loadBalances(version = generation) {
   if (!state.provider || state.chain !== chainId) return;
   const provider = state.provider,
     owner = state.owner;
-  const valid = state.assets.filter((a) => isAddress(a.address));
-  const results = await Promise.allSettled(
-    valid.map(async (a) => {
-      const value =
-        a.address === ZERO_ADDRESS
-          ? await provider.request({ method: "eth_getBalance", params: [owner, "latest"] })
-          : await provider.request({
+  const own = ownEndpointActive();
+  const read = own
+    ? balanceReader(createRpc(state.rpcEndpoint), ZERO_ADDRESS)
+    : ({ assetAddress }) =>
+        assetAddress === ZERO_ADDRESS
+          ? provider.request({ method: "eth_getBalance", params: [owner, "latest"] })
+          : provider.request({
               method: "eth_call",
               params: [
-                { to: a.address, data: `0x70a08231${owner.slice(2).padStart(64, "0")}` },
+                { to: assetAddress, data: `0x70a08231${owner.slice(2).padStart(64, "0")}` },
                 "latest",
               ],
             });
-      return [a.address, formatUnits(value, a.decimals)];
-    }),
+  const valid = state.assets.filter((a) => isAddress(a.address));
+  const results = await Promise.allSettled(
+    valid.map(async (a) => [
+      a.address,
+      formatUnits(await read({ assetAddress: a.address, owner }), a.decimals),
+    ]),
   );
   if (version !== generation) return;
+  if (own) state.rpcReads += valid.length;
   state.balances = Object.fromEntries(
     results.filter((r) => r.status === "fulfilled").map((r) => r.value),
   );
-  if (results.some((r) => r.status === "rejected") || valid.length !== state.assets.length)
+  const failure = results.find((r) => r.status === "rejected");
+  if (failure || valid.length !== state.assets.length) {
+    // A failing endpoint is never quietly replaced by the wallet's provider.
+    // Doing so would send the owner's addresses to the party they moved away
+    // from, while the panel still said otherwise.
     state.errors.balances =
-      "Some balances are unavailable because a contract address or network read could not be verified.";
-  else delete state.errors.balances;
+      own && failure?.reason instanceof EndpointError
+        ? `${errorMessage(failure.reason)} Balances were not read anywhere else. Fix the endpoint or remove it in Settings.`
+        : "Some balances are unavailable because a contract address or network read could not be verified.";
+  } else delete state.errors.balances;
   render();
 }
+
 function clearAccount() {
   generation++;
   state.bridges = [];
@@ -1743,6 +1830,18 @@ document.addEventListener("click", async (event) => {
       pendingMessage = null;
       closeDialog();
       if (plan) await sendMessage({ ...plan, minimised: action === "minimise-send" });
+    }
+    if (action === "rpc-save") await saveBalanceEndpoint();
+    if (action === "rpc-clear") {
+      state.rpcEndpoint = "";
+      state.rpcChecked = null;
+      state.rpcError = "";
+      state.rpcReads = 0;
+      await persist();
+      state.notice =
+        "Balance reads are going through your wallet extension's provider again. It sees each address you look at.";
+      render();
+      await loadBalances();
     }
     if (action === "agent-token-connect") connectAgentSessionToken();
     if (action === "agent-token-disconnect") {
