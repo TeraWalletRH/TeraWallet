@@ -1040,7 +1040,12 @@ async function refreshBridge(record) {
 
 function reviewBridge(quote, input, version) {
   const fee = entry => entry?.currency ? `${formatUnits(entry.amount, entry.currency.decimals)} ${entry.currency.symbol}` : "Unavailable";
-  const panel = dialog("Review your bridge", `${pair("From", "Robinhood Chain · USDG")}${pair("To", input.destinationChainId === 8453 ? "Base · USDC" : "Solana · USDC")}${pair("Receiving address", input.recipient)}${pair("USDG input", formatUnits(input.amount, 6))}${pair("Expected USDC", formatUnits(quote.amountOut, 6))}${pair("Minimum USDC", formatUnits(quote.minimumAmountOut, 6))}${pair("Relay fee (included in quote)", fee(quote.fees?.relayer))}${pair("Estimated network fee (additional)", fee(quote.fees?.gas))}${pair("Quote expires", new Date(quote.expiresAt).toLocaleTimeString())}<p class="micro">Relay handles delivery to this address. Source confirmation alone does not mean delivery is complete. Delivery or refund progress will appear below. ${state.vaultKey ? "Tracking is saved in your encrypted vault." : "Unlock the vault in Settings to save tracking across reloads."}</p><p id="bridge-progress" role="status"></p><button class="btn" id="bridge-sign">Approve bridge in wallet ↗</button>`);
+  const sourceEth = input.originCurrency === "0x0000000000000000000000000000000000000000";
+  const sourceSymbol = sourceEth ? "ETH" : "USDG";
+  const sourceDecimals = sourceEth ? 18 : 6;
+  const outSymbol = quote.input?.destination?.symbol || "destination token";
+  const outDecimals = quote.input?.destination?.decimals ?? 6;
+  const panel = dialog("Review your bridge", `${pair("From", `Robinhood Chain · ${sourceSymbol}`)}${pair("To", `${quote.input?.destination?.name || "Destination"} · ${outSymbol}`)}${pair("Receiving address", input.recipient)}${pair(`${sourceSymbol} input`, formatUnits(input.amount, sourceDecimals))}${pair(`Expected ${outSymbol}`, formatUnits(quote.amountOut, outDecimals))}${pair(`Minimum ${outSymbol}`, formatUnits(quote.minimumAmountOut, outDecimals))}${pair("Relay fee (included in quote)", fee(quote.fees?.relayer))}${pair("Estimated network fee (additional)", fee(quote.fees?.gas))}${pair("Quote expires", new Date(quote.expiresAt).toLocaleTimeString())}<p class="micro">Relay handles delivery to this address. Source confirmation alone does not mean delivery is complete. Delivery or refund progress will appear below. ${state.vaultKey ? "Tracking is saved in your encrypted vault." : "Unlock the vault in Settings to save tracking across reloads."}</p><p id="bridge-progress" role="status"></p><button class="btn" id="bridge-sign">Approve bridge in wallet ↗</button>`);
   const sign = panel.querySelector("#bridge-sign");
   sign.onclick = async () => {
     if (state.busy) return;
@@ -1104,6 +1109,14 @@ function bindForms() {
     } catch (error) {
       bridgeForm.querySelector('[role="alert"]').textContent = errorMessage(error);
     } finally { submit.disabled = false; }
+  };
+  const bridgeChain = document.getElementById("bridge-chain");
+  const bridgeToken = document.getElementById("bridge-token");
+  if (bridgeChain && bridgeToken) bridgeChain.onchange = () => {
+    const sol = bridgeChain.value === "792703809";
+    bridgeToken.innerHTML = sol
+      ? '<option value="11111111111111111111111111111111">SOL</option><option value="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v">USDC</option><option value="Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB">USDT</option>'
+      : '<option value="0x0000000000000000000000000000000000000000">ETH</option><option value="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913">USDC</option>';
   };
   const filter = document.getElementById("asset-filter");
   if (filter)
