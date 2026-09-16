@@ -82,6 +82,16 @@ export const styles = StyleSheet.create({
   },
   tab: { flex: 1, alignItems: "center", paddingVertical: 12, gap: 5 },
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  quickActions: { flexDirection: "row", gap: 8 },
+  quickAction: {
+    flex: 1,
+    minHeight: 54,
+    paddingHorizontal: 4,
+    borderWidth: 1,
+    borderColor: colors.ink,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   error: {
     padding: 15,
     borderLeftWidth: 3,
