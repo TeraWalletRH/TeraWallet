@@ -33,7 +33,7 @@ mock.module("expo-file-system/legacy", () => ({
 }));
 const vault = await import("../src/storage");
 const phrase = "test test test test test test test test test test test junk";
-const password = "test-only-long-password";
+const password = "123456";
 beforeEach(() => {
   vault.lock();
   secure.clear();
@@ -66,7 +66,7 @@ it("wrong passwords fail and erasure removes wallet, biometrics and history", as
   await vault.enableBiometrics(password);
   await vault.saveData(vault.emptyData());
   vault.lock();
-  await expect(vault.unlock("incorrect-password")).rejects.toThrow();
+  await expect(vault.unlock("000000")).rejects.toThrow();
   expect(vault.isUnlocked()).toBe(false);
   await vault.eraseWallet();
   expect(await vault.hasWallet()).toBe(false);

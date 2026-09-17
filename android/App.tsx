@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
   Alert,
+  ActivityIndicator,
   AppState,
   KeyboardAvoidingView,
   Image,
@@ -8,17 +9,21 @@ import {
   Modal,
   Platform,
   Pressable,
+  RefreshControl,
   ScrollView,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import * as Clipboard from "expo-clipboard";
+import * as Haptics from "expo-haptics";
 import { formatUnits, parseUnits, zeroAddress, type Address } from "viem";
 import { api } from "./src/api";
 import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
-import { balances, execute, transactionStatus } from "./src/network";
+import { balances, client, execute, transactionStatus } from "./src/network";
 import { policyFor } from "./src/policy";
 import { verifyProposal } from "./src/proposals";
 import { check, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
@@ -37,12 +42,20 @@ type Review = {
   actionHash?: string;
   bridgeInput?: any;
   draftId?: number;
+  simulation?: "checking" | "passed" | "needs-attention";
 };
+const tokenImages: Record<string, any> = {
+  USDG: require("./assets/RH-RWA-Assets-Media/usdg_logo.png"), ETH: require("./assets/RH-RWA-Assets-Media/eth.jpeg"), AAPL: require("./assets/RH-RWA-Assets-Media/apple.png"), AMZN: require("./assets/RH-RWA-Assets-Media/amazon.png"), GOOGL: require("./assets/RH-RWA-Assets-Media/google.png"), META: require("./assets/RH-RWA-Assets-Media/meta.jpg"), MSFT: require("./assets/RH-RWA-Assets-Media/microsoft.png"), NVDA: require("./assets/RH-RWA-Assets-Media/nvidia.png"), SPCX: require("./assets/RH-RWA-Assets-Media/spacex.png"), TSLA: require("./assets/RH-RWA-Assets-Media/tesla.png"),
+};
+function TokenIcon({ symbol, size = 32 }: { symbol: string; size?: number }) {
+  return <Image source={tokenImages[symbol] || require("./assets/RH-RWA-Assets-Media/rh-icon.png")} style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: colors.wash }} />;
+}
 function Wallet() {
   const [language, setLanguage] = useState<"en" | "zh">("en");
   const t = (en: string, zh: string) => (language === "zh" ? zh : en);
   const [ready, setReady] = useState(false),
     [exists, setExists] = useState(false),
+    [pinWallet, setPinWallet] = useState(false),
     [owner, setOwner] = useState<Address | "">("");
   const [page, setPage] = useState("home"),
     [busy, setBusy] = useState(false),
@@ -50,7 +63,13 @@ function Wallet() {
     [progress, setProgress] = useState("");
   const [data, setData] = useState(vault.emptyData());
   const dataRef = useRef(data);
-  const [balance, setBalance] = useState<{ USDG: string; ETH: string } | null>(null);
+  const [balance, setBalance] = useState<Record<string, string> | null>(null),
+    [prices, setPrices] = useState<Record<string, number>>({ USDG: 1 }),
+    [refreshing, setRefreshing] = useState(false),
+    [flowStep, setFlowStep] = useState(0),
+    [amountInvalid, setAmountInvalid] = useState(false),
+    [settingsSection, setSettingsSection] = useState<"root" | "security" | "privacy" | "sessions" | "device">("root"),
+    [notice, setNotice] = useState<null | { title: string; body: string; tone?: "success" | "error" }>(null);
   const [assets, setAssets] = useState<Asset[]>(sources),
     [message, setMessage] = useState(""),
     [chat, setChat] = useState<{ role: string; text: string; minimised?: boolean; sent?: string; replaced?: number }[]>([]);
@@ -74,10 +93,12 @@ function Wallet() {
     [outSymbol, setOutSymbol] = useState("ETH"),
     [trade, setTrade] = useState("BUY");
   const [review, setReview] = useState<Review | null>(null),
+    [signing, setSigning] = useState(false),
     [auth, setAuth] = useState<null | { title: string; action: () => Promise<void> }>(null),
     [authPassword, setAuthPassword] = useState("");
   const pending = useRef(false);
   const inactivity = useRef(Date.now());
+  const backgroundLock = useRef<ReturnType<typeof setTimeout> | null>(null);
   function forget() {
     vault.lock();
     setOwner("");
@@ -100,33 +121,62 @@ function Wallet() {
     setRecipient("");
     setError("");
     setPage("home");
+    setFlowStep(0);
+    setSettingsSection("root");
     setSetup("start");
-    void vault.hasWallet().then(setExists);
+    void vault.usesPin().then(setPinWallet);
+    void vault.hasWallet().then(async (present) => {
+      setExists(present);
+      setPinWallet(present && (await vault.usesPin()));
+    });
   }
   useEffect(() => {
     vault
       .hasWallet()
-      .then(setExists)
+      .then(async (present) => {
+        setExists(present);
+        setPinWallet(present && (await vault.usesPin()));
+      })
       .catch(() => setError(t("Device storage unavailable.", "设备存储不可用。")))
       .finally(() => setReady(true));
     const subscription = AppState.addEventListener("change", (state) => {
-      if (state !== "active" && !vault.authenticating) forget();
+      if (state === "active") {
+        inactivity.current = Date.now();
+        if (backgroundLock.current) clearTimeout(backgroundLock.current);
+        backgroundLock.current = null;
+        return;
+      }
+      // iOS can enter "inactive" briefly while a system surface appears.
+      // Do not discard signing state for that transient condition.
+      if (state === "background" && !vault.authenticating) {
+        if (backgroundLock.current) clearTimeout(backgroundLock.current);
+        backgroundLock.current = setTimeout(() => {
+          if (AppState.currentState === "background" && !pending.current) forget();
+        }, 60_000);
+      }
     });
     const timer = setInterval(() => {
-      if (vault.isUnlocked() && !pending.current && Date.now() - inactivity.current > 120000)
+      if (vault.isUnlocked() && !pending.current && Date.now() - inactivity.current > 15 * 60_000)
         forget();
-    }, 10000);
+    }, 30_000);
     return () => {
       subscription.remove();
       clearInterval(timer);
+      if (backgroundLock.current) clearTimeout(backgroundLock.current);
       vault.lock();
     };
   }, []);
+  useEffect(() => {
+    if (error)
+      setNotice({ title: t("Couldn’t complete that", "无法完成操作"), body: error, tone: "error" });
+  }, [error]);
   async function run(work: (guard: () => void) => Promise<void>) {
     if (pending.current) return;
     pending.current = true;
+    inactivity.current = Date.now();
     setBusy(true);
     setError("");
+    await new Promise((resolve) => setTimeout(resolve, 0));
     const version = vault.sessionVersion();
     const guard = () => {
       if (AppState.currentState !== "active" || version !== vault.sessionVersion())
@@ -135,8 +185,10 @@ function Wallet() {
     try {
       await work(guard);
     } catch (e) {
-      if (version === vault.sessionVersion())
-        setError(e instanceof Error ? e.message : t("Action failed.", "操作失败。"));
+      if (version === vault.sessionVersion()) {
+        const body = e instanceof Error ? e.message : t("Action failed.", "操作失败。");
+        setError(body);
+      }
     } finally {
       pending.current = false;
       setBusy(false);
@@ -149,37 +201,38 @@ function Wallet() {
     setData(next);
   }
   async function opened(address: Address, guard: () => void) {
-    const saved = await vault.loadData();
-    guard();
     setOwner(address);
     setExists(true);
-    setData(saved);
-    dataRef.current = saved;
-    setLanguage(saved.language);
     setPassword("");
     setMnemonic("");
     setRepeat("");
     setSetup("start");
     void refresh(address);
+    void vault.loadData().then((saved) => {
+      guard();
+      setData(saved);
+      dataRef.current = saved;
+      setLanguage(saved.language);
+    }).catch(() => {});
   }
   async function refresh(address = owner) {
     if (!address) return;
     const version = vault.sessionVersion();
-    const result = await Promise.allSettled([balances(address), api("/api/assets")]);
+    const registryResult = await api("/api/assets").catch(() => ({ assets: [] }));
+    const registry: Asset[] = registryResult.assets || [];
+    const supported = [...sources, ...registry.filter((a) => !sources.some((s) => s.symbol === a.symbol))];
+    const result = await Promise.allSettled([balances(address, supported), api("/api/assets/prices")]);
     if (version !== vault.sessionVersion()) return;
     if (result[0].status === "fulfilled") setBalance(result[0].value);
     else
       setError(
         t("Could not refresh balances. Pull again when connected.", "无法刷新余额，请联网后重试。"),
       );
-    if (result[1].status === "fulfilled") {
-      const registry: Asset[] = result[1].value.assets || [];
-      setAssets([
-        ...sources,
-        ...registry.filter((a) => !sources.some((s) => s.symbol === a.symbol)),
-      ]);
-    }
+    if (result[1].status === "fulfilled") setPrices(result[1].value.prices || { USDG: 1 });
+    setAssets(supported);
   }
+  async function pullRefresh() { setRefreshing(true); try { await refresh(); } finally { setRefreshing(false); } }
+  const totalUsd = balance ? assets.reduce((total, asset) => total + Number(formatUnits(BigInt(balance[asset.symbol] || "0"), asset.decimals)) * (prices[asset.symbol] || 0), 0) : 0;
   const selectedAsset = assets.find((a) => a.symbol === assetSymbol) || sources[0];
   const dest = destinations.find((d) => d.id === destination)!;
   const output = dest.tokens.find((a) => a.symbol === outSymbol) || dest.tokens[0];
@@ -191,6 +244,32 @@ function Wallet() {
     const n = parseUnits(value, decimals).toString();
     positive(n);
     return n;
+  }
+  function continueSend() {
+    if (flowStep !== 1) {
+      setFlowStep((step) => step + 1);
+      return;
+    }
+    try {
+      const requested = BigInt(units(amount, selectedAsset.decimals));
+      const available = BigInt(balance?.[selectedAsset.symbol] || "0");
+      if (requested > available) {
+        setAmountInvalid(true);
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        setNotice({
+          title: t("Insufficient balance", "余额不足"),
+          body: t(`You have ${formatUnits(available, selectedAsset.decimals)} ${selectedAsset.symbol} available.`, `可用余额为 ${formatUnits(available, selectedAsset.decimals)} ${selectedAsset.symbol}。`),
+          tone: "error",
+        });
+        return;
+      }
+      setAmountInvalid(false);
+      setFlowStep((step) => step + 1);
+    } catch (e) {
+      setAmountInvalid(true);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setNotice({ title: t("Enter an amount", "输入金额"), body: e instanceof Error ? e.message : t("Enter a valid amount.", "请输入有效金额。"), tone: "error" });
+    }
   }
   async function prepareTransfer(guard: () => void) {
     const input = {
@@ -241,7 +320,7 @@ function Wallet() {
         "五项服务检查已通过，交易已在本地验证。",
       ),
     ]);
-    setReview({
+    void presentReview({
       title: t("Review proposal", "审核提案"),
       rows,
       steps,
@@ -283,7 +362,7 @@ function Wallet() {
     const { quote } = await api("/api/bridge/quote", input);
     guard();
     const steps = verifyBridge(quote, input);
-    setReview({
+    await presentReview({
       title: t("Review bridge", "审核跨链"),
       steps,
       verify: () => {
@@ -307,11 +386,21 @@ function Wallet() {
       ],
     });
   }
+  async function presentReview(next: Review) {
+    setReview({ ...next, simulation: "checking" });
+    try {
+      await Promise.all(next.steps.map((tx) => client.call({ account: owner as Address, to: tx.to, data: tx.data, value: BigInt(tx.value) })));
+      setReview({ ...next, simulation: "passed" });
+    } catch {
+      setReview({ ...next, simulation: "needs-attention" });
+    }
+  }
   async function signReview(r: Review) {
     // Consume the review before broadcasting so a timeout cannot lead to a
     // second tap resending a bridge or transfer.
     r.verify();
-    setReview(null);
+    setSigning(true);
+    try {
     await execute(
       r.steps,
       r.verify,
@@ -333,6 +422,11 @@ function Wallet() {
     );
     setPage("activity");
     await refresh();
+    setNotice({ title: t("Transaction submitted", "交易已提交"), body: t("Your signed transaction is now in Activity.", "已签名交易现已显示在记录中。"), tone: "success" });
+    setReview(null);
+    } finally {
+      setSigning(false);
+    }
   }
   async function deliverAssistantMessage(guard: () => void, plan?: MinimiseResult) {
     if (!message.trim()) return;
@@ -407,7 +501,7 @@ function Wallet() {
     primary = true,
   ) => (
     <Button primary={primary} disabled={busy} onPress={() => void run(work)}>
-      {t(en, zh)}
+      {busy ? <ActivityIndicator color={primary ? colors.paper : colors.green} /> : t(en, zh)}
     </Button>
   );
   const languageControl = (
@@ -433,11 +527,13 @@ function Wallet() {
             t("Unlock on this device.", "在此设备上解锁。"),
           )}
           <Field
-            label={t("Wallet password", "钱包密码")}
+            label={pinWallet ? t("Six-digit wallet PIN", "六码钱包 PIN") : t("Wallet password", "钱包密码")}
             value={password}
             onChangeText={setPassword}
             secureTextEntry
-            textContentType="password"
+            textContentType={pinWallet ? "oneTimeCode" : "password"}
+            keyboardType={pinWallet ? "number-pad" : "default"}
+            maxLength={pinWallet ? 6 : undefined}
           />
           {action("Unlock wallet", "解锁钱包", async (g) => {
             const address = await vault.unlock(password);
@@ -501,7 +597,7 @@ function Wallet() {
               setSetup("phrase");
             }}
           >
-            {t("Create wallet ↗", "创建钱包 ↗")}
+            {t("Create wallet", "创建钱包")}
           </Button>
           <Button onPress={() => setSetup("import")}>
             {t("I already have a wallet", "我已有钱包")}
@@ -615,21 +711,25 @@ function Wallet() {
           "Protect this wallet.",
           "保护此钱包。",
           t(
-            "Choose a password of at least 10 characters. Use your recovery phrase if you forget it.",
-            "设置至少10个字符的密码，忘记密码时可使用助记词恢复。",
+            "Choose a six-digit PIN. Use your recovery phrase if you forget it.",
+            "设置六码 PIN，忘记时可使用助记词恢复。",
           ),
         )}
         <Field
-          label={t("Password", "密码")}
+          label={t("Six-digit PIN", "六码 PIN")}
           value={password}
           onChangeText={setPassword}
           secureTextEntry
+          keyboardType="number-pad"
+          maxLength={6}
         />
         <Field
-          label={t("Repeat password", "重复密码")}
+          label={t("Repeat PIN", "重复 PIN")}
           value={repeat}
           onChangeText={setRepeat}
           secureTextEntry
+          keyboardType="number-pad"
+          maxLength={6}
         />
         {action("Open my wallet", "打开钱包", async (g) => {
           check(password === repeat, t("Passwords must match.", "两次密码必须一致。"));
@@ -645,31 +745,23 @@ function Wallet() {
       return (
         <>
           <View style={{ backgroundColor: colors.dark, borderRadius: 28, padding: 22, gap: 18, overflow: "hidden" }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <View style={{ width: 8, height: 8, borderRadius: 8, backgroundColor: colors.lime }} />
-                <Text style={[s.eyebrow, { color: "#b9c9bd" }]}>{t("ROBINHOOD CHAIN", "ROBINHOOD CHAIN")}</Text>
-              </View>
-              <Text style={{ color: colors.lime, fontSize: 12, fontWeight: "700" }}>{t("Live", "Live")}</Text>
-            </View>
             <View>
-              <Text style={[s.small, { color: "#b9c9bd" }]}>{t("Total balance", "Total balance")}</Text>
+              <Text style={[s.small, { color: "#b9c9bd" }]}>{t("Portfolio value", "资产总值")}</Text>
               <Text style={{ color: "#ffffff", fontSize: 43, lineHeight: 50, fontWeight: "700", letterSpacing: -1.8 }}>$
-                {balance ? formatUnits(BigInt(balance.USDG), 6) : "0.00"}
+                {totalUsd.toLocaleString(undefined, { maximumFractionDigits: 2, minimumFractionDigits: 2 })}
               </Text>
-              <Text style={[s.small, { color: "#b9c9bd" }]}>USDG / {t("Global Dollar", "Global Dollar")}</Text>
             </View>
             <View style={{ flexDirection: "row", justifyContent: "space-between", borderTopWidth: 1, borderColor: "#31503e", paddingTop: 14 }}>
-              <Text style={[s.small, { color: "#b9c9bd" }]}>{t("Gas", "Gas")}</Text>
-              <Text style={{ color: "#ffffff", fontWeight: "700" }}>{balance ? `${formatUnits(BigInt(balance.ETH), 18)} ETH` : "�"}</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}><MaterialCommunityIcons name="gas-station" size={15} color="#b9c9bd" /><Text style={[s.small, { color: "#b9c9bd" }]}>{t("Gas", "燃料费")}</Text></View>
+              <Text style={{ color: "#ffffff", fontWeight: "700" }}>{balance ? `${formatUnits(BigInt(balance.ETH || "0"), 18)} ETH` : "…"}</Text>
             </View>
           </View>
           <View style={s.quickActions}>
             {[
-              ["S", "Send", "Send", "send"],
-              ["R", "Receive", "Receive", "receive"],
-              ["X", "Swap", "Swap", "swap"],
-              ["B", "Bridge", "Bridge", "bridge"],
+              ["arrow-up", "Send", "发送", "send"],
+              ["arrow-down", "Receive", "收款", "receive"],
+              ["swap-horizontal", "Swap", "兑换", "swap"],
+              ["bridge", "Bridge", "跨链", "bridge"],
             ].map(([icon, en, zh, p]) => (
               <Pressable
                 key={p}
@@ -679,10 +771,11 @@ function Wallet() {
                   setAssetSymbol(p === "swap" ? "AAPL" : "USDG");
                   setAmount("");
                   setRecipient("");
+                  setFlowStep(0);
                   setPage(p);
                 }}
               >
-                <Text style={{ color: colors.green, fontSize: 22, fontWeight: "600", marginBottom: 4 }}>{icon}</Text>
+                <MaterialCommunityIcons name={icon as any} color={colors.green} size={23} style={{ marginBottom: 4 }} />
                 <Text style={s.buttonText}>{t(en, zh)}</Text>
               </Pressable>
             ))}
@@ -694,9 +787,6 @@ function Wallet() {
             </View>
             <Text style={s.text}>{t("Tera can prepare an action. Only this wallet can sign it.", "Tera can prepare an action. Only this wallet can sign it.")}</Text>
           </View>
-          <Pressable onPress={() => void refresh()} style={{ alignItems: "center", paddingVertical: 7 }}>
-            <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>{t("Refresh balance", "Refresh balance")}</Text>
-          </Pressable>
         </>
       );
     if (page === "receive")
@@ -713,91 +803,48 @@ function Wallet() {
           <Text selectable style={[s.mono, { fontSize: 18, lineHeight: 30 }]}>
             {owner}
           </Text>
+          <View style={{ alignSelf: "center", backgroundColor: "#ffffff", padding: 16, borderRadius: 22, borderWidth: 1, borderColor: colors.line }}>
+            <Image accessibilityLabel={t("Wallet address QR code", "钱包地址二维码")} source={{ uri: `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(owner)}` }} style={{ width: 220, height: 220 }} />
+          </View>
           {action("Copy address", "复制地址", async () => {
             await Clipboard.setStringAsync(owner);
-            setProgress(t("Copied", "已复制"));
+            setNotice({ title: t("Address copied", "地址已复制"), body: t("Your Robinhood Chain wallet address is ready to paste.", "你的 Robinhood Chain 钱包地址已可粘贴。"), tone: "success" });
           })}
         </>
       );
-    if (page === "send" || page === "swap" || page === "bridge")
-      return (
-        <>
-          {title(
-            page === "send" ? "Send." : page === "swap" ? "Swap." : "Across chains.",
-            page === "send" ? "发送。" : page === "swap" ? "兑换。" : "跨链。",
-            page === "bridge"
-              ? t(
-                  "Relay receives the addresses and amount needed to quote and deliver.",
-                  "Relay 接收报价和到账所需的地址与金额。",
-                )
-              : t("Review the exact action before signing.", "签名前审核具体操作。"),
-          )}
-          {page === "swap" && <Choices options={["BUY", "SELL"]} value={trade} select={setTrade} />}
-          <Text style={s.eyebrow}>{t("Asset", "资产")}</Text>
-          <Choices
-            options={(page === "bridge"
-              ? sources
-              : page === "swap"
-                ? assets.filter((a) => !["ETH", "USDG"].includes(a.symbol))
-                : assets
-            ).map((a) => a.symbol)}
-            value={assetSymbol}
-            select={setAssetSymbol}
-          />
-          {page === "bridge" && (
-            <>
-              <Text style={s.eyebrow}>{t("Destination", "目标网络")}</Text>
-              <Choices
-                options={destinations.map((d) => d.name)}
-                value={dest.name}
-                select={(name) => {
-                  const d = destinations.find((d) => d.name === name)!;
-                  setDestination(d.id);
-                  setOutSymbol(d.tokens[0].symbol);
-                }}
-              />
-              <Choices
-                options={dest.tokens.map((a) => a.symbol)}
-                value={output.symbol}
-                select={setOutSymbol}
-              />
-            </>
-          )}
-          <Field
-            label={t(
-              page === "swap" && trade === "BUY" ? "USDG to spend" : "Amount to send",
-              page === "swap" && trade === "BUY" ? "支付的 USDG" : "发送金额",
-            )}
-            value={amount}
-            onChangeText={setAmount}
-            keyboardType="decimal-pad"
-          />
-          {page !== "swap" && (
-            <Field
-              label={t("Receiving wallet address", "收款钱包地址")}
-              value={recipient}
-              onChangeText={setRecipient}
-            />
-          )}
-          {action(
-            "Review quote / action ↗",
-            "审核报价 / 操作 ↗",
-            page === "bridge" ? prepareBridge : page === "swap" ? prepareTrade : prepareTransfer,
-          )}
-          <Text style={s.small}>
-            {t(
-              "Network fees are paid in ETH. Leave enough ETH for fees.",
-              "网络手续费使用 ETH 支付，请保留足够的 ETH。",
-            )}
-          </Text>
-        </>
-      );
+    if (page === "send") {
+      const sendAssets = assets;
+      const stepTitle = [t("Choose asset", "选择资产"), t("Enter amount", "输入金额"), t("Recipient", "收款方"), t("Review send", "审核发送")][flowStep];
+      return <>
+        {title("Send.", "发送。", `${flowStep + 1}/4 · ${stepTitle}`)}
+        {flowStep === 0 && <View style={s.wrap}>{sendAssets.map((asset) => <Pressable key={asset.symbol} onPress={() => setAssetSymbol(asset.symbol)} style={[s.panel, { width: "48%", flexDirection: "row", alignItems: "center", gap: 10 }, assetSymbol === asset.symbol && { borderWidth: 2, borderColor: colors.green }]}><TokenIcon symbol={asset.symbol} /><Text style={s.text}>{asset.symbol}</Text></Pressable>)}</View>}
+        {flowStep === 1 && <View style={{ alignItems: "center", gap: 16, paddingVertical: 44 }}><TokenIcon symbol={selectedAsset.symbol} size={52} /><TextInput autoFocus value={amount} onChangeText={(value) => { setAmount(value); setAmountInvalid(false); }} keyboardType="decimal-pad" placeholder="0" placeholderTextColor="#b3beb6" style={{ color: amountInvalid ? colors.danger : colors.ink, fontWeight: "700", fontSize: 64, minWidth: 220, textAlign: "center" }} /><Text style={[s.small, amountInvalid && { color: colors.danger }]}>{amountInvalid ? t("Amount exceeds your on-chain balance", "金额超过链上余额") : selectedAsset.symbol}</Text></View>}
+        {flowStep === 2 && <Field label={t("Receiving wallet address", "收款钱包地址")} value={recipient} onChangeText={setRecipient} />}
+        {flowStep === 3 && <View style={s.panel}><Row label={t("Asset", "资产")} value={selectedAsset.symbol} /><Row label={t("Amount", "金额")} value={`${amount || "0"} ${selectedAsset.symbol}`} /><Row label={t("To", "收款方")} value={recipient || "—"} /></View>}
+        {flowStep < 3 ? <Button primary onPress={continueSend}>{t("Continue", "继续")}</Button> : action("Review transaction", "审核交易", prepareTransfer)}
+        {flowStep > 0 && <Button onPress={() => setFlowStep((step) => step - 1)}>{t("Back", "返回")}</Button>}
+      </>;
+    }
+    if (page === "swap" || page === "bridge") {
+      const selectable = page === "bridge" ? sources : assets.filter((a) => !["ETH", "USDG"].includes(a.symbol));
+      return <>
+        {title(page === "swap" ? "Swap." : "Across chains.", page === "swap" ? "兑换。" : "跨链。", page === "bridge" ? t("Choose where your assets arrive.", "选择资产到账位置。") : t("Choose tokens, then review the live route.", "选择代币，然后审核实时路线。"))}
+        <View style={[s.panel, { backgroundColor: "#ffffff" }]}>
+          <Text style={s.eyebrow}>{page === "swap" ? t("YOU PAY", "你支付") : t("FROM", "从")}</Text>
+          <View style={s.wrap}>{(page === "swap" ? [sources[0]] : sources).map((asset) => <Pressable key={asset.symbol} onPress={() => setAssetSymbol(asset.symbol)} style={{ flexDirection: "row", gap: 8, alignItems: "center", padding: 8 }}><TokenIcon symbol={asset.symbol} size={28} /><Text style={[s.text, assetSymbol === asset.symbol && { fontWeight: "800" }]}>{asset.symbol}</Text></Pressable>)}</View>
+          <TextInput value={amount} onChangeText={setAmount} keyboardType="decimal-pad" placeholder="0.00" placeholderTextColor={colors.muted} style={{ fontSize: 38, color: colors.ink, fontWeight: "700", paddingTop: 18 }} />
+        </View>
+        {page === "swap" && <><MaterialCommunityIcons name="swap-vertical" color={colors.green} size={28} style={{ alignSelf: "center" }} /><View style={s.panel}><Text style={s.eyebrow}>{t("YOU RECEIVE", "你收到")}</Text><View style={s.wrap}>{selectable.map((asset) => <Pressable key={asset.symbol} onPress={() => { setAssetSymbol(asset.symbol); setTrade("BUY"); }} style={{ flexDirection: "row", gap: 8, alignItems: "center", padding: 8 }}><TokenIcon symbol={asset.symbol} size={28} /><Text style={[s.text, assetSymbol === asset.symbol && { fontWeight: "800" }]}>{asset.symbol}</Text></Pressable>)}</View></View></>}
+        {page === "bridge" && <><Text style={s.eyebrow}>{t("TO", "到")}</Text><Choices options={destinations.map((d) => d.name)} value={dest.name} select={(name) => { const next = destinations.find((d) => d.name === name)!; setDestination(next.id); setOutSymbol(next.tokens[0].symbol); }} /><View style={s.wrap}>{dest.tokens.map((asset) => <Pressable key={asset.symbol} onPress={() => setOutSymbol(asset.symbol)} style={{ flexDirection: "row", gap: 8, alignItems: "center", padding: 8 }}><TokenIcon symbol={asset.symbol} size={28} /><Text style={[s.text, output.symbol === asset.symbol && { fontWeight: "800" }]}>{asset.symbol}</Text></Pressable>)}</View><Field label={t("Destination wallet address", "目标钱包地址")} value={recipient} onChangeText={setRecipient} /></>}
+        {action("Review live route", "审核实时路线", page === "bridge" ? prepareBridge : prepareTrade)}
+      </>;
+    }
     if (page === "assistant")
       return (
         <>
           {title(
-            "Ask. Then decide.",
-            "先询问，再决定。",
+            "Tera assistant",
+            "Tera 助手",
             t(
               "Messages go to the assistant service. Proposals need your review.",
               "消息将发送至助手服务，提案需要你审核。",
@@ -825,22 +872,18 @@ function Wallet() {
           {data.token && (
             <Text style={s.eyebrow}>{t("Scoped session connected", "已连接限定权限的会话")}</Text>
           )}
+          <View style={{ gap: 12 }}>
+          {!chat.length && <View style={[s.panel, { alignSelf: "flex-start", maxWidth: "88%" }]}><Text style={[s.eyebrow, { color: colors.green }]}>TERA</Text><Text style={s.text}>{t("Ask about an asset or tell me what you want to do.", "询问资产，或告诉我你想做什么。")}</Text></View>}
           {chat.map((m, i) => (
-            <View key={i} style={[s.panel, m.role === "you" && { backgroundColor: colors.ink }]}>
-              <Text style={s.eyebrow}>{m.role === "you" ? t("YOU", "你") : "TERA"}</Text>
+            <View key={i} style={[s.panel, { maxWidth: "88%", alignSelf: m.role === "you" ? "flex-end" : "flex-start", borderBottomRightRadius: m.role === "you" ? 4 : 20, borderBottomLeftRadius: m.role === "you" ? 20 : 4 }, m.role === "you" && { backgroundColor: colors.ink }]}>
+              <Text style={[s.eyebrow, m.role === "you" && { color: "#b9c9bd" }]}>{m.role === "you" ? t("YOU", "你") : "TERA"}</Text>
               <Text selectable style={[s.text, m.role === "you" && { color: colors.paper }]}>
                 {m.text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/^#{1,6}\s/gm, "")}
               </Text>
             </View>
           ))}
-          <Field
-            label={t("Message", "消息")}
-            value={message}
-            onChangeText={setMessage}
-            maxLength={1200}
-            multiline
-          />
-          <Button primary disabled={busy} onPress={startAssistantMessage}>{t("Review and send", "Review and send")}</Button>
+          </View>
+          <View style={{ flexDirection: "row", alignItems: "flex-end", borderWidth: 1, borderColor: colors.line, borderRadius: 22, overflow: "hidden", backgroundColor: "#ffffff" }}><TextInput value={message} onChangeText={setMessage} maxLength={1200} multiline placeholder={t("Message Tera…", "给 Tera 发消息…")} placeholderTextColor={colors.muted} style={{ flex: 1, padding: 15, minHeight: 54, color: colors.ink, fontSize: 16 }} /><Pressable disabled={busy || !message.trim()} onPress={startAssistantMessage} style={{ width: 56, minHeight: 54, alignItems: "center", justifyContent: "center", backgroundColor: colors.ink, opacity: busy || !message.trim() ? .45 : 1 }}><MaterialCommunityIcons name="arrow-up" color="#ffffff" size={24} /></Pressable></View>
           <Text style={s.eyebrow}>{t("PROPOSALS", "提案")}</Text>
           {data.drafts.map((d) => (
             <View style={s.panel} key={d.createdAt}>
@@ -862,7 +905,7 @@ function Wallet() {
                   }
                 }}
               >
-                {t("Review", "审核")} ↗
+                {t("Review", "审核")}
               </Button>
               {action(
                 "Delete draft",
@@ -942,12 +985,21 @@ function Wallet() {
                   void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.hash}`)
                 }
               >
-                {t("View on explorer ↗", "在浏览器查看 ↗")}
+                {t("View on explorer", "在浏览器查看")}
               </Button>
             </View>
           ))}
         </>
       );
+    if (settingsSection === "root")
+      return <>
+        {title("Settings.", "设置。", t("Manage your wallet one area at a time.", "按类别管理你的钱包。"))}
+        {[ ["security", "Security", "安全", "Recovery phrase, biometrics and lock"], ["privacy", "Privacy & data", "隐私与数据", "Retention and deletion controls"], ["sessions", "Agent sessions", "代理会话", "Connect, create and revoke scoped tokens"], ["device", "Wallet on this device", "本设备钱包", "Address and device controls"] ].map(([section, en, zh, detail]) => <Pressable key={section} onPress={() => setSettingsSection(section as any)} style={[s.panel, { backgroundColor: "#ffffff", flexDirection: "row", alignItems: "center", justifyContent: "space-between" }]}><View><Text style={s.text}>{t(en, zh)}</Text><Text style={s.small}>{detail}</Text></View><MaterialCommunityIcons name="chevron-right" size={24} color={colors.green} /></Pressable>)}
+      </>;
+    if (settingsSection === "security") return <><Button onPress={() => setSettingsSection("root")}>{t("Settings", "设置")}</Button>{title("Security.", "安全。")}<Button disabled={busy} onPress={() => authenticate(t("Show recovery phrase", "显示助记词"), async () => setRevealed(vault.revealPhrase()))}>{t("Show recovery phrase", "显示助记词")}</Button><Field label={t("Password to enable biometrics", "启用生物识别所需的密码")} value={password} onChangeText={setPassword} secureTextEntry />{action("Enable biometric unlock", "启用生物识别解锁", async () => { await vault.enableBiometrics(password); setPassword(""); }, false)}<Button onPress={forget}>{t("Lock now", "立即锁定")}</Button></>;
+    if (settingsSection === "privacy") return <><Button onPress={() => setSettingsSection("root")}>{t("Settings", "设置")}</Button>{title("Privacy & data.", "隐私与数据。")}<Text style={s.small}>{t("Drafts and activity are encrypted on this device.", "草稿和记录在此设备上加密保存。")}</Text><Choices options={["7", "30", "90", "365"]} value={String(data.retention)} select={(v) => void run(async () => { const cutoff = Date.now() - Number(v) * 86400000; await store({ ...dataRef.current, retention: Number(v), drafts: dataRef.current.drafts.filter((d) => d.createdAt > cutoff), history: dataRef.current.history.filter((h) => h.createdAt > cutoff || ["pending", "broadcasting"].includes(h.status)) }); })} /><Button disabled={busy} onPress={() => confirm(t("Delete assistant data", "删除助手数据"), t("Remove messages and drafts from this device?", "删除此设备上的消息和草稿？"), () => void run(async () => { setChat([]); await store({ ...dataRef.current, drafts: [] }); setNotice({ title: t("Deleted", "已删除"), body: t("Local assistant data was removed.", "本地助手数据已删除。"), tone: "success" }); }))}>{t("Delete local assistant data", "删除本地助手数据")}</Button></>;
+    if (settingsSection === "sessions") return <><Button onPress={() => setSettingsSection("root")}>{t("Settings", "设置")}</Button>{title("Agent sessions.", "代理会话。")}<Field label={t("Connect a scoped token", "连接限定权限令牌")} value={tokenInput} onChangeText={setTokenInput} secureTextEntry />{action("Connect token", "连接令牌", async () => { check(tokenInput.trim().length >= 32); await store({ ...dataRef.current, token: tokenInput.trim() }); setTokenInput(""); setNotice({ title: t("Token connected", "令牌已连接"), body: t("The token can prepare proposals but cannot sign.", "令牌可以准备提案，但不能签名。"), tone: "success" }); }, false)}{data.token && action("Disconnect token", "断开令牌", async () => store({ ...dataRef.current, token: "" }), false)}{action("Create transfer session", "创建转账会话", async (g) => { const result = await api("/api/session/issue", { accountAddress: owner, allowedActions: ["TRANSFER"], assetAddresses: [USDG], ttlSeconds: 3600 }); g(); await store({ ...dataRef.current, token: result.token }); }, false)}</>;
+    if (settingsSection === "device") return <><Button onPress={() => setSettingsSection("root")}>{t("Settings", "设置")}</Button>{title("This device.", "此设备。")}<Row label={t("Wallet", "钱包")} value={owner} /><Button disabled={busy} onPress={() => authenticate(t("Erase wallet", "删除钱包"), async () => confirm(t("Erase this device’s wallet?", "删除此设备的钱包？"), t("You will need your recovery phrase.", "恢复需要助记词。"), () => void run(async () => { await vault.eraseWallet(); forget(); setExists(false); })))}>{t("Erase wallet from device", "从此设备删除钱包")}</Button></>;
     return (
       <>
         {title("Your rules.", "你的规则。")}
@@ -1156,7 +1208,6 @@ function Wallet() {
           </View>
           <View>
             <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 14 }}>Tera Wallet</Text>
-            {owner && <Text style={[s.eyebrow, { fontSize: 8 }]}>Self-custody</Text>}
           </View>
         </Pressable>
         <View style={{ borderWidth: 1, borderColor: colors.line, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 7 }}>{languageControl}</View>
@@ -1165,28 +1216,18 @@ function Wallet() {
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
-        <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled">
-          {error && (
-            <View style={s.error}>
-              <Text style={s.small}>{error}</Text>
-            </View>
-          )}
-          {busy && (
-            <Text accessibilityLiveRegion="polite" style={s.small}>
-              {progress || t("Working…", "正在处理…")}
-            </Text>
-          )}
+        <ScrollView contentContainerStyle={s.content} keyboardShouldPersistTaps="handled" refreshControl={owner ? <RefreshControl refreshing={refreshing} onRefresh={pullRefresh} tintColor={colors.green} /> : undefined}>
           {owner ? main() : onboarding()}
         </ScrollView>
       </KeyboardAvoidingView>
       {owner && (
         <View style={s.tabs}>
           {[
-            ["01", "Wallet", "钱包", "home"],
-            ["02", "Assistant", "助手", "assistant"],
-            ["03", "Activity", "记录", "activity"],
-            ["04", "Settings", "设置", "settings"],
-          ].map(([n, en, zh, p]) => (
+            ["wallet-outline", "Wallet", "钱包", "home"],
+            ["message-text-outline", "Assistant", "助手", "assistant"],
+            ["history", "Activity", "记录", "activity"],
+            ["cog-outline", "Settings", "设置", "settings"],
+          ].map(([icon, en, zh, p]) => (
             <Pressable
               accessibilityRole="tab"
               accessibilityState={{ selected: page === p }}
@@ -1195,10 +1236,11 @@ function Wallet() {
               disabled={busy}
               onPress={() => {
                 setError("");
+                if (p === "settings") setSettingsSection("root");
                 setPage(p);
               }}
             >
-              <Text style={[s.eyebrow, { color: page === p ? colors.lime : "#9baea2" }]}>{n}</Text>
+              <MaterialCommunityIcons name={icon as any} size={19} color={page === p ? colors.lime : "#9baea2"} />
               <Text style={[s.small, { color: page === p ? "#ffffff" : "#c1cec5", fontWeight: page === p ? "700" : "500" }]}>
                 {t(en, zh)}
               </Text>
@@ -1228,15 +1270,23 @@ function Wallet() {
       </Modal>
       <Modal
         visible={!!review && !!owner}
+        transparent
         animationType="slide"
         onRequestClose={() => !busy && setReview(null)}
       >
-        <SafeAreaView style={s.page}>
-          <ScrollView contentContainerStyle={s.content}>
+        <View style={{ flex: 1, backgroundColor: "#10221988", justifyContent: "flex-end" }}>
+          <SafeAreaView edges={["bottom"]} style={{ maxHeight: "88%", backgroundColor: colors.paper, borderTopLeftRadius: 30, borderTopRightRadius: 30, overflow: "hidden" }}>
+          <ScrollView contentContainerStyle={[s.content, { paddingTop: 24 }]}>
+            <View style={{ alignSelf: "center", width: 42, height: 4, borderRadius: 2, backgroundColor: colors.line }} />
             {title(review?.title || "", review?.title || "")}
+            <View style={[s.panel, { backgroundColor: review?.simulation === "passed" ? "#e5f2df" : "#f3eee5" }]}><Text style={[s.eyebrow, { color: colors.green }]}>{review?.simulation === "checking" ? t("SIMULATING", "正在模拟") : review?.simulation === "passed" ? t("SIMULATION PASSED", "模拟通过") : t("SIMULATION NEEDS ATTENTION", "模拟需要注意")}</Text><Text style={s.small}>{review?.simulation === "passed" ? t("The wallet simulated these exact transaction steps.", "钱包已模拟这些准确交易步骤。") : t("The final wallet check runs again before signing.", "签名前将再次执行钱包检查。")}</Text></View>
             {review?.rows.map(([label, value], i) => (
               <Row key={i} label={label} value={value} />
             ))}
+            <Text style={s.eyebrow}>{t("TRANSACTION CHANGES", "交易变更")}</Text>
+            {review?.steps.map((step, index) => <Row key={`${step.to}-${index}`} label={`${t("Step", "步骤")} ${index + 1}`} value={`${step.data === "0x" ? t("Native transfer", "原生转账") : t("Contract call", "合约调用")} · ${step.to.slice(0, 8)}…${step.to.slice(-4)}`} />)}
+            {signing && <View style={[s.panel, { backgroundColor: colors.dark, flexDirection: "row", alignItems: "center", gap: 12 }]}><ActivityIndicator color={colors.lime} /><View style={{ flex: 1 }}><Text style={[s.eyebrow, { color: colors.lime }]}>{t("SIGNING IN PROGRESS", "正在签名")}</Text><Text style={[s.small, { color: "#ffffff" }]}>{progress || t("Preparing your signed transaction…", "正在准备已签名交易…")}</Text></View></View>}
+            {auth && !signing && <View style={[s.panel, { backgroundColor: "#ffffff", borderWidth: 1, borderColor: colors.green }]}><Text style={s.eyebrow}>{t("CONFIRM WITH YOUR WALLET", "使用钱包确认")}</Text><Text style={s.text}>{t("Enter your PIN to sign this exact transaction.", "输入 PIN 以签署这笔准确交易。")}</Text><Field label={pinWallet ? t("Wallet PIN", "钱包 PIN") : t("Wallet password", "钱包密码")} value={authPassword} onChangeText={setAuthPassword} secureTextEntry keyboardType={pinWallet ? "number-pad" : "default"} maxLength={pinWallet ? 6 : undefined} />{action("Sign transaction", "签署交易", (g) => authorize(false, g))}<Button disabled={busy} onPress={() => { setAuth(null); setAuthPassword(""); }}>{t("Cancel signing", "取消签名")}</Button></View>}
             <Text style={s.small}>
               {t(
                 "Network fees are additional, capped at 0.001 ETH per transaction step. This authorizes only the reviewed steps.",
@@ -1245,23 +1295,37 @@ function Wallet() {
             </Text>
             <Button
               primary
-              disabled={busy}
+              disabled={busy || signing || review?.simulation === "checking"}
               onPress={() => {
                 const r = review!;
                 authenticate(t("Authorize transaction", "授权交易"), () => signReview(r));
               }}
             >
-              {t("Authorize on this device ↗", "在此设备上授权 ↗")}
+              {signing ? <ActivityIndicator color={colors.paper} /> : auth ? t("Enter PIN below", "在下方输入 PIN") : busy ? <ActivityIndicator color={colors.paper} /> : t("Unlock & sign", "解锁并签名")}
             </Button>
-            <Button disabled={busy} onPress={() => setReview(null)}>
+            <Button disabled={busy || signing} onPress={() => setReview(null)}>
               {t("Cancel", "取消")}
             </Button>
-            {error && <Text style={s.small}>{error}</Text>}
           </ScrollView>
-        </SafeAreaView>
+          </SafeAreaView>
+        </View>
       </Modal>
       <Modal
-        visible={!!auth && !!owner}
+        visible={!!notice}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setNotice(null)}
+      >
+        <Pressable onPress={() => setNotice(null)} style={{ flex: 1, backgroundColor: "#10221988", justifyContent: "flex-end" }}>
+          <Pressable onPress={() => {}} style={{ backgroundColor: colors.paper, borderTopLeftRadius: 30, borderTopRightRadius: 30, padding: 24, gap: 14 }}>
+            <MaterialCommunityIcons name={notice?.tone === "error" ? "alert-circle-outline" : "check-circle-outline"} size={32} color={notice?.tone === "error" ? colors.danger : colors.green} />
+            <Text style={s.title}>{notice?.title}</Text><Text style={s.text}>{notice?.body}</Text>
+            <Button primary onPress={() => setNotice(null)}>{t("Done", "完成")}</Button>
+          </Pressable>
+        </Pressable>
+      </Modal>
+      <Modal
+        visible={!!auth && !!owner && !review}
         transparent
         animationType="fade"
         onRequestClose={() => !busy && setAuth(null)}
@@ -1272,10 +1336,12 @@ function Wallet() {
           <View style={[s.panel, { backgroundColor: colors.paper }]}>
             <Text style={s.text}>{auth?.title}</Text>
             <Field
-              label={t("Wallet password", "钱包密码")}
+              label={pinWallet ? t("Wallet PIN", "钱包 PIN") : t("Wallet password", "钱包密码")}
               value={authPassword}
               onChangeText={setAuthPassword}
               secureTextEntry
+              keyboardType={pinWallet ? "number-pad" : "default"}
+              maxLength={pinWallet ? 6 : undefined}
             />
             {action("Authorize", "授权", (g) => authorize(false, g))}
             {action("Use biometrics", "使用生物识别", (g) => authorize(true, g), false)}
@@ -1288,7 +1354,6 @@ function Wallet() {
             >
               {t("Cancel", "取消")}
             </Button>
-            {error && <Text style={s.small}>{error}</Text>}
           </View>
         </View>
       </Modal>

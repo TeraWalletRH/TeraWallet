@@ -29,7 +29,9 @@ export function open(key: Uint8Array, box: Box): string {
     throw new Error("Invalid encrypted wallet. / 加密钱包无效。");
   return new TextDecoder().decode(gcm(key, hexToBytes(box.nonce)).decrypt(hexToBytes(box.data)));
 }
-export const passwordKey = (password: string, salt: Uint8Array) =>
-  pbkdf2Async(sha256, password.normalize("NFKD"), salt, { c: 210000, dkLen: 32 });
+export const LEGACY_PASSWORD_ITERATIONS = 210000;
+export const PASSWORD_ITERATIONS = 100000;
+export const passwordKey = (password: string, salt: Uint8Array, iterations = PASSWORD_ITERATIONS) =>
+  pbkdf2Async(sha256, password.normalize("NFKD"), salt, { c: iterations, dkLen: 32 });
 export const dataKey = (phrase: string) =>
   sha256(utf8ToBytes(`tera-mobile-data-v1:${normalizePhrase(phrase)}`));
