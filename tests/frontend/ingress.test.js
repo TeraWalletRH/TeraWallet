@@ -128,7 +128,7 @@ test("a keystore file is refused, and one stray field is not", () => {
 test("PEM blocks and credentials are refused", () => {
   assert.equal(inspect("-----BEGIN EC PRIVATE KEY-----\nMHQCAQE...").kind, "pem");
   assert.equal(inspect("-----BEGIN PRIVATE KEY-----\nMIIE...").kind, "pem");
-  assert.equal(inspect("api_key=EXAMPLE_REDACTED_FIXTURE").kind, "credential");
+  assert.equal(inspect("api_key=EXAMPLE0000NOT0000REAL0000TOKEN").kind, "credential");
   assert.equal(
     inspect("Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9").kind,
     "credential",
