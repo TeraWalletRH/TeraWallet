@@ -12,6 +12,7 @@ import retentionRouter from "./routes/retention";
 import mobileRouter from "./routes/mobile";
 import ohttpRouter from "./routes/ohttp";
 import pricesRouter from "./routes/prices";
+import stakingRouter from "./routes/staking";
 
 const app = express();
 
@@ -40,6 +41,7 @@ app.use(bridgeRouter);
 app.use(retentionRouter);
 app.use(mobileRouter);
 app.use(pricesRouter);
+app.use(stakingRouter);
 app.use(assetsRouter);
 app.use(intentRouter);
 app.use(agentRouter);
