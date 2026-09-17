@@ -120,6 +120,11 @@ import {
   respond as respondLocally,
 } from "./parse.js";
 import {
+  inspect as inspectIngress,
+  LIMITS as INGRESS_LIMITS,
+  KINDS as INGRESS_KINDS,
+} from "./ingress.js";
+import {
   ACTIONS,
   createPreset,
   upsertPreset,
@@ -373,6 +378,9 @@ const state = {
   engineInfo: null,
   engineError: "",
   engineVerifiedInFull: false,
+  // The last ingress refusal, shown above the composer until dismissed. It
+  // carries a kind and fixed copy — never anything from the message.
+  ingress: null,
   // The owner's endpoints for balance reads, held in the encrypted vault because
   // the URLs can carry their API keys. More than one means each account is read
   // by a different operator, so no single one sees the whole portfolio.
@@ -808,6 +816,17 @@ function engineHint() {
   return `${ENGINES[DEVICE].sends} ${ENGINES[DEVICE].quality}`;
 }
 
+// The refusal, shown where the message would have gone. It is not a chat turn:
+// a chat turn implies something was processed, and nothing was.
+function ingressBanner() {
+  const verdict = state.ingress;
+  if (!verdict || verdict.safe) return "";
+  return `<div class="note note-refused" role="alert"><strong>${esc(verdict.label)} — not sent</strong>${esc(verdict.detail)}
+    <p class="micro">Your message box has been cleared. ${verdict.kind === "mnemonic" ? "If you typed this here by mistake, treat the phrase as exposed to anything else running on this device and move your funds to a wallet made from a new one." : ""}</p>
+    <details class="micro"><summary>What this check cannot do</summary><ul>${INGRESS_LIMITS.map((limit) => `<li>${esc(limit)}</li>`).join("")}</ul></details>
+    <div class="actions">${button("Dismiss", "ingress-dismiss")}</div></div>`;
+}
+
 function minimiseHint() {
   return state.minimise
     ? "Addresses, references, contact details and figures are replaced with placeholders on this device before the message is sent. The reply is re-hydrated here. This removes the values, not the context — it does not make you anonymous."
@@ -854,6 +873,7 @@ function chat() {
     <div class="toolbar engine-toolbar"><label class="share-toggle"><span>Answered by</span> <select data-action="engine-select" aria-label="Which engine answers a question">${[SERVICE, DEVICE].map((id) => `<option value="${id}" ${state.engine === id ? "selected" : ""}>${esc(ENGINES[id].label)}</option>`).join("")}</select></label>${engineChip()}</div>
     <p class="micro" id="engine-hint">${esc(engineHint())}</p>
     <p class="micro" id="minimise-hint">${esc(state.engine === DEVICE ? "Prompt minimisation applies to messages that are sent. A question answered on this device is not sent, so there is nothing to minimise — but preparing a proposal still goes to Tera, and it is minimised then." : minimiseHint())}</p>
+    ${ingressBanner()}
     <div class="chat-feed" aria-live="polite">${state.chat.length ? state.chat.map(chatBubble).join("") : '<p class="micro">Explore an asset or describe a proposal you want to review.</p>'}</div>
     <form id="chat-form"><div class="field"><label for="chat-mode">Message type</label><select id="chat-mode" name="mode"><option value="chat">Ask a question</option><option value="propose">Prepare a proposal</option></select></div>
     <div class="composer"><textarea name="message" aria-label="Message the agent" placeholder="Ask about an asset or describe an action…" required maxlength="1200"></textarea><button aria-label="Send message" ${state.busy ? "disabled" : ""}>↑</button></div>
@@ -1298,6 +1318,7 @@ function privacyCentre() {
         }
       </section>
       <aside>
+        <section class="panel"><h2>What cannot be sent</h2>${ingressPanel()}</section>
         <section class="panel"><h2>On-device engine</h2>${enginePanel()}</section>
         <div class="section-label">Never leaves this device</div>
         ${LOCAL_ONLY.map((item) => `<article class="panel privacy-local"><b>${esc(item.label)}</b><p class="micro">${esc(item.detail)}</p></article>`).join("")}
@@ -1359,6 +1380,20 @@ function enginePanel() {
     <div class="note"><strong>What it cannot do</strong><ul class="micro">${ENGINE_LIMITS.map((limit) => `<li>${esc(limit)}</li>`).join("")}</ul></div>
     <div class="note"><strong>What the download costs</strong><ul class="micro">${WEIGHTS_LIMITS.map((limit) => `<li>${esc(limit)}</li>`).join("")}</ul></div>
     ${phase === "ready" && !state.engineVerifiedInFull ? `<p class="micro">These files were checked in full on an earlier visit, and this load took the browser's own copy for this site without reading all ${esc(String(state.engineInfo?.files ?? ""))} of them again. Any change to what Tera publishes changes the manifest, and the full check runs again.</p>` : ""}`;
+}
+
+// What the ingress gate refuses. Listed in the privacy centre so an owner can
+// see the rule before they trip it, rather than only after.
+function ingressPanel() {
+  return `<p>Everything else on this page is about what leaves. This is the one check on what comes in: a message carrying a secret is refused at the composer and is not minimised, parsed, shown to the on-device model, sent, or written to the log below.</p>
+    <div class="section-label">Refused outright</div>
+    ${Object.values(INGRESS_KINDS)
+      .map(
+        (kind) =>
+          `<article class="panel privacy-local"><b>${esc(kind.label)}</b><p class="micro">${esc(kind.detail)}</p></article>`,
+      )
+      .join("")}
+    <div class="note"><strong>What this check cannot do</strong><ul class="micro">${INGRESS_LIMITS.map((limit) => `<li>${esc(limit)}</li>`).join("")}</ul></div>`;
 }
 
 function codeTransparencyPanel() {
@@ -2361,6 +2396,15 @@ function bindForms() {
         showError(error);
         return;
       }
+      // Before minimisation, before the parser, before any engine. A refused
+      // message must not be minimised: minimising keeps the original in this
+      // page so the reply can be re-hydrated, and keeping it is the one thing
+      // that must not happen to a recovery phrase.
+      const verdict = inspectIngress(message);
+      if (!verdict.safe) {
+        refuseMessage(form, verdict);
+        return;
+      }
       const plan = planMessage(message, mode);
       // The side-by-side review is the point of the feature: the owner sees the
       // skeleton before it is sent, not after.
@@ -2414,6 +2458,28 @@ function reviewMessage(plan) {
      <p class="micro">Placeholders remove the values, not the context. The model still sees what you are asking, and can infer a great deal from it. ${keep.length ? "" : "Tera and the model provider also see the network address this request came from."}</p>
      <div class="actions">${button("Send minimised", "minimise-send")}${button("Send as typed", "minimise-send-raw")}${button("Cancel", "close")}</div>`,
   );
+}
+
+/**
+ * Stop a message carrying a secret.
+ *
+ * The composer is cleared rather than left for the owner to clear, because the
+ * value of a recovery phrase sitting in a textarea is that the next thing to
+ * touch that box — an autofill, a screenshot, a support call over a shared
+ * screen — still has it. Nothing is pushed into the chat and nothing is written
+ * to the privacy log: an entry saying "a recovery phrase was blocked at 14:32"
+ * is a smaller secret than the phrase, but it is still one, and the log is
+ * exportable.
+ */
+function refuseMessage(form, verdict) {
+  const box = form?.querySelector('[name="message"]');
+  if (box) {
+    box.value = "";
+    box.focus();
+  }
+  state.ingress = verdict;
+  state.notice = "";
+  render();
 }
 
 // What `parse.js` builds its answers out of. Every entry is the live export, so
@@ -3105,6 +3171,10 @@ document.addEventListener("click", async (event) => {
       }
       state.engineVerifiedInFull = false;
       state.notice = "The on-device model was removed from this browser.";
+      render();
+    }
+    if (action === "ingress-dismiss") {
+      state.ingress = null;
       render();
     }
     if (action === "minimise-review-toggle") state.minimiseReview = target.checked;

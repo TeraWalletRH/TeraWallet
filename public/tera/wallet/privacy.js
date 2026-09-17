@@ -21,6 +21,11 @@ export const LOCAL_ONLY = [
       "With prompt minimisation on, addresses, references, contact details and figures are replaced with placeholders before an assistant message is sent. The original text and the mapping back to it stay in this page, and the reply is re-hydrated here.",
   },
   {
+    label: "Recovery phrases, private keys and credentials",
+    detail:
+      "A message carrying one is refused at the composer before anything else runs. It is not minimised, not parsed, not shown to the on-device model, not sent, and not written to the log below — a record that a phrase was blocked is a smaller secret than the phrase, but it is still one.",
+  },
+  {
     label: "Questions answered from this wallet's own code",
     detail:
       "Questions with an exact answer in the wallet's source — what each check evaluates, what a wipe cannot reach, what a relay learns — are answered from that source on this device. No model runs and no request is built, and the answer names the file it came from so you can read it yourself.",
@@ -60,20 +65,30 @@ export const LOCAL_ONLY = [
 // request can carry; the live log records the field names actually present.
 export const REQUESTS = [
   {
-    id: "bridge-quote", method: "POST", path: "/api/bridge/quote",
-    match: path => path === "/api/bridge/quote", label: "Bridge quote",
+    id: "bridge-quote",
+    method: "POST",
+    path: "/api/bridge/quote",
+    match: (path) => path === "/api/bridge/quote",
+    label: "Bridge quote",
     purpose: "Quote a USDG bridge to the destination address you entered.",
-    fields: ["ownerAddress", "recipient", "amount", "destinationChainId"], identifies: true,
+    fields: ["ownerAddress", "recipient", "amount", "destinationChainId"],
+    identifies: true,
     processors: ["Tera service", "Relay"],
-    retention: "Relay receives the source and destination addresses and amount. Bridge tracking is saved locally in the encrypted vault when unlocked.",
+    retention:
+      "Relay receives the source and destination addresses and amount. Bridge tracking is saved locally in the encrypted vault when unlocked.",
     withheld: ["Assistant messages", "Session token", "Private keys", "Portfolio"],
   },
   {
-    id: "bridge-status", method: "GET", path: "/api/bridge/status/{reference}",
-    match: path => /^\/api\/bridge\/status\/0x[\da-f]{64}$/i.test(path), label: "Bridge delivery",
+    id: "bridge-status",
+    method: "GET",
+    path: "/api/bridge/status/{reference}",
+    match: (path) => /^\/api\/bridge\/status\/0x[\da-f]{64}$/i.test(path),
+    label: "Bridge delivery",
     purpose: "Check destination delivery or refund using the Relay request reference.",
-    fields: ["requestId (in the request path)"], identifies: true,
-    processors: ["Tera service", "Relay"], retention: "Relay looks up its bridge record using this reference.",
+    fields: ["requestId (in the request path)"],
+    identifies: true,
+    processors: ["Tera service", "Relay"],
+    retention: "Relay looks up its bridge record using this reference.",
     withheld: ["Assistant messages", "Session token", "Private keys"],
   },
   {
@@ -233,7 +248,12 @@ export const REQUESTS = [
     processors: ["Tera service", "Assistant model provider"],
     retention:
       "The prompt text reaches the model provider. Prompt minimisation removes contact details, references and call data from it, but keeps the recipient address and the figure, because Tera reads those out of the text to build the transaction. The address and optional session token stay with Tera for scope checks and the resulting intent record.",
-    withheld: ["Balances", "Local transaction records", "Private keys", "Session token from the model provider"],
+    withheld: [
+      "Balances",
+      "Local transaction records",
+      "Private keys",
+      "Session token from the model provider",
+    ],
   },
   {
     id: "retention-delete",
@@ -245,7 +265,8 @@ export const REQUESTS = [
     fields: ["ownerAddress (in the request path)", "wallet signature", "timestamp"],
     identifies: true,
     processors: ["Tera service"],
-    retention: "Stored assistant proposal fields are redacted; confirmed transaction receipts remain for audit history.",
+    retention:
+      "Stored assistant proposal fields are redacted; confirmed transaction receipts remain for audit history.",
     withheld: ["Private keys", "Seed phrase"],
   },
   {
@@ -254,7 +275,8 @@ export const REQUESTS = [
     path: "/api/privacy/audit",
     match: (path) => path.startsWith("/api/privacy/audit"),
     label: "Privacy audit report",
-    purpose: "Retrieve a machine-readable record of data categories collected, retention periods, processors, and deletion status.",
+    purpose:
+      "Retrieve a machine-readable record of data categories collected, retention periods, processors, and deletion status.",
     fields: [],
     identifies: false,
     processors: ["Tera service"],

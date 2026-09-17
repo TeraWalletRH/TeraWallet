@@ -1028,3 +1028,10 @@ h1:focus {
 .chat-bubble.sourced > .chat-role {
   color: #c2cbb5;
 }
+
+/* A refused message is not a warning about something that happened; it is a
+   statement that nothing happened. It sits where the reply would have been. */
+.note-refused {
+  border-left: 2px solid #945f3d;
+  padding-left: 12px;
+}

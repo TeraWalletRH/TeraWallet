@@ -16,7 +16,8 @@
     "push:all": "git push origin main && python3 scripts/sync-public.py",
     "build:wallet": "vite build --config vite.wallet.config.ts",
     "build:manifest": "node scripts/build-manifest.mjs",
-    "build:model": "node scripts/build-model.mjs"
+    "build:model": "node scripts/build-model.mjs",
+    "build:wordlist": "node scripts/build-wordlist.mjs"
   },
   "overrides": {
     "rolldown": "1.2.1"
