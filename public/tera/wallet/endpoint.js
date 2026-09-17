@@ -117,6 +117,128 @@ export async function probeEndpoint(rpc, expectedChainId) {
   return id;
 }
 
+// ---------------------------------------------------------------------------
+// Reading more than one account without handing one party the whole portfolio.
+//
+// A single endpoint that answers for every account the owner switches between
+// learns that those accounts are one person: same connection, same session, same
+// moment. Splitting the reads across endpoints run by different operators means
+// no single operator sees the set.
+//
+// What this does not do:
+//
+//   It does not hide the owner from the operator it assigns them to. That
+//   operator sees that account, every asset read for it, and the network address
+//   the read came from. The gain is that it sees one account, not all of them.
+//
+//   It does nothing against operators who compare notes. The network address is
+//   the same for every read this browser makes, so two operators who pool what
+//   they hold can rejoin the accounts. This is protection against one party, not
+//   against collusion.
+//
+//   It does not reach the signing path. Transactions, gas estimation and receipt
+//   checks still go through the wallet extension's own provider, which sees every
+//   account regardless of what is configured here.
+// ---------------------------------------------------------------------------
+
+/** What an owner is owed before a pool is described to them as isolation. */
+export const POOL_LIMITS = [
+  "Each account is read by one operator, and that operator sees every asset you hold on it.",
+  "Every read comes from the same network address, so operators who compare notes can rejoin your accounts.",
+  "Signing, gas estimation and receipts still go through your wallet extension's provider, which sees every account.",
+  "Changing the pool reassigns accounts. An endpoint that has already answered for an account does not forget it.",
+];
+
+export const LOCAL_PARTY = "this machine";
+
+/**
+ * Which operator an endpoint belongs to.
+ *
+ * Two hosts under one registrable domain are one company, and treating them as
+ * two would offer isolation that does not exist. The last two labels are a rough
+ * stand-in for that domain: it is wrong for multi-part suffixes like `co.uk`,
+ * where it merges operators that are in fact separate. That error understates
+ * how much isolation the pool provides, which is the only direction this is
+ * allowed to be wrong in.
+ */
+export function partyOf(url) {
+  const { host, local } = describeEndpoint(url);
+  if (!host) return "";
+  if (local) return LOCAL_PARTY;
+  const labels = host.split(":")[0].split(".").filter(Boolean);
+  return labels.length <= 2 ? labels.join(".") : labels.slice(-2).join(".");
+}
+
+/**
+ * Build a pool from what the owner typed, one endpoint per line.
+ *
+ * Endpoints are grouped by operator rather than listed, because the operator is
+ * the unit that learns something. Three URLs at one company are one party and
+ * are reported as one, so the panel can never say "three endpoints" about a
+ * arrangement that isolates nothing.
+ */
+export function createPool(values) {
+  const list = (Array.isArray(values) ? values : String(values ?? "").split(/[\n,]/))
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+  const parties = [];
+  const seen = new Map();
+  for (const value of list) {
+    const url = normaliseEndpoint(value);
+    const party = partyOf(url);
+    if (seen.has(party)) {
+      // Kept, so the owner's list round-trips, but it answers for nothing: a
+      // second URL at the same company is the same company.
+      seen.get(party).extras.push(url);
+      continue;
+    }
+    const entry = { party, url, extras: [], ...describeEndpoint(url) };
+    seen.set(party, entry);
+    parties.push(entry);
+  }
+  return parties;
+}
+
+/** Every URL in the pool, in the order the owner gave them. */
+export const poolUrls = (pool) => pool.flatMap((entry) => [entry.url, ...entry.extras]);
+
+// FNV-1a. The assignment only has to be stable and evenly spread; it is not a
+// secret, and the operator it selects already knows the account it is reading.
+function hash(value) {
+  let h = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    h ^= value.charCodeAt(index);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/**
+ * The operator that reads for one account.
+ *
+ * Deterministic, so an account goes to the same operator on every refresh and on
+ * every reload. Choosing at random per read would spread every account across
+ * the whole pool within a session, which is the opposite of what this is for.
+ */
+export function assignEndpoint(pool, owner) {
+  if (!Array.isArray(pool) || !pool.length) return null;
+  const key = String(owner ?? "").toLowerCase();
+  if (!key) return pool[0];
+  return pool[hash(key) % pool.length];
+}
+
+/** What the panel says about a pool, counted rather than asserted. */
+export function poolSummary(pool) {
+  const parties = Array.isArray(pool) ? pool.length : 0;
+  return {
+    parties,
+    endpoints: Array.isArray(pool) ? poolUrls(pool).length : 0,
+    // One operator is not isolation, and must never be presented as any.
+    isolating: parties > 1,
+    localOnly: parties > 0 && pool.every((entry) => entry.local),
+  };
+}
+
 /**
  * Read one balance. Mirrors exactly what the wallet asks its own provider for,
  * so the number shown does not depend on where it was read from.

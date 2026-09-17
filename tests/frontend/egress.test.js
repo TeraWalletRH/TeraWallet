@@ -237,3 +237,83 @@ test("the export records the relay as seeing your address and not your data", ()
   assert.equal(relay.contactedThisSession, true);
   assert.equal(relay.countedByThisPage, true);
 });
+
+// Per-account read isolation: one row per operator, and copy that never claims
+// more than the arrangement actually delivers.
+const poolConfig = {
+  ...config,
+  balanceEndpoints: [
+    { party: "one.test", host: "rpc.one.test", local: false },
+    { party: "two.test", host: "rpc.two.test", local: false },
+  ],
+};
+
+test("a single endpoint keeps the sentence it always had", () => {
+  const list = parties({ ...config, balanceEndpointHost: "node.example.test" });
+  const own = row(list, "owner-endpoint");
+  assert.equal(own.name, "Your own endpoint, for balance reads");
+  assert.ok(own.learns.some((item) => /including ones you only look at/.test(item)));
+  // With one operator the panel must point at the fix rather than imply a split.
+  assert.match(own.control, /Adding a second operator/);
+});
+
+test("a pool is listed one row per operator", () => {
+  const list = parties(poolConfig).filter((entry) => entry.owned);
+  assert.equal(list.length, 2);
+  assert.deepEqual(
+    list.map((entry) => entry.host),
+    ["rpc.one.test", "rpc.two.test"],
+  );
+  for (const entry of list) {
+    assert.match(entry.name, /1 of 2|2 of 2/);
+    assert.ok(entry.learns.some((item) => /and no others/.test(item)));
+    assert.ok(entry.withheld.some((item) => /other endpoints in your pool/.test(item)));
+  }
+});
+
+test("a pool never claims protection against operators who compare notes", () => {
+  const own = parties(poolConfig).find((entry) => entry.owned);
+  assert.match(own.control, /same network address/i);
+  assert.match(own.control, /rejoin/i);
+});
+
+test("a local endpoint is not described as learning your network address", () => {
+  const local = parties({
+    ...config,
+    balanceEndpoints: [{ party: "this machine", host: "localhost:8545", local: true }],
+  }).find((entry) => entry.owned);
+  assert.ok(local.learns.some((item) => /running on this machine/.test(item)));
+  assert.ok(!local.learns.some((item) => /^The network address you are on$/.test(item)));
+});
+
+test("reads are counted against the operator that actually answered", () => {
+  const list = egressStatus(parties(poolConfig), {
+    log: [],
+    balanceReads: { "one.test": 4 },
+  });
+  const [first, second] = list.filter((entry) => entry.owned);
+  assert.equal(first.requests, 4);
+  assert.equal(first.seesYouNow, true);
+  // The operator that answered for no account must not be shown as having seen one.
+  assert.equal(second.requests, 0);
+  assert.equal(second.seesYouNow, false);
+  assert.match(second.note, /no balance has been read/);
+});
+
+test("the wallet's own provider still loses the balance line once a pool exists", () => {
+  const wallet = row(parties(poolConfig), "wallet-rpc");
+  assert.ok(!wallet.learns.some((item) => /whose balance you view/.test(item)));
+  assert.ok(wallet.withheld.some((item) => /balances you read/i.test(item)));
+});
+
+test("the export lists every operator separately", () => {
+  const list = egressStatus(parties(poolConfig), { log: [], balanceReads: { "two.test": 2 } });
+  const exported = exportableEgress(list).parties.filter((entry) =>
+    /rpc\.(one|two)\.test/.test(entry.host),
+  );
+  assert.equal(exported.length, 2);
+  assert.deepEqual(
+    exported.map((entry) => entry.contactedThisSession),
+    [false, true],
+  );
+});
