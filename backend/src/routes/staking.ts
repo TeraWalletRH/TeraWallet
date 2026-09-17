@@ -90,6 +90,36 @@ router.get("/api/staking/config", (_req: Request, res: Response) => {
   });
 });
 
+router.get("/api/staking/epochs", async (_req, res) => {
+  if (!pool) { res.status(503).json({ success:false, error:'Staking ledger is unavailable.' }); return; }
+  try {
+    const result=await pool.query("SELECT id,token_address,pool_address,funded_amount,starts_at,ends_at,reward_rate_per_second,total_active_stake,distributed_rewards,status FROM staking_epochs WHERE status IN ('active','paused') ORDER BY starts_at DESC");
+    res.json({success:true,epochs:result.rows});
+  } catch { res.status(503).json({success:false,error:'Unable to read staking epochs.'}); }
+});
+
+/** Exact TERA transfer the wallet should review and submit when staking. */
+router.post("/api/staking/prepare-deposit", (req, res) => {
+  try {
+    if (!configured()) throw new Error('Staking is unavailable.');
+    const amount=base(req.body?.amount,'amount'); if(amount<=0n) throw new Error('amount must be positive.');
+    const data=encodeFunctionData({abi:erc20Abi,functionName:'transfer',args:[poolAddress()!,amount]});
+    res.json({success:true,preparedTransaction:{to:getAddress(env.teraTokenAddress),data,value:'0x0',chainId:env.rhcChainId},poolAddress:poolAddress(),amount:amount.toString()});
+  } catch(error) { res.status(422).json({success:false,error:error instanceof Error?error.message:'Unable to prepare deposit.'}); }
+});
+
+router.get("/api/staking/payouts/:walletAddress", async (req, res) => {
+  const wallet=String(req.params.walletAddress); if(!isAddress(wallet)){res.status(400).json({success:false,error:'walletAddress must be a valid EVM address.'});return;}
+  if(!pool){res.status(503).json({success:false,error:'Staking ledger is unavailable.'});return;}
+  try { const result=await pool.query("SELECT id,epoch_id,kind,principal_amount,reward_amount,status,tx_hash,failure_reason,created_at,updated_at,confirmed_at FROM staking_payouts WHERE LOWER(wallet_address)=LOWER($1) ORDER BY created_at DESC",[wallet]); res.json({success:true,payouts:result.rows}); }
+  catch {res.status(503).json({success:false,error:'Unable to read payout history.'});}
+});
+
+router.post("/api/staking/payout-authorization", (req,res) => {
+  try { const kind=req.body?.kind as 'claim'|'unstake',wallet=typeof req.body?.walletAddress==='string'&&isAddress(req.body.walletAddress)?getAddress(req.body.walletAddress):null,epochId=String(req.body?.epochId??''),key=String(req.body?.idempotencyKey??''),amount=kind==='unstake'?base(req.body?.amount,'amount'):0n; if(!wallet||!epochId||!key||!['claim','unstake'].includes(kind)) throw new Error('Valid payout details are required.'); res.json({success:true,message:payoutAuthorizationMessage(kind,wallet,epochId,amount.toString(),key)}); }
+  catch(error){res.status(422).json({success:false,error:error instanceof Error?error.message:'Unable to prepare authorization.'});}
+});
+
 router.post("/api/admin/staking/login", async (req: Request, res: Response) => {
   const provided = typeof req.body?.passcode === "string" ? req.body.passcode : "";
   const expected = env.masterAdminKey;
