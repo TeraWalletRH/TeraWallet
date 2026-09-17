@@ -330,6 +330,9 @@ export function summarize(log) {
       .length,
     // Values replaced on this device before the request was built.
     minimised: log.filter((entry) => entry.minimised).length,
+    // Sealed to Tera's gateway key and sent via a relay, so Tera answered them
+    // without learning the network address they came from.
+    oblivious: log.filter((entry) => entry.oblivious).length,
     replaced: log.reduce((total, entry) => total + (entry.replaced || 0), 0),
     fields: new Set(log.flatMap((entry) => entry.sent)).size,
   };
@@ -339,7 +342,7 @@ export function exportable(log, destination) {
   return {
     generatedAt: new Date().toISOString(),
     destination,
-    note: "Field names only. This page never records the values that were sent.",
+    note: "Field names only. This page never records the values that were sent. A request marked as sealed reached Tera through a relay, so Tera read its contents without learning the network address it came from.",
     requests: log.map((entry) => ({
       at: new Date(entry.at).toISOString(),
       request: entry.label,
@@ -348,6 +351,8 @@ export function exportable(log, destination) {
       fieldsSent: entry.sent,
       simulated: Boolean(entry.simulated),
       minimisedBeforeSending: Boolean(entry.minimised),
+      sealedThroughRelay: Boolean(entry.oblivious),
+      ...(entry.oblivious ? { relayHost: entry.relayHost } : {}),
       valuesReplacedOnDevice: entry.replaced || 0,
       processors: entry.processors,
       retention: entry.retention,

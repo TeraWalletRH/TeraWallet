@@ -30,7 +30,19 @@ export async function serveSitePage(pathname: string): Promise<Response> {
       explorerUrl: import.meta.env["VITE_EXPLORER_URL"] || "https://robinhoodchain.blockscout.com",
       policySignerAddress: import.meta.env["VITE_POLICY_SIGNER_ADDRESS"] || "",
       policyBundleUrl: import.meta.env["VITE_POLICY_BUNDLE_URL"] || "",
-      policyBundleMaxAgeSeconds: Number(import.meta.env["VITE_POLICY_BUNDLE_MAX_AGE_SECONDS"] || 86400),
+      policyBundleMaxAgeSeconds: Number(
+        import.meta.env["VITE_POLICY_BUNDLE_MAX_AGE_SECONDS"] || 86400,
+      ),
+      // Oblivious HTTP. Unset means the wallet connects to Tera directly, which
+      // is what it has always done. The relay must be operated by someone other
+      // than Tera: the wallet refuses to run when it is not, because one party
+      // holding both the address and the request is the thing this prevents.
+      ohttpRelayUrl: import.meta.env["VITE_OHTTP_RELAY_URL"] || "",
+      ohttpKeyConfigUrl: import.meta.env["VITE_OHTTP_KEY_CONFIG_URL"] || "",
+      ohttpPaths: (import.meta.env["VITE_OHTTP_PATHS"] || "/api/agent/chat,/api/agent/propose")
+        .split(",")
+        .map((path: string) => path.trim())
+        .filter(Boolean),
     };
     const json = JSON.stringify(configuration).replace(/</g, "\\u003c");
     html = html.replace(

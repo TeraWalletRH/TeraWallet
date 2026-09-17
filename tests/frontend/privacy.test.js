@@ -126,6 +126,7 @@ test("summarize counts identifying requests and model-provider requests", () => 
     identifying: 1,
     toModelProvider: 1,
     minimised: 0,
+    oblivious: 0,
     replaced: 0,
     fields: 3,
   });

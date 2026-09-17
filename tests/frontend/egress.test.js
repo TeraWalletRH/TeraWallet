@@ -176,3 +176,64 @@ test("the export names the owner's endpoint by host only", () => {
   assert.equal(own.seesYourNetworkAddress, true);
   assert.equal(own.countedByThisPage, true);
 });
+
+// The relay is only a privacy gain because it is a different party from the
+// gateway. These check that the panel says so, and that it never claims the
+// whole page is covered when only some routes are.
+const sealedConfig = {
+  ...config,
+  ohttpRelayHost: "relay.example.test",
+  ohttpPaths: ["/api/agent/chat", "/api/agent/propose"],
+};
+
+test("no relay configured means no relay row, and Tera still sees your address", () => {
+  const list = parties(config);
+  assert.equal(row(list, "ohttp-relay"), undefined);
+  assert.ok(row(list, "tera-service").learns.includes("The network address you are on"));
+});
+
+test("a configured relay is listed as a party that sees you but cannot read you", () => {
+  const relay = row(parties(sealedConfig), "ohttp-relay");
+  assert.equal(relay.reach, "direct");
+  assert.equal(relay.host, "relay.example.test");
+  assert.ok(relay.learns.some((item) => /network address/i.test(item)));
+  assert.ok(relay.withheld.some((item) => /sealed to Tera's key/i.test(item)));
+  // The dependency on separate operators has to be stated, not assumed.
+  assert.match(relay.control, /different companies/i);
+});
+
+test("sealing some routes never becomes a claim that Tera stopped seeing you", () => {
+  const service = row(parties(sealedConfig), "tera-service");
+  // The unqualified sentence must be gone, and the qualified one present.
+  assert.ok(!service.learns.includes("The network address you are on"));
+  assert.ok(service.learns.some((item) => /except the sealed ones/i.test(item)));
+  // And it must still say a wallet address identifies the owner regardless.
+  assert.match(service.control, /still tells it who you are/i);
+});
+
+test("the relay is counted from the requests that actually went through it", () => {
+  const log = [
+    { ...describeRequest("/api/agent/chat", { message: "hi" }), oblivious: true },
+    describeRequest("/api/assets"),
+  ];
+  const list = egressStatus(parties(sealedConfig), { log, owner });
+  assert.equal(row(list, "ohttp-relay").requests, 1);
+  assert.equal(row(list, "ohttp-relay").seesYouNow, true);
+  assert.equal(row(list, "tera-service").requests, 2);
+});
+
+test("a relay contacted for nothing is reported as contacted for nothing", () => {
+  const list = egressStatus(parties(sealedConfig), { log: [describeRequest("/api/assets")] });
+  assert.equal(row(list, "ohttp-relay").requests, 0);
+  assert.equal(row(list, "ohttp-relay").seesYouNow, false);
+});
+
+test("the export records the relay as seeing your address and not your data", () => {
+  const list = egressStatus(parties(sealedConfig), {
+    log: [{ ...describeRequest("/api/agent/chat", { message: "hi" }), oblivious: true }],
+  });
+  const relay = exportableEgress(list).parties.find((entry) => entry.host === "relay.example.test");
+  assert.equal(relay.seesYourNetworkAddress, true);
+  assert.equal(relay.contactedThisSession, true);
+  assert.equal(relay.countedByThisPage, true);
+});

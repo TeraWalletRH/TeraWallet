@@ -13,6 +13,31 @@ export const env = {
   policySignerAddress: process.env.POLICY_SIGNER_ADDRESS ?? "",
   policyBundleUrl: process.env.POLICY_BUNDLE_URL ?? "",
   policyBundleMaxAgeSeconds: Number(process.env.POLICY_BUNDLE_MAX_AGE_SECONDS ?? 86400),
+  // Oblivious HTTP gateway. Unset means off: see backend/src/routes/ohttp.ts for
+  // why an unconfigured gateway must not invent a key at boot.
+  //
+  // These are read when they are used rather than when this module is imported.
+  // The rest of the file is read at import because nothing imports it before
+  // dotenv runs; the gateway is different, because getting this wrong disables
+  // it silently and the wallet would then be told a direct request was sealed.
+  get ohttpPrivateKey(): string {
+    return process.env.OHTTP_PRIVATE_KEY ?? "";
+  },
+  get ohttpKeyId(): number {
+    return Number(process.env.OHTTP_KEY_ID ?? 1);
+  },
+  get ohttpAllowedPaths(): string[] {
+    return (process.env.OHTTP_ALLOWED_PATHS ?? "")
+      .split(",")
+      .map((path) => path.trim())
+      .filter(Boolean);
+  },
+  // Where the gateway sends the request it just opened. Loopback by default, so
+  // the inner route sees no client address at all; set it explicitly only when
+  // the gateway and the API are deployed as separate services.
+  get ohttpDispatchOrigin(): string {
+    return process.env.OHTTP_DISPATCH_ORIGIN ?? `http://127.0.0.1:${process.env.PORT ?? 3001}`;
+  },
 } as const;
 
 export const isProduction = env.nodeEnv === "production";
