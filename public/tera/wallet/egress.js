@@ -226,6 +226,30 @@ export function parties(config = {}) {
       unobservable: true,
     },
     {
+      // The single most privileged observer of anything the owner approves, and
+      // until now the one party this panel never named. It is listed even though
+      // this page can neither reach it nor count it, because leaving it out made
+      // the list read as though the chain ordered itself.
+      id: "sequencer",
+      name: `${config.chainName || "Robinhood Chain"} sequencer`,
+      host: config.sequencerHost || "Reached by your wallet, not by this page",
+      reach: "wallet",
+      learns: [
+        "Every transaction you approve, in full, before anyone else sees it",
+        "Where it lands in the order, which it decides",
+        "That your transactions come from the same account, over time",
+      ],
+      withheld: [
+        "Assistant messages",
+        "Private keys",
+        "Your private policy presets",
+        "Balances you only looked at",
+      ],
+      control:
+        "Nothing in this wallet routes around it: it is how this chain is ordered. There is no public queue here, which stops strangers front-running you and does not stop this party doing it. MEV-protection services are Ethereum mainnet infrastructure and do not serve this chain, so none is offered. Whether it sees your network address or your wallet provider's depends on which provider your wallet uses, and this page cannot tell — so it is listed here as though it sees yours.",
+      unobservable: true,
+    },
+    {
       id: "model-provider",
       name: "Assistant model provider",
       host: "Reached by Tera's server",

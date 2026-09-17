@@ -1,8 +1,8 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-46f4fc4c2c0d",
-  "builtAt": "2026-09-17T08:47:18.865Z",
+  "release": "r-b58cc0027c62",
+  "builtAt": "2026-09-17T10:14:02.625Z",
   "algorithm": "sha256",
   "base": "/tera/wallet/",
   "note": "Hashes of the wallet modules this site serves. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
@@ -14,13 +14,13 @@
     },
     {
       "path": "app.js",
-      "hash": "sha256-vZ8pCVclvJfNH3CCRspM1GEmR1z6jWP4nSnzT0Gh3NY=",
-      "bytes": 141711
+      "hash": "sha256-0ZuBFIABHxCcw67v4puR5MHXujqK6IwPHfa9tTiYKAI=",
+      "bytes": 157524
     },
     {
       "path": "boundary.js",
-      "hash": "sha256-eulNL53ZqYhmuEnZsDJnkqABe7f6IaUMdWtuIPdycCc=",
-      "bytes": 4964
+      "hash": "sha256-fjYGPM1iDMvYHZ61kYNHzrp2xrNJaplHvYG+MeFOH4A=",
+      "bytes": 5441
     },
     {
       "path": "bridge.js",
@@ -44,13 +44,23 @@
     },
     {
       "path": "egress.js",
-      "hash": "sha256-3Nj9E6KL/d3/Tt3uQz4RliC+5/U3VI5y+ija/7/znCo=",
-      "bytes": 16424
+      "hash": "sha256-lSm+TGqkrrUQDBnKbBmGyVxPpRAmoQwz2hp8hOSqlO4=",
+      "bytes": 17852
     },
     {
       "path": "endpoint.js",
       "hash": "sha256-a6P4VJm+wGvcKNrC8UdQzqu6ynJ8PHC018mJ0h9USjE=",
       "bytes": 10526
+    },
+    {
+      "path": "engine.js",
+      "hash": "sha256-HnzpGyFeUDxrHixnDbll3FFhNNrnkSusIqmJ9Zvynh0=",
+      "bytes": 15186
+    },
+    {
+      "path": "engine.worker.js",
+      "hash": "sha256-98BWuJH+MSIvY70T2jZXIOZ0wU6OStpyOtbozSOjNI0=",
+      "bytes": 5099
     },
     {
       "path": "history.js",
@@ -84,8 +94,8 @@
     },
     {
       "path": "privacy.js",
-      "hash": "sha256-P1y41+E6B35M3q7VsYApn9yqJDJXQdVmXg4EAeUYdRc=",
-      "bytes": 14948
+      "hash": "sha256-6s1nIfLoYv3tTb/y4YK+wgiIs67v+Z4C7LbAmx8AYvw=",
+      "bytes": 15513
     },
     {
       "path": "recovery.js",
@@ -108,15 +118,20 @@
       "bytes": 7225
     },
     {
+      "path": "submission.js",
+      "hash": "sha256-XWXdDT/N1dZISGzvqN39Ywn7VriRISxdcAB91ab/XBw=",
+      "bytes": 8282
+    },
+    {
       "path": "vault.js",
       "hash": "sha256-7hFV+o7jn+PkNbbBcP4MvY/52EnuYItD2J5P+i/hjPc=",
       "bytes": 5802
     },
     {
       "path": "wipe.js",
-      "hash": "sha256-qJaXWt2PyFUPJlh5rrnDgF2Om/mtwMl5GHOAY25vYx8=",
-      "bytes": 5220
+      "hash": "sha256-tAKOMu76OlT6juzYIDyMIJl7TdcortQAC812ZHVAmjo=",
+      "bytes": 6930
     }
   ],
-  "filesHash": "sha256-RvT8TCwNOwueas2/TMu7g2NfWk9jCBbAcXi1OnljXJM="
+  "filesHash": "sha256-tYzAAnxiVDO3gqkgtZk3r4sECuZPsjcrGteO3rmkQIM="
 }

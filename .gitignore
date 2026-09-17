@@ -9,6 +9,7 @@ backend/.env
 # Dependencies
 node_modules/
 public/tera/connect/
+public/tera/model/
 bun.lockb
 
 # Build outputs
@@ -59,3 +60,4 @@ TECH_UPDATES.md
 codex-session*.md
 new-TU.md
 latest tu.md
+here.md

@@ -46,6 +46,13 @@ export const CATEGORIES = [
     match: (key) => ACCOUNT_KEY.test(key) && !SUFFIXED.test(key),
   },
   {
+    id: "engine",
+    label: "On-device model check",
+    detail:
+      "The record that this browser already verified the model files. The weights themselves are in cache storage and are removed with them.",
+    match: (key) => key === "tera-engine-verified-v1",
+  },
+  {
     id: "demo",
     label: "Demo dashboard state",
     detail: "Sample data from the public demo dashboard.",
@@ -135,6 +142,44 @@ export function wipe(storages) {
   }
   const after = findArtefacts(storages);
   return { removed: before.total - after.length, remaining: after.length, plan: before };
+}
+
+/**
+ * Cache storage this site owns. The on-device model's weights live here rather
+ * than in `localStorage`, so the prefix scan above cannot see them and a wipe
+ * that ignored them would leave 168MB of this site's data on the disk while
+ * reporting the browser clear.
+ *
+ * transformers.js names its cache; the second entry is this wallet's own, kept
+ * so a future cache added here is removed without anyone having to remember to
+ * come back and update this list.
+ */
+export const CACHES = ["transformers-cache", "tera-model-v1"];
+
+/**
+ * Remove the cached model. Separate from `wipe` because the Cache API is async
+ * and `wipe` is not: making the whole control async to reach one extra store
+ * would have slowed the path that matters most when it is used in a hurry.
+ */
+export async function wipeCaches(cacheStorage) {
+  if (!cacheStorage) return { removed: 0, remaining: 0 };
+  let removed = 0;
+  for (const name of CACHES) {
+    try {
+      if (await cacheStorage.delete(name)) removed += 1;
+    } catch {
+      /* Counted as remaining by the rescan below. */
+    }
+  }
+  let remaining = 0;
+  try {
+    const left = await cacheStorage.keys();
+    remaining = left.filter((name) => CACHES.includes(name)).length;
+  } catch {
+    /* A storage that will not list is reported as nothing remaining, which the
+       caller shows alongside the localStorage rescan rather than on its own. */
+  }
+  return { removed, remaining };
 }
 
 // What a wipe cannot reach. Shown next to the control, because a wipe that

@@ -39,7 +39,12 @@ import {
   recoverFromShares,
   passphraseIssue,
 } from "./recovery.js";
-import { plan as wipePlan, wipe as wipeStorages, LIMITS as WIPE_LIMITS } from "./wipe.js";
+import {
+  plan as wipePlan,
+  wipe as wipeStorages,
+  wipeCaches,
+  LIMITS as WIPE_LIMITS,
+} from "./wipe.js";
 import { bridgeView, bridgeFormInput, checkBridgeQuote, sendBridge } from "./bridge.js";
 import {
   LOCAL_ONLY,
@@ -63,6 +68,7 @@ import {
   EndpointError,
 } from "./endpoint.js";
 import { parties, egressStatus, egressSummary, exportableEgress, REACH } from "./egress.js";
+import { describeSubmission } from "./submission.js";
 import {
   minimise,
   rehydrate,
@@ -86,6 +92,19 @@ import {
 } from "./boundary.js";
 import { describeTransaction } from "./preview.js";
 import { createOhttpFetcher, LIMITS as OHTTP_LIMITS } from "./ohttp.js";
+import {
+  DEVICE,
+  SERVICE,
+  ENGINES,
+  LIMITS as ENGINE_LIMITS,
+  WEIGHTS_LIMITS,
+  capabilities as engineCapabilities,
+  route as routeMessage,
+  downloadPlan,
+  attribution,
+  buildTurn,
+  screenReply,
+} from "./engine.js";
 import {
   ACTIONS,
   createPreset,
@@ -166,6 +185,112 @@ const api = async (path, body, options = {}) => {
     throw new ApiError(payload.error || "Blocked by a check in the demo.", payload, 422);
   return payload;
 };
+// The on-device engine's side of the worker boundary.
+//
+// It is deliberately not part of `api`. Everything that goes through `api` is a
+// request and is recorded as one; a turn answered here is not a request, and
+// giving it a row in the request log would be the clearest possible way to
+// misdescribe what happened. What the privacy centre records instead is that a
+// message was answered without one.
+const ENGINE_VERIFIED_KEY = "tera-engine-verified-v1";
+const engine = (() => {
+  let worker = null;
+  let sequence = 0;
+  const pending = new Map();
+
+  const spawn = () => {
+    if (worker) return worker;
+    worker = new Worker("/tera/wallet/engine.worker.js", { type: "module" });
+    worker.onmessage = ({ data }) => {
+      if (data.type === "progress") {
+        state.engineStatus = { phase: data.phase, loaded: data.loaded, total: data.total, file: data.file };
+        if (route() === "privacy" || route() === "agent") queueMicrotask(render);
+        return;
+      }
+      if (data.type === "verified") {
+        // Stored under the tera- prefix, so the wipe control's existing scan
+        // removes it and the next load checks every byte again.
+        try {
+          localStorage.setItem(ENGINE_VERIFIED_KEY, data.filesHash);
+        } catch {
+          /* Without storage the check simply runs in full every time. */
+        }
+        state.engineVerifiedInFull = true;
+        return;
+      }
+      if (data.type === "ready") {
+        state.engineInfo = { model: data.model, revision: data.revision, files: data.files };
+        return;
+      }
+      const entry = pending.get(data.id);
+      if (!entry) return;
+      pending.delete(data.id);
+      if (data.type === "failed") entry.reject(new Error(data.message));
+      else entry.resolve(data);
+    };
+    worker.onerror = (event) => {
+      const message = event.message || "The on-device engine could not start.";
+      for (const [, entry] of pending) entry.reject(new Error(message));
+      pending.clear();
+      state.engineStatus = { phase: "failed", loaded: 0, total: 0, file: "" };
+      state.engineError = message;
+    };
+    return worker;
+  };
+
+  const send = (type, payload = {}) =>
+    new Promise((resolve, reject) => {
+      const id = `engine-${++sequence}`;
+      pending.set(id, { resolve, reject });
+      spawn().postMessage({ id, type, ...payload });
+    });
+
+  return {
+    get ready() {
+      return state.engineStatus.phase === "ready";
+    },
+    async prepare() {
+      if (this.ready) return;
+      state.engineError = "";
+      state.engineStatus = { phase: "verify", loaded: 0, total: 0, file: "" };
+      render();
+      let known = "";
+      try {
+        known = localStorage.getItem(ENGINE_VERIFIED_KEY) || "";
+      } catch {
+        /* No storage means no remembered check, which is the safe direction. */
+      }
+      try {
+        await send("prepare", { known });
+        state.engineStatus = { phase: "ready", loaded: 0, total: 0, file: "" };
+      } catch (error) {
+        state.engineStatus = { phase: "failed", loaded: 0, total: 0, file: "" };
+        state.engineError = errorMessage(error);
+        throw error;
+      } finally {
+        render();
+      }
+    },
+    async ask(message) {
+      const { text } = await send("ask", { turn: buildTurn(message) });
+      return text;
+    },
+    async unload() {
+      if (!worker) return;
+      try {
+        await send("unload");
+      } catch {
+        /* A worker that will not unload is torn down below regardless. */
+      }
+      worker.terminate();
+      worker = null;
+      pending.clear();
+      state.engineStatus = { phase: "idle", loaded: 0, total: 0, file: "" };
+      state.engineInfo = null;
+    },
+  };
+})();
+
 const app = document.getElementById("wallet-app");
 const esc = (value) =>
   String(value ?? "").replace(
@@ -222,6 +347,13 @@ const state = {
   vaultRetentionDays: 30,
   minimise: true,
   minimiseReview: true,
+  // Which engine answers a question. The on-device engine is opt-in because it
+  // costs a large download; nothing is pre-fetched on the owner's behalf.
+  engine: SERVICE,
+  engineStatus: { phase: "idle", loaded: 0, total: 0, file: "" },
+  engineInfo: null,
+  engineError: "",
+  engineVerifiedInFull: false,
   // The owner's endpoints for balance reads, held in the encrypted vault because
   // the URLs can carry their API keys. More than one means each account is read
   // by a different operator, so no single one sees the whole portfolio.
@@ -613,6 +745,29 @@ function registry() {
   );
   return `<form id="asset-filter" class="toolbar"><input class="search" name="query" aria-label="Search assets" placeholder="Search assets or symbols…" value="${esc(state.query)}"><select name="category" aria-label="Asset category">${["all", ...new Set(state.assets.map((a) => a.category))].map((c) => `<option ${state.category === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select><button class="btn">Search</button>${chip(`${state.assets.length} registry entries`)}</form><div class="table-scroll"><table><thead><tr><th>Asset</th><th>Type</th><th>Registry status</th><th>Contract</th><th>Details</th></tr></thead><tbody>${filtered.map((a) => `<tr><td><b>${esc(a.symbol)}</b><small>${esc(a.name)}</small></td><td>${esc(a.category)}</td><td>${chip(a.status, a.status !== "ACTIVE")}</td><td>${isAddress(a.address) ? esc(short(a.address)) : chip("Invalid address", true)}</td><td>${button("Inspect ↗", "asset", `data-symbol="${esc(a.symbol)}"`)}</td></tr>`).join("")}</tbody></table>${filtered.length ? "" : empty("No assets match your search.")}</div><p class="micro">Registry information is supplied by Tera. A registry entry does not establish transfer eligibility.</p>`;
 }
+// The engine's state as one chip, so the composer says what will happen to the
+// next message without the owner opening the privacy centre.
+function engineChip() {
+  if (state.engine !== DEVICE) return chip("Sent to Tera");
+  const { phase, loaded, total } = state.engineStatus;
+  if (phase === "ready") return chip("Nothing will be sent");
+  if (phase === "verify" || phase === "load")
+    return chip(total ? `Loading model · ${Math.round((loaded / total) * 100)}%` : "Loading model…");
+  if (phase === "failed") return chip("Model unavailable", true);
+  return chip("Model not loaded", true);
+}
+
+function engineHint() {
+  if (state.engine !== DEVICE) return ENGINES[SERVICE].sends;
+  const capability = engineCapabilities();
+  if (!capability.supported) return `${capability.reason} Questions cannot be answered on this device.`;
+  if (state.engineStatus.phase === "failed")
+    return `${state.engineError} Nothing was sent in its place.`;
+  if (state.engineStatus.phase !== "ready")
+    return "The model is not on this device yet. Load it in the privacy status centre. Until then, a question sent this way is not answered and is not sent anywhere either.";
+  return `${ENGINES[DEVICE].sends} ${ENGINES[DEVICE].quality}`;
+}
+
 function minimiseHint() {
   return state.minimise
     ? "Addresses, references, contact details and figures are replaced with placeholders on this device before the message is sent. The reply is re-hydrated here. This removes the values, not the context — it does not make you anonymous."
@@ -631,7 +786,7 @@ function minimiseSegments(segments) {
 }
 function chatBubble(message) {
   if (message.role !== "user")
-    return `<div class="chat-bubble"><strong class="chat-role">Tera assistant</strong><div class="assistant-markdown">${renderAssistantMarkdown(message.text)}</div></div>`;
+    return `<div class="chat-bubble${message.withheld ? " withheld" : ""}"><strong class="chat-role">${message.device ? "On this device" : "Tera assistant"}${message.withheld ? ` ${chip("Answer withheld", true)}` : ""}</strong><div class="assistant-markdown">${renderAssistantMarkdown(message.text)}</div>${message.device ? `<p class="micro">${esc(attribution(DEVICE))}</p>` : ""}</div>`;
   const replaced = message.removed?.length || 0;
   const detail = message.minimised
     ? `<details class="minimise-sent"><summary>${replaced} ${replaced === 1 ? "value" : "values"} replaced · what left this device</summary><pre>${esc(message.sent)}</pre>${message.kept?.length ? `<p class="micro">Kept as typed: ${esc(message.kept.map((kind) => KIND_LABELS[kind].toLowerCase()).join(", "))}.</p>` : ""}</details>`
@@ -642,7 +797,9 @@ function chat() {
   return `<div class="section-label">Agent assistant ${chip("Owner supervised")}</div>
     <div class="note">Ask a question or request an action. Only the message you submit and the wallet address needed for a proposal are sent.</div>
     <div class="toolbar">${state.agentSessionToken ? chip("Scoped token connected") + button("Disconnect token", "agent-token-disconnect") : button("Connect session token", "agent-token-connect", !state.owner ? "disabled" : "")}<label class="share-toggle minimise-toggle"><input type="checkbox" data-action="minimise-toggle" ${state.minimise ? "checked" : ""}> Minimise before sending</label></div>
-    <p class="micro" id="minimise-hint">${esc(minimiseHint())}</p>
+    <div class="toolbar engine-toolbar"><label class="share-toggle"><span>Answered by</span> <select data-action="engine-select" aria-label="Which engine answers a question">${[SERVICE, DEVICE].map((id) => `<option value="${id}" ${state.engine === id ? "selected" : ""}>${esc(ENGINES[id].label)}</option>`).join("")}</select></label>${engineChip()}</div>
+    <p class="micro" id="engine-hint">${esc(engineHint())}</p>
+    <p class="micro" id="minimise-hint">${esc(state.engine === DEVICE ? "Prompt minimisation applies to messages that are sent. A question answered on this device is not sent, so there is nothing to minimise — but preparing a proposal still goes to Tera, and it is minimised then." : minimiseHint())}</p>
     <div class="chat-feed" aria-live="polite">${state.chat.length ? state.chat.map(chatBubble).join("") : '<p class="micro">Explore an asset or describe a proposal you want to review.</p>'}</div>
     <form id="chat-form"><div class="field"><label for="chat-mode">Message type</label><select id="chat-mode" name="mode"><option value="chat">Ask a question</option><option value="propose">Prepare a proposal</option></select></div>
     <div class="composer"><textarea name="message" aria-label="Message the agent" placeholder="Ask about an asset or describe an action…" required maxlength="1200"></textarea><button aria-label="Send message" ${state.busy ? "disabled" : ""}>↑</button></div>
@@ -990,6 +1147,37 @@ function egressRows() {
     },
   );
 }
+const hostOf = (value) => {
+  try {
+    return value ? new URL(value).host : "";
+  } catch {
+    return "";
+  }
+};
+
+// Where an approved transaction goes once it is signed, and who reads it on the
+// way. Rendered from the model in submission.js rather than written here, so the
+// panel and the claims it makes cannot drift apart.
+function submissionPanel() {
+  const path = describeSubmission({
+    chainId,
+    chainName: "Robinhood Chain",
+    // A malformed value in the page config must not take the privacy centre down
+    // with it: an unnamed host is a worse panel, a thrown error is no panel.
+    sequencerHost: hostOf(config.rpcUrl),
+    explorerHost: hostOf(config.explorerUrl),
+    // Receipts reach Tera only for transactions the owner chose to reconcile.
+    receiptSync: state.records.some((record) => record.recorded),
+  });
+  const row = (entry) =>
+    `<tr><td><b>${esc(entry.name)}</b>${entry.host ? `<small>${esc(entry.host)}</small>` : ""}${entry.privileged ? " " + chip("sees it first") : ""}${entry.optional && !entry.active ? " " + chip("not used") : ""}</td><td>${esc(entry.when)}</td><td>${entry.learns.map((item) => esc(item)).join("<br>")}<small>${esc(entry.note)}</small></td></tr>`;
+  return `<div class="note"><strong>${esc(path.model.label)}</strong>${esc(path.model.summary)} ${esc(path.model.correction)}</div>
+    <div class="section-label"><span>Where an approved transaction goes</span><span>${path.privileged} party sees it before anyone else</span></div>
+    <div class="table-scroll"><table><thead><tr><th>Party</th><th>When</th><th>What it learns</th></tr></thead><tbody>${path.hops.map(row).join("")}</tbody></table></div>
+    <p class="micro">${esc(path.whyFixed)}</p>
+    <ul class="micro">${path.limits.map((limit) => `<li>${esc(limit)}</li>`).join("")}</ul>`;
+}
+
 function privacyCentre() {
   const totals = summarize(state.privacyLog);
   const egress = egressRows();
@@ -1029,6 +1217,8 @@ function privacyCentre() {
         ? `<div class="note"><strong>Guided demo</strong>Every request below was answered locally. Nothing reached ${esc(serviceHost)} and nothing was signed.</div>`
         : `<div class="note"><strong>Guided demo</strong>Want to show this boundary without a real account? ${button("Start guided demo", "demo-start")}</div>`
     }
+    <div class="note"><strong>On-device engine</strong>${state.engineStatus.phase === "ready" ? `Questions asked with “${esc(ENGINES[DEVICE].label)}” selected are answered in this tab. ${totals.onDevice} ${totals.onDevice === 1 ? "question was" : "questions were"} answered that way in this session, and ${totals.onDevice === 1 ? "it made" : "they made"} no request at all.` : "A small model can run in this tab so a question is answered without any request being made. It is opt-in, because loading it is a large one-time download."} It cannot prepare a proposal: that needs Tera's registry and the five checks.</div>
+    ${submissionPanel()}
     <div class="content-grid privacy-grid">
       <section>
         <div class="section-label"><span>This session's requests</span><div class="actions">${button("Export log", "privacy-export", state.privacyLog.length ? "" : "disabled")}${button("Clear log", "privacy-clear", state.privacyLog.length ? "" : "disabled")}</div></div>
@@ -1050,6 +1240,7 @@ function privacyCentre() {
         }
       </section>
       <aside>
+        <section class="panel"><h2>On-device engine</h2>${enginePanel()}</section>
         <div class="section-label">Never leaves this device</div>
         ${LOCAL_ONLY.map((item) => `<article class="panel privacy-local"><b>${esc(item.label)}</b><p class="micro">${esc(item.detail)}</p></article>`).join("")}
       </aside>
@@ -1085,6 +1276,33 @@ function integrityChip() {
   const tone = mark.tone === "fail" ? "fail" : mark.tone === "muted" ? "muted" : "";
   return `<span class="chip integrity-chip ${tone}" title="Code transparency">${esc(mark.label)}</span>`;
 }
+// The on-device engine's own panel. It has to sell the download honestly: the
+// benefit is one sentence and the costs are two lists, and the costs are not
+// behind a disclosure triangle.
+function enginePanel() {
+  const capability = engineCapabilities();
+  const { phase, loaded, total, file } = state.engineStatus;
+  const progress =
+    total > 0
+      ? `<div class="metric"><strong>${Math.round((loaded / total) * 100)}%</strong><small>${esc(phase === "verify" ? "Checking the published digests" : "Building the model")}${file ? ` · ${esc(file)}` : ""}</small></div>`
+      : "";
+  const status =
+    phase === "ready"
+      ? `<p><strong>Loaded.</strong> Questions you ask with “${esc(ENGINES[DEVICE].label)}” selected are answered here and no request is made.${state.engineInfo ? ` Running ${esc(state.engineInfo.model)}${state.engineInfo.revision ? ` at ${esc(state.engineInfo.revision.slice(0, 12))}` : ""}, ${state.engineInfo.files} files, each checked against the published digest before it was loaded.` : ""}</p>`
+      : phase === "failed"
+        ? `<p class="live-form-error" role="alert">${esc(state.engineError)}</p><p class="micro">Nothing was sent to Tera in its place. The service assistant is still available from the composer.</p>`
+        : capability.supported
+          ? `<p>The model is not on this device. Loading it downloads the weights from this site once, checks every file against the published digest, and builds the model in a worker.</p>`
+          : `<p class="live-form-error" role="alert">${esc(capability.reason)}</p>`;
+  return `<p>${esc(ENGINES[DEVICE].detail)}</p>
+    ${status}
+    ${progress ? `<div class="privacy-totals">${progress}</div>` : ""}
+    <div class="actions">${button(phase === "ready" ? "Loaded" : phase === "verify" || phase === "load" ? "Loading…" : "Load the model", "engine-load", !capability.supported || phase === "ready" || phase === "verify" || phase === "load" ? "disabled" : "")}${button("Remove from this device", "engine-unload", phase === "ready" ? "" : "disabled")}</div>
+    <div class="note"><strong>What it cannot do</strong><ul class="micro">${ENGINE_LIMITS.map((limit) => `<li>${esc(limit)}</li>`).join("")}</ul></div>
+    <div class="note"><strong>What the download costs</strong><ul class="micro">${WEIGHTS_LIMITS.map((limit) => `<li>${esc(limit)}</li>`).join("")}</ul></div>
+    ${phase === "ready" && !state.engineVerifiedInFull ? `<p class="micro">These files were checked in full on an earlier visit, and this load took the browser's own copy for this site without reading all ${esc(String(state.engineInfo?.files ?? ""))} of them again. Any change to what Tera publishes changes the manifest, and the full check runs again.</p>` : ""}`;
+}
+
 function codeTransparencyPanel() {
   const result = state.integrity;
   const mark = integrityBadge(result);
@@ -1368,18 +1586,25 @@ function duressWipeDialog() {
   );
   const form = document.getElementById("duress-form");
   const error = form.querySelector('[role="alert"]');
-  form.onsubmit = (event) => {
+  form.onsubmit = async (event) => {
     event.preventDefault();
     if (String(new FormData(form).get("word")).trim().toUpperCase() !== WIPE_WORD) {
       error.textContent = `Type ${WIPE_WORD} exactly to confirm.`;
       return;
     }
     const result = wipeStorages(storagesToWipe());
+    // The model's weights are in cache storage, which the prefix scan cannot
+    // see. Tearing down the worker first means nothing is holding them open.
+    await engine.unload();
+    const caches = await wipeCaches(globalThis.caches);
     forgetEverything();
     closeDialog();
-    state.notice = result.remaining
-      ? `${result.removed} removed, but ${result.remaining} could not be. This browser is blocking storage changes; clear site data from browser settings.`
-      : `${result.removed} stored ${result.removed === 1 ? "artefact" : "artefacts"} destroyed. Nothing was sent anywhere.`;
+    const cached = caches.removed
+      ? ` The cached on-device model was removed as well.`
+      : "";
+    state.notice = result.remaining || caches.remaining
+      ? `${result.removed} removed, but ${result.remaining + caches.remaining} could not be. This browser is blocking storage changes; clear site data from browser settings.`
+      : `${result.removed} stored ${result.removed === 1 ? "artefact" : "artefacts"} destroyed.${cached} Nothing was sent anywhere.`;
     render();
   };
 }
@@ -2046,6 +2271,14 @@ function planMessage(message, mode) {
     keep,
     minimised: state.minimise,
     result: minimise(message, { owner: state.owner, keep }),
+    // Decided here, once, so the review dialog cannot show an owner what will
+    // leave the device for a message that is never going to leave it.
+    routing: routeMessage({
+      mode,
+      engine: state.engine,
+      ready: engine.ready,
+      supported: engineCapabilities().supported,
+    }),
   };
 }
 
@@ -2073,6 +2306,18 @@ function reviewMessage(plan) {
 
 async function sendMessage(plan) {
   const { message, mode, keep, result } = plan;
+  const routing = plan.routing || routeMessage({ mode, engine: state.engine });
+  // An owner who chose the on-device engine does not get a network request
+  // because the model was not ready. Nothing is sent, and the reason is shown.
+  if (routing.blocked) {
+    state.notice = routing.reason;
+    render();
+    return;
+  }
+  if (routing.engine === DEVICE) {
+    await answerOnDevice(plan);
+    return;
+  }
   const minimised = plan.minimised && result.placeholders.length > 0;
   // Never send a skeleton that still carries what it claimed to remove.
   if (minimised) {
@@ -2151,6 +2396,65 @@ async function sendMessage(plan) {
     }
   } catch (error) {
     if (version === generation) state.chat.push({ role: "assistant", text: errorMessage(error) });
+  } finally {
+    state.busy = false;
+    render();
+  }
+}
+
+/**
+ * Answer a question in this tab.
+ *
+ * There is no `api` call in this function, and that is the feature rather than
+ * an implementation detail. The message goes into a worker and a reply comes
+ * back; no request is built, so there is nothing to minimise, nothing to seal,
+ * and nothing for the request log to record. What is recorded is that a turn
+ * was answered without a request, because a privacy centre that simply showed
+ * nothing would be indistinguishable from a broken one.
+ */
+async function answerOnDevice(plan) {
+  const { message } = plan;
+  const version = generation;
+  state.chat.push({ role: "user", text: message, device: true });
+  state.busy = true;
+  render();
+  try {
+    const raw = await engine.ask(message);
+    if (version !== generation) return;
+    // Screened before it is rendered. A small model answers "what is my
+    // balance?" with a number it made up, and the owner has no way to tell.
+    const screened = screenReply(raw);
+    state.chat.push({
+      role: "assistant",
+      text: screened.text,
+      device: true,
+      withheld: screened.withheld,
+    });
+    state.privacyLog = appendLog(state.privacyLog, {
+      at: Date.now(),
+      id: "engine-device",
+      label: "Assistant question answered on this device",
+      purpose:
+        "The message was answered by the model running in this tab. No request was built, so nothing was sent to Tera, to a relay, or to a model provider.",
+      method: "None",
+      path: "No request",
+      retention: "Nothing to retain anywhere else. The exchange is in this page session only and is cleared on reload.",
+      sent: [],
+      withheld: ["The message you typed", "Your wallet address", "The network address you are on"],
+      processors: ["Nobody. No request was made."],
+      identifies: false,
+      onDevice: true,
+    });
+  } catch (error) {
+    if (version === generation) {
+      state.chat.push({
+        role: "assistant",
+        text: `${errorMessage(error)}
+
+Nothing was sent to Tera in its place.`,
+        device: true,
+      });
+    }
   } finally {
     state.busy = false;
     render();
@@ -2521,6 +2825,35 @@ document.addEventListener("click", async (event) => {
       // Updated in place so the message being composed is not thrown away.
       const hint = document.getElementById("minimise-hint");
       if (hint) hint.textContent = minimiseHint();
+    }
+    if (action === "engine-select") {
+      state.engine = target.value === DEVICE ? DEVICE : SERVICE;
+      render();
+    }
+    if (action === "engine-load") {
+      try {
+        await engine.prepare();
+      } catch {
+        /* The failure is already on the panel; nothing was sent either way. */
+      }
+    }
+    if (action === "engine-unload") {
+      if (
+        !window.confirm(
+          "Remove the on-device model from this browser? Loading it again means downloading it again.",
+        )
+      )
+        return;
+      await engine.unload();
+      await wipeCaches(globalThis.caches);
+      try {
+        localStorage.removeItem(ENGINE_VERIFIED_KEY);
+      } catch {
+        /* Nothing to forget if storage is unavailable. */
+      }
+      state.engineVerifiedInFull = false;
+      state.notice = "The on-device model was removed from this browser.";
+      render();
     }
     if (action === "minimise-review-toggle") state.minimiseReview = target.checked;
     if (action === "minimise-send" || action === "minimise-send-raw") {

@@ -21,6 +21,11 @@ export const LOCAL_ONLY = [
       "With prompt minimisation on, addresses, references, contact details and figures are replaced with placeholders before an assistant message is sent. The original text and the mapping back to it stay in this page, and the reply is re-hydrated here.",
   },
   {
+    label: "Questions answered on this device",
+    detail:
+      "With the on-device engine selected, a question is answered by a model running in this tab and no request is built at all. It cannot prepare a proposal, so preparing one still goes to Tera's assistant service.",
+  },
+  {
     label: "Transaction records",
     detail:
       "Drafts and transaction records are encrypted in this browser after you unlock the local vault with a wallet signature. The decrypted key stays only in page memory.",
@@ -322,7 +327,10 @@ export function appendLog(log, entry, limit = 60) {
 
 export function summarize(log) {
   return {
-    requests: log.length,
+    // A turn answered by the on-device model is in this log so its absence is
+    // visible, but it is not a request and is never counted as one.
+    requests: log.filter((entry) => !entry.onDevice).length,
+    onDevice: log.filter((entry) => entry.onDevice).length,
     // Simulated entries were answered locally and never reached the network.
     simulated: log.filter((entry) => entry.simulated).length,
     identifying: log.filter((entry) => entry.identifies).length,
@@ -334,7 +342,7 @@ export function summarize(log) {
     // without learning the network address they came from.
     oblivious: log.filter((entry) => entry.oblivious).length,
     replaced: log.reduce((total, entry) => total + (entry.replaced || 0), 0),
-    fields: new Set(log.flatMap((entry) => entry.sent)).size,
+    fields: new Set(log.filter((entry) => !entry.onDevice).flatMap((entry) => entry.sent)).size,
   };
 }
 

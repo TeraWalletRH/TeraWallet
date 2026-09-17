@@ -38,7 +38,16 @@ test("only a party this browser connects to is said to see the network address",
   const seesAddress = list
     .filter((entry) => entry.reach === "direct" || entry.reach === "wallet")
     .map((entry) => entry.id);
-  assert.deepEqual(seesAddress.sort(), ["chain-rpc", "page-host", "tera-service", "wallet-rpc"]);
+  assert.deepEqual(seesAddress.sort(), [
+    "chain-rpc",
+    "page-host",
+    // Reached by the wallet's provider. This page cannot tell whose address it
+    // ends up seeing, so it is listed among those that see the owner's: warning
+    // about exposure that may not exist is the safe direction to be wrong in.
+    "sequencer",
+    "tera-service",
+    "wallet-rpc",
+  ]);
   for (const id of ["model-provider", "relay"]) {
     assert.equal(row(list, id).reach, "relayed");
     assert.ok(row(list, id).withheld.includes("The network address you are on"));
@@ -106,10 +115,11 @@ test("the explorer is only reached when a link is opened", () => {
 test("the summary counts parties rather than asserting a number", () => {
   const log = [describeRequest("/api/agent/chat", { message: "hello" })];
   const totals = egressSummary(rows(log, { owner, records: 1 }));
-  assert.equal(totals.parties, 8);
-  assert.equal(totals.direct, 4);
+  assert.equal(totals.parties, 9);
+  assert.equal(totals.direct, 5);
   assert.equal(totals.relayed, 2);
-  assert.equal(totals.uncounted, 2);
+  // The chain RPC and the sequencer are both reachable and both uncountable.
+  assert.equal(totals.uncounted, 3);
   // Page host, Tera, the model provider, the wallet's provider and the ledger.
   assert.equal(totals.seeingYouNow, 5);
 });
