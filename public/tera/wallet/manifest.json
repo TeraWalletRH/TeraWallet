@@ -1,8 +1,8 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-8c3a222c8e9c",
-  "builtAt": "2026-09-17T06:44:32.550Z",
+  "release": "r-3f295d12cca0",
+  "builtAt": "2026-09-17T08:07:13.790Z",
   "algorithm": "sha256",
   "base": "/tera/wallet/",
   "note": "Hashes of the wallet modules this site serves. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
@@ -14,8 +14,8 @@
     },
     {
       "path": "app.js",
-      "hash": "sha256-MtwAI9m+hL/Rxy31EkVZzLG0Yp5WQqgaUOZfN7PJbu4=",
-      "bytes": 134298
+      "hash": "sha256-WCMPTMQ1LSkm2NN7RaOp83PFmW3xp5K/JF7rA1nzMpw=",
+      "bytes": 137196
     },
     {
       "path": "boundary.js",
@@ -34,8 +34,8 @@
     },
     {
       "path": "core.js",
-      "hash": "sha256-h3WcVusAdIMQT40O/asbKzlVE3gf21i64msqiYWPrNo=",
-      "bytes": 12299
+      "hash": "sha256-ZL2mhDLqwEdwKo6GjC8siehEbNuKNiTE9KUqom/lx4Y=",
+      "bytes": 12613
     },
     {
       "path": "demo.js",
@@ -44,8 +44,8 @@
     },
     {
       "path": "egress.js",
-      "hash": "sha256-vsXtLuYJwKfYyyCGfcH6tjRmY0SBX3o1koK3RRLNkhQ=",
-      "bytes": 12998
+      "hash": "sha256-b5yPhaTDLgS3WrG9Wk9GlAuy2JyBEYUHakwB4bdYsSA=",
+      "bytes": 15113
     },
     {
       "path": "endpoint.js",
@@ -73,14 +73,19 @@
       "bytes": 7671
     },
     {
+      "path": "ohttp.js",
+      "hash": "sha256-/rU/qntG7ekyg0C4DOFDCAhNUHySHWcd3xV1gXXugL4=",
+      "bytes": 21361
+    },
+    {
       "path": "preview.js",
       "hash": "sha256-sdnM8Sz2VhIfkr0j9kHxhGmGCImqHHOVeZEoPaO1xVc=",
       "bytes": 7753
     },
     {
       "path": "privacy.js",
-      "hash": "sha256-XAhoCebf42AhNyf/JPG3mjymgj6fOI/AFxNR+1RH5Os=",
-      "bytes": 14494
+      "hash": "sha256-P1y41+E6B35M3q7VsYApn9yqJDJXQdVmXg4EAeUYdRc=",
+      "bytes": 14948
     },
     {
       "path": "recovery.js",
@@ -113,5 +118,5 @@
       "bytes": 5220
     }
   ],
-  "filesHash": "sha256-jDoiLI6cUu08M7moffJXFOIehoeX9NhI/Abi4tJjS5U="
+  "filesHash": "sha256-PyldEsyg1BAmciCA17xpHTYszPnAI3QA7BN8caroU2E="
 }

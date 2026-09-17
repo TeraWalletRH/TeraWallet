@@ -6,7 +6,8 @@
     "dev": "bun run --watch src/index.ts",
     "start": "bun run src/index.ts",
     "check": "tsc --noEmit",
-    "test": "bun test"
+    "test": "bun test",
+    "ohttp:key": "bun run scripts/ohttp-key.ts"
   },
   "dependencies": {
     "dotenv": "^16.4.7",

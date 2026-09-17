@@ -72,7 +72,11 @@ export function createApi(baseUrl, fetcher = fetch) {
         ...(body === undefined ? {} : { body: JSON.stringify(body) }),
         signal: AbortSignal.timeout(25000),
       });
-    } catch {
+    } catch (error) {
+      // A transport that names its own failure is reporting something the owner
+      // needs: a reply that did not authenticate, or a relay that refused. Only
+      // an unexplained failure becomes the generic connection message.
+      if (error?.transport) throw new ApiError(error.message, null, 0);
       throw new ApiError("Cannot reach Tera. Check your connection and try again.", null, 0);
     }
     let payload;

@@ -72,6 +72,34 @@ export function parties(config = {}) {
   // When the owner points balance reads at their own endpoint, that knowledge
   // moves: it does not disappear. The panel gains a row and the wallet's own
   // provider loses the line about every address the owner looks at.
+  // An Oblivious HTTP relay splits what one party used to hold. It is listed as
+  // a party in its own right, because it is one: it gains the network address
+  // this browser connects from. What it cannot do is read anything it forwards.
+  const relayHost = config.ohttpRelayHost || "";
+  const obliviousPaths = config.ohttpPaths || [];
+  const obliviousRelay = relayHost
+    ? [
+        {
+          id: "ohttp-relay",
+          name: "Oblivious HTTP relay",
+          host: relayHost,
+          reach: "direct",
+          learns: [
+            "The network address you are on",
+            "That you are using Tera, and at what times",
+            "The size of each sealed request and reply",
+          ],
+          withheld: [
+            "The contents of anything it forwards, which are sealed to Tera's key",
+            "Which route you asked for",
+            "Your wallet address",
+            "Private keys",
+          ],
+          control:
+            "Only the requests listed as sealed go this way. The protection depends on this relay and Tera being different companies: if one party ran both, it would hold your address and your request together and nothing would be gained.",
+        },
+      ]
+    : [];
   const balanceHost = config.balanceEndpointHost || "";
   const ownEndpoint = balanceHost
     ? [
@@ -117,13 +145,27 @@ export function parties(config = {}) {
       host: apiHost,
       reach: "direct",
       learns: [
-        "The network address you are on",
+        // Sealing the assistant call removes the address from those requests and
+        // from nothing else. Saying "Tera no longer sees your address" would be
+        // false while any request on this page still connects directly.
+        relayHost
+          ? "The network address you are on, on every request except the sealed ones listed below"
+          : "The network address you are on",
         "Every field listed in the request log below",
         "Your wallet address, on the requests marked as carrying it",
       ],
-      withheld: ["Balances", "Private keys", "Your private policy presets", "Local records"],
-      control: "The request log below is the complete list of what this page sends.",
+      withheld: [
+        ...(relayHost ? ["The network address behind a sealed request"] : []),
+        "Balances",
+        "Private keys",
+        "Your private policy presets",
+        "Local records",
+      ],
+      control: relayHost
+        ? `The request log below is the complete list of what this page sends. ${obliviousPaths.length} of those routes are sealed and sent through a relay, so Tera reads them without learning where they came from. It still reads them, and a request that carries your wallet address still tells it who you are.`
+        : "The request log below is the complete list of what this page sends.",
     },
+    ...obliviousRelay,
     {
       id: "wallet-rpc",
       name: "Your wallet's own network provider",
@@ -243,6 +285,7 @@ export function egressStatus(rows, context = {}) {
       entry.processors?.includes("Assistant model provider"),
     ),
     relay: countBy(log, (entry) => entry.processors?.includes("Relay")),
+    "ohttp-relay": countBy(log, (entry) => entry.oblivious),
   };
   return rows.map((row) => {
     const requests = counts[row.id];

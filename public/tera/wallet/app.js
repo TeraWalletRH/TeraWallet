@@ -82,6 +82,7 @@ import {
   boundaryIndex,
 } from "./boundary.js";
 import { describeTransaction } from "./preview.js";
+import { createOhttpFetcher, LIMITS as OHTTP_LIMITS } from "./ohttp.js";
 import {
   ACTIONS,
   createPreset,
@@ -101,14 +102,54 @@ const serviceHost = (() => {
     return apiUrl;
   }
 })();
-const request = createApi(apiUrl);
+// Oblivious HTTP, for the routes the gateway is configured to accept.
+//
+// Prompt minimisation already strips the values out of an assistant message.
+// What it cannot strip is the connection: Tera sees the address the message
+// arrives from, and an address identifies an owner as well as a name does. A
+// sealed request is encrypted to Tera's gateway key here and handed to a relay
+// run by somebody else, so the relay has the address and no readable request,
+// and Tera has the request and no address.
+//
+// Only the listed routes go this way, because only those are what the gateway
+// accepts. Everything else still connects to Tera directly, and the egress panel
+// says so rather than implying the whole page is covered.
+const obliviousPaths = Array.isArray(config.ohttpPaths)
+  ? config.ohttpPaths
+  : ["/api/agent/chat", "/api/agent/propose"];
+const oblivious = (() => {
+  if (!config.ohttpRelayUrl) return null;
+  try {
+    const send = createOhttpFetcher({
+      relayUrl: config.ohttpRelayUrl,
+      keyConfigUrl:
+        config.ohttpKeyConfigUrl || `${apiUrl.replace(/\/$/, "")}/.well-known/ohttp-gateway`,
+      gatewayUrl: apiUrl,
+    });
+    return { send, host: new URL(config.ohttpRelayUrl).host, request: createApi(apiUrl, send) };
+  } catch (error) {
+    // A misconfigured relay must not silently fall back to a direct request that
+    // the privacy panel would then describe as sealed. It is reported and left off.
+    console.warn("Oblivious HTTP is not active:", errorMessage(error));
+    return null;
+  }
+})();
+const sealedPath = (path) => Boolean(oblivious) && obliviousPaths.includes(path.split("?")[0]);
+const direct = createApi(apiUrl);
+const request = (path, body, options) =>
+  sealedPath(path) ? oblivious.request(path, body, options) : direct(path, body, options);
 // Every service request is recorded for the privacy status centre before it is
 // sent. Field names only: no address, amount or message text enters the log.
 const api = async (path, body, options = {}) => {
   // `privacy` records what this device did to the body before it was built —
   // counts and flags only, never a value.
   const { privacy, ...rest } = options;
-  const entry = { ...describeRequest(path, body), ...privacy };
+  const sealed = sealedPath(path);
+  const entry = {
+    ...describeRequest(path, body),
+    ...privacy,
+    ...(sealed ? { oblivious: true, relayHost: oblivious.host } : {}),
+  };
   state.privacyLog = appendLog(
     state.privacyLog,
     state.demo ? { ...entry, simulated: true } : entry,
@@ -916,6 +957,8 @@ function egressRows() {
       chainId,
       siteHost: location.host,
       balanceEndpointHost: ownEndpointActive() ? describeEndpoint(state.rpcEndpoint).host : "",
+      ohttpRelayHost: oblivious?.host || "",
+      ohttpPaths: oblivious ? obliviousPaths : [],
     }),
     {
       log: state.privacyLog,
@@ -949,9 +992,15 @@ function privacyCentre() {
       <div class="metric"><strong>${totals.identifying}</strong><small>Requests carrying your wallet address</small></div>
       <div class="metric"><strong>${totals.toModelProvider}</strong><small>Requests whose text reached the model provider</small></div>
       <div class="metric"><strong>${totals.replaced}</strong><small>Values replaced on this device before sending</small></div>
+      ${oblivious ? `<div class="metric"><strong>${totals.oblivious}</strong><small>Requests sealed and sent through a relay</small></div>` : ""}
       <div class="metric"><strong>${reachTotals.seeingYouNow}</strong><small>Parties in a position to see you right now</small></div>
       <div class="metric"><strong>${totals.fields}</strong><small>Distinct fields sent</small></div>
     </div>
+    ${
+      oblivious
+        ? `<div class="note"><strong>Sealed transport</strong>${totals.oblivious} request${totals.oblivious === 1 ? "" : "s"} in this session ${totals.oblivious === 1 ? "was" : "were"} encrypted on this device and sent to Tera through ${esc(oblivious.host)}, so Tera answered ${totals.oblivious === 1 ? "it" : "them"} without learning the network address ${totals.oblivious === 1 ? "it" : "they"} came from. The routes that go this way are ${obliviousPaths.map((path) => esc(path)).join(" and ")}; everything else on this page still connects to Tera directly.<ul class="micro">${OHTTP_LIMITS.map((limit) => `<li>${esc(limit)}</li>`).join("")}</ul></div>`
+        : ""
+    }
     <div class="note"><strong>Prompt minimisation</strong>${state.minimise ? "Assistant messages are scrubbed on this device before they are sent: addresses, references, contact details and figures are replaced with placeholders, and the reply is re-hydrated here. A proposal keeps the recipient and the figure, because Tera reads those out of the text to build the transaction." : "Prompt minimisation is off, so assistant messages are sent exactly as you type them."} It removes the values from the text. It does not hide that you are asking, and it does not hide the network address the request comes from.</div>
     <div class="note"><strong>Data boundary</strong>Requests go to ${esc(serviceHost)}. Balances and receipts are read directly through your wallet's network provider, so Tera does not see them. The log below records field names only — never an address, an amount or the text you typed. Tera is not the only party involved: the panel further down names every other one.</div>
     ${

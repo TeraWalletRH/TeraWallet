@@ -10,6 +10,7 @@ import policyRouter from "./routes/policy";
 import bridgeRouter from "./routes/bridge";
 import retentionRouter from "./routes/retention";
 import mobileRouter from "./routes/mobile";
+import ohttpRouter from "./routes/ohttp";
 
 const app = express();
 
@@ -25,6 +26,10 @@ app.use((req, res, next) => {
   }
   next();
 });
+
+// The Oblivious HTTP gateway takes a raw capsule body, so it is mounted ahead
+// of the JSON parser and brings its own.
+app.use(ohttpRouter);
 
 app.use(express.json());
 
