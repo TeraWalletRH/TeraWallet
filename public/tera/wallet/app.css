@@ -938,3 +938,19 @@ h1:focus {
   text-transform: none;
   letter-spacing: 0;
 }
+
+/* Ten wallet sections need two clear rows before the medium desktop width
+   becomes a clipped horizontal strip. */
+@media (min-width: 751px) and (max-width: 1400px) {
+  .wallet-nav {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    overflow: visible;
+  }
+  .wallet-nav a,
+  .wallet-nav a:first-child {
+    min-width: 0;
+    padding: 14px 10px;
+    font-size: 11px;
+  }
+}

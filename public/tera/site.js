@@ -89,8 +89,11 @@ function enhance(){
  $$('[data-framer-name="Oberon logo"]').forEach(e=>{if(!$('.tera-brand-mark',e)){const im=document.createElement('img');im.src='/tera/logo.png';im.className='tera-brand-mark';im.alt='';e.prepend(im)}e.setAttribute('aria-label','Tera Wallet home');e.href='/';const p=$('p',e);if(p&&p.textContent!=='Tera Wallet')p.textContent='Tera Wallet'});
  $$('a[href]').forEach(a=>{let h=a.getAttribute('href');let txt=a.textContent.replace(/\s+/g,' ').trim().toLowerCase();if(a.closest('header nav')&&['home','wallet overview'].includes(txt)){a.href='/dashboard/';a.setAttribute('aria-label','Wallet overview');const p=a.querySelector('p');if(p&&p.textContent!=='wallet overview')p.textContent='wallet overview'}if(a.closest('header nav')&&['community','roadmap'].includes(txt)){a.href='/roadmap/';a.setAttribute('aria-label','Roadmap');const p=a.querySelector('p');if(p&&p.textContent!=='roadmap')p.textContent='roadmap'}if(['explore the wallet','explore the demo','open wallet','open your wallet'].includes(txt)){a.href='/dashboard/';a.removeAttribute('target')}if(['view the roadmap','explore the phases'].includes(txt))a.href='/roadmap/';
   if(/cal\.com/.test(h)){a.href='/dashboard/';a.removeAttribute('target')}
-  if(/x\.com|linkedin\.com/.test(h)){const x=h.includes('x.com');a.href=x?'#community-x':'#community-telegram';a.removeAttribute('target');a.setAttribute('aria-label',x?'X — coming soon':'Telegram — coming soon');if(!a.dataset.teraSocial){a.innerHTML=icons[x?'x':'telegram'];a.classList.add('tera-social');a.dataset.teraSocial='1'}}
-  if(/mailto:|tel:/.test(h)){a.href='/dashboard/';a.removeAttribute('target')}
+  if(/(?:x\.com|twitter\.com)/.test(h)){a.href='https://x.com/terawalletrh';a.target='_blank';a.rel='noopener noreferrer';a.setAttribute('aria-label','Tera Wallet on X');if(!a.dataset.teraSocial){a.innerHTML=icons.x;a.classList.add('tera-social');a.dataset.teraSocial='1'}}
+  if(/linkedin\.com/.test(h)){a.href='https://t.me/terawalletrh';a.target='_blank';a.rel='noopener noreferrer';a.setAttribute('aria-label','Tera Wallet on Telegram');if(!a.dataset.teraSocial){a.innerHTML=icons.telegram;a.classList.add('tera-social');a.dataset.teraSocial='1'}}
+  if(/facebook\.com|lemonsqueezy\.com|framer\.link|onetwoframe\.com/.test(h)){a.remove();return}
+  if(/^mailto:/i.test(h)){a.href='mailto:terawalletrh@outlook.com';a.textContent='terawalletrh@outlook.com';a.removeAttribute('target')}
+  if(/^tel:/i.test(h)){a.remove();return}
   h=a.getAttribute('href');if(h.startsWith('./')||h.startsWith('../')){const u=new URL(h.startsWith('./')?h.slice(1):h,location.origin);a.href=u.pathname+u.hash}
  });
  $$('ul [data-framer-name^="Logo "]').forEach(e=>{if(e.querySelector('.tera-standard'))return;const i=Number(e.getAttribute('data-framer-name').split(' ').pop())-1;const names=['ERC-4337','ERC-3643','Owner approval','Scoped keys','Private policy','Selective disclosure'];const t=document.createElement('span');t.className='tera-standard';t.textContent=names[i%names.length];e.append(t)});
@@ -101,6 +104,7 @@ function enhance(){
  // Brand credit text is replaced without changing the footer composition.
  $$('p').forEach(p=>{if(['Designed for','Powered by','owner authority','self-custody'].includes(p.textContent.trim())&&p.closest('footer'))p.style.opacity='.7'});
  $$('footer').forEach(f=>{if(f.querySelector('.tera-footer-socials'))return;const social=document.createElement('nav');social.className='tera-footer-socials';social.setAttribute('aria-label','Tera Wallet social links');social.innerHTML='<a href="https://x.com/terawalletrh" target="_blank" rel="noopener noreferrer" aria-label="Tera Wallet on X">'+icons.x+'<span>X</span></a><a href="https://t.me/terawalletrh" target="_blank" rel="noopener noreferrer" aria-label="Tera Wallet on Telegram">'+icons.telegram+'<span>Telegram</span></a>';f.append(social)});
+ $$('p').forEach(p=>{if(/an innovative scoped sessions company/i.test(p.textContent))p.textContent='Scoped agent sessions are planned after the audited wallet core is complete.'});
  installLocaleControls();
 }
 
@@ -125,6 +129,19 @@ const links=[['Home','/'],['About Tera','/about/'],['Capabilities','/solutions/'
  document.addEventListener('keydown',e=>{if(b.getAttribute('aria-expanded')!=='true')return;if(e.key==='Escape'){setMenu(false,true);e.preventDefault()}if(e.key==='Tab'){const items=[b,...panel.querySelectorAll('a,button')],first=items[0],last=items.at(-1);if(e.shiftKey&&document.activeElement===first){last.focus();e.preventDefault()}else if(!e.shiftKey&&document.activeElement===last){first.focus();e.preventDefault()}}});
 }
 
+// Framer can recreate nodes after the initial enhancer runs. Re-apply the
+// small set of ownership-critical replacements without touching page copy.
+function scrubTemplateLeftovers(){
+ $$('a[href]').forEach(a=>{const h=a.getAttribute('href')||'';
+  if(/cal\.com/.test(h)){a.href='/dashboard/';a.removeAttribute('target')}
+  else if(/(?:x\.com|twitter\.com)/.test(h)){a.href='https://x.com/terawalletrh';a.target='_blank';a.rel='noopener noreferrer';a.setAttribute('aria-label','Tera Wallet on X')}
+  else if(/linkedin\.com/.test(h)){a.href='https://t.me/terawalletrh';a.target='_blank';a.rel='noopener noreferrer';a.setAttribute('aria-label','Tera Wallet on Telegram')}
+  else if(/^mailto:/i.test(h)){a.href='mailto:terawalletrh@outlook.com';a.textContent='terawalletrh@outlook.com';a.removeAttribute('target')}
+  else if(/facebook\.com|lemonsqueezy\.com|framer\.link|onetwoframe\.com|^tel:/i.test(h))a.remove();
+ });
+ $$('p').forEach(p=>{if(/an innovative scoped sessions company/i.test(p.textContent))p.textContent='Scoped agent sessions are planned after the audited wallet core is complete.'});
+}
+
 function installTokenHero(){
  const address='0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8';
  const heading=[...document.querySelectorAll('h1')].find(h=>/your assets|你的资产/i.test(h.textContent.replace(/\s+/g,' ')));
@@ -144,14 +161,15 @@ document.addEventListener('click',e=>{if(phaseControl(e.target)){e.preventDefaul
  if(a.origin===location.origin&&a.pathname!==location.pathname){e.preventDefault();e.stopImmediatePropagation();window.teraCloseMenu?.();window.teraNavigate(a.pathname+a.search+a.hash)}
 },true);
 document.addEventListener('submit',e=>{e.preventDefault();e.stopImmediatePropagation();comingSoon()},true);
-installMenu();enhance();
+installMenu();enhance();scrubTemplateLeftovers();
 // Framer replaces its text nodes during hydration. Translate only after its
 // mutations settle; do not call enhance() here because it writes English chrome.
-let localeTimer=null,tokenTimer=null;
+let localeTimer=null,tokenTimer=null,scrubTimer=null;
 const localeObserver=new MutationObserver(scheduleLocaleTranslation);
 function observeLocale(){localeObserver.observe(document.body,{childList:true,characterData:true,subtree:true})}
 function scheduleTokenHero(){if(tokenTimer!==null)return;tokenTimer=setTimeout(()=>{tokenTimer=null;installTokenHero()},100)}
-function scheduleLocaleTranslation(){scheduleTokenHero();if(locale()!=='zh'||localeTimer!==null)return;localeTimer=setTimeout(()=>{localeTimer=null;localeObserver.disconnect();try{installTokenHero();installLocaleControls();translatePage('zh')}finally{observeLocale()}},0)}
+function scheduleTemplateScrub(){if(scrubTimer!==null)return;scrubTimer=setTimeout(()=>{scrubTimer=null;scrubTemplateLeftovers()},0)}
+function scheduleLocaleTranslation(){scheduleTokenHero();scheduleTemplateScrub();if(locale()!=='zh'||localeTimer!==null)return;localeTimer=setTimeout(()=>{localeTimer=null;localeObserver.disconnect();try{installTokenHero();installLocaleControls();translatePage('zh')}finally{observeLocale()}},0)}
 observeLocale();scheduleLocaleTranslation();
 addEventListener('load',()=>{scheduleTokenHero();[500,1500,3000].forEach(delay=>setTimeout(scheduleTokenHero,delay));scheduleLocaleTranslation()});
 })();
