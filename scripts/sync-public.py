@@ -9,10 +9,16 @@ while rewriting all commit authors & committers to:
 Commit messages are also scrubbed of AI-assistant attribution trailers so the
 public mirror carries only the project's own authorship.
 
+File contents are scrubbed of secret-shaped test fixtures. A sample key in a
+test is harmless here but trips GitHub's push protection on the public mirror,
+which rejects the entire push. Rewriting it in the export stream keeps the public
+history pushable without rewriting `main`, which Lovable depends on.
+
 Keeps the primary `origin` (NotADeveloper7/terrawallet) untouched for Vercel & Lovable compatibility.
 """
 
 import os
+import re
 import sys
 import subprocess
 
@@ -30,6 +36,21 @@ DROP_LINE_PREFIXES = (
 DROP_LINE_SUBSTRINGS = (
     b"generated with [claude code]",
     b"claude.ai/code/session",
+)
+
+# Secret-shaped strings replaced in file contents on the way to the public
+# mirror. These are test fixtures: the shape is what a scanner recognises, and
+# the shape is all that is removed. A test that asserts a credential is refused
+# keeps passing, because the gate matches on the field name rather than on the
+# token format.
+#
+# Never add a pattern that could match something under public/tera/wallet/.
+# Those files are hashed into manifest.json, and changing a byte there would make
+# the published build fail its own integrity check on the public mirror only.
+SECRET_PATTERNS = (
+    (re.compile(rb"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}"), b"EXAMPLE_REDACTED_FIXTURE"),
+    (re.compile(rb"\bghp_[A-Za-z0-9]{36}\b"), b"EXAMPLE_REDACTED_FIXTURE"),
+    (re.compile(rb"\bgithub_pat_[A-Za-z0-9_]{50,}"), b"EXAMPLE_REDACTED_FIXTURE"),
 )
 
 
@@ -51,6 +72,20 @@ def scrub_message(msg: bytes) -> bytes:
     return b"\n".join(kept) + b"\n"
 
 
+def scrub_blob(blob: bytes):
+    """Replaces secret-shaped strings in one file blob.
+
+    Returns the blob and the number of replacements, so the caller can restate
+    the byte count fast-import expects and report what changed instead of
+    rewriting the tree silently.
+    """
+    hits = 0
+    for pattern, replacement in SECRET_PATTERNS:
+        blob, found = pattern.subn(replacement, blob)
+        hits += found
+    return blob, hits
+
+
 def main():
     print(f"[1/3] Exporting and rewriting commit history for {PUBLIC_AUTHOR_NAME} <{PUBLIC_AUTHOR_EMAIL}>...")
 
@@ -66,6 +101,7 @@ def main():
     # Set once a commit/tag header is seen, so the *next* data block is known to
     # be a message rather than a file blob.
     next_data_is_message = False
+    redactions = 0
 
     while True:
         line = inp.readline()
@@ -121,8 +157,14 @@ def main():
                 out.write(b"data " + str(len(blob)).encode("ascii") + b"\n")
                 next_data_is_message = False
             else:
-                # File blob: pass through byte-exact.
-                out.write(line)
+                # File blob: byte-exact unless it carries a secret-shaped
+                # fixture, which is replaced and the length restated.
+                blob, hits = scrub_blob(blob)
+                if hits:
+                    redactions += hits
+                    out.write(b"data " + str(len(blob)).encode("ascii") + b"\n")
+                else:
+                    out.write(line)
             out.write(blob)
         else:
             out.write(line)
@@ -136,6 +178,8 @@ def main():
         sys.exit(1)
 
     print(f"[2/3] Local branch `{LOCAL_EXPORT_REF}` prepared with 100% {PUBLIC_AUTHOR_NAME} authorship.")
+    if redactions:
+        print(f"      {redactions} secret-shaped fixture(s) replaced in the public copy.")
 
     # Push to origin-public
     print(f"[3/3] Pushing `{LOCAL_EXPORT_REF}` to `{REMOTE_PUBLIC} {TARGET_BRANCH}`...")
