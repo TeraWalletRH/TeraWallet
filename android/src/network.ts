@@ -15,18 +15,35 @@ export const client = createPublicClient({
   chain,
   transport: http(RPC, { timeout: 20000, retryCount: 0 }),
 });
-export async function balances(address: Address) {
+export async function balances(
+  address: Address,
+  tokens: Array<{ symbol: string; address: string }> = sources,
+) {
   if ((await client.getChainId()) !== chain.id) throw new Error("RPC network mismatch.");
-  const [usdg, eth] = await Promise.all([
-    client.readContract({
-      address: sources[0].address as Address,
-      abi: erc20Abi,
-      functionName: "balanceOf",
-      args: [address],
+  const values = await Promise.allSettled(
+    tokens.map(async (token) => {
+      if (token.address === "0x0000000000000000000000000000000000000000")
+        return [token.symbol, (await client.getBalance({ address })).toString()] as const;
+      return [
+        token.symbol,
+        (
+          await client.readContract({
+            address: token.address as Address,
+            abi: erc20Abi,
+            functionName: "balanceOf",
+            args: [address],
+          })
+        ).toString(),
+      ] as const;
     }),
-    client.getBalance({ address }),
-  ]);
-  return { USDG: usdg.toString(), ETH: eth.toString() };
+  );
+  // A paused or non-standard RWA contract must not blank the entire wallet.
+  // Keep successful ETH/USDG reads and surface unavailable token balances as zero.
+  return Object.fromEntries(
+    values.map((result, index) =>
+      result.status === "fulfilled" ? result.value : [tokens[index].symbol, "0"],
+    ),
+  ) as Record<string, string>;
 }
 let sending = false;
 export async function execute(
