@@ -17,6 +17,16 @@ async function ethUsd() {
     throw new Error("CoinGecko returned no ETH/USD price.");
   return data.ethereum.usd;
 }
+async function coinbaseEthUsd() {
+  const response = await fetch("https://api.coinbase.com/v2/prices/ETH-USD/spot", {
+    signal: AbortSignal.timeout(8_000),
+  });
+  if (!response.ok) throw new Error("Coinbase price request failed.");
+  const data = (await response.json()) as { data?: { amount?: string } };
+  const price = Number(data.data?.amount);
+  if (!Number.isFinite(price) || price <= 0) throw new Error("Coinbase returned no ETH/USD price.");
+  return price;
+}
 
 async function currentPrices() {
   if (cached && cached.expiresAt > Date.now()) return cached.prices;
@@ -25,11 +35,13 @@ async function currentPrices() {
     // CoinGecko is the primary ETH/USD source. If it rate-limits or has a
     // transient outage, retain a live route-derived USDG fallback instead of
     // omitting ETH from the wallet’s total.
-    ethUsd().catch(async () => {
-      const quote = await quoteSwap(ETH.symbol, USDG.symbol, "1");
-      if (!quote) throw new Error("No ETH/USDG fallback route.");
-      return Number(quote.amountOut);
-    }),
+    ethUsd()
+      .catch(coinbaseEthUsd)
+      .catch(async () => {
+        const quote = await quoteSwap(ETH.symbol, USDG.symbol, "1");
+        if (!quote) throw new Error("No ETH/USDG fallback route.");
+        return Number(quote.amountOut);
+      }),
     ...SUPPORTED_RWA_ASSETS.filter((asset) => ![USDG.symbol, ETH.symbol, "WETH"].includes(asset.symbol)).map(
       async (asset) => {
         const quote = await quoteSwap(asset.symbol, USDG.symbol, "1");
