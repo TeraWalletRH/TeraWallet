@@ -69,6 +69,33 @@ export function parties(config = {}) {
     config.explorerUrl || DEFAULT_EXPLORER,
     "robinhoodchain.blockscout.com",
   );
+  // When the owner points balance reads at their own endpoint, that knowledge
+  // moves: it does not disappear. The panel gains a row and the wallet's own
+  // provider loses the line about every address the owner looks at.
+  const balanceHost = config.balanceEndpointHost || "";
+  const ownEndpoint = balanceHost
+    ? [
+        {
+          id: "owner-endpoint",
+          name: "Your own endpoint, for balance reads",
+          host: balanceHost,
+          reach: "direct",
+          learns: [
+            "The network address you are on, unless it is running on this machine",
+            "Every address whose balance you view, including ones you only look at",
+          ],
+          withheld: [
+            "Anything you sign",
+            "Assistant messages",
+            "Private keys",
+            "Your private policy presets",
+          ],
+          control:
+            "You chose this one, and you can change or remove it in Settings. A node on your own machine tells nobody anything.",
+          owned: true,
+        },
+      ]
+    : [];
   return [
     {
       id: "page-host",
@@ -102,14 +129,28 @@ export function parties(config = {}) {
       name: "Your wallet's own network provider",
       host: "Chosen by your wallet extension · not visible to this page",
       reach: "wallet",
-      learns: [
-        "The network address you are on",
-        "Every address whose balance you view, including ones you only look at",
-        "Every transaction you submit, before the network sees it",
-      ],
-      withheld: ["Assistant messages", "Your private policy presets", "Local records"],
-      control:
-        "Set a different RPC endpoint in your wallet extension. Most wallets default to their vendor's provider.",
+      learns: balanceHost
+        ? [
+            "The network address you are on",
+            "Every transaction you submit, before the network sees it",
+            "The contract and gas checks made in the moments before you sign",
+          ]
+        : [
+            "The network address you are on",
+            "Every address whose balance you view, including ones you only look at",
+            "Every transaction you submit, before the network sees it",
+          ],
+      withheld: balanceHost
+        ? [
+            "The balances you read, which now go to your own endpoint",
+            "Assistant messages",
+            "Your private policy presets",
+            "Local records",
+          ]
+        : ["Assistant messages", "Your private policy presets", "Local records"],
+      control: balanceHost
+        ? "Balance reads already go to your endpoint. What remains here is the signing path, which stays with your wallet on purpose: what it signs must be what it saw."
+        : "Point balance reads at your own node in Settings, or set a different RPC endpoint in your wallet extension. Most wallets default to their vendor's provider.",
       unobservable: true,
     },
     {
@@ -168,6 +209,7 @@ export function parties(config = {}) {
       withheld: ["Assistant messages", "Private keys", "Local records"],
       control: "Copy the hash instead of opening the link, and look it up somewhere else.",
     },
+    ...ownEndpoint,
     {
       id: "ledger",
       name: "Robinhood Chain itself",
@@ -204,6 +246,17 @@ export function egressStatus(rows, context = {}) {
   };
   return rows.map((row) => {
     const requests = counts[row.id];
+    if (row.id === "owner-endpoint") {
+      const reads = context.balanceReads || 0;
+      return {
+        ...row,
+        requests: reads,
+        seesYouNow: reads > 0,
+        note: reads
+          ? `${reads} balance read${reads === 1 ? "" : "s"} in this page session.`
+          : "Configured, but no balance has been read from it yet.",
+      };
+    }
     if (row.id === "page-host")
       return { ...row, seesYouNow: true, note: "This page was served from it." };
     if (row.id === "ledger")

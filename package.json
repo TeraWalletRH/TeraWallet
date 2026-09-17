@@ -4,9 +4,9 @@
   "sideEffects": false,
   "type": "module",
   "scripts": {
-    "dev": "bun run build:wallet && vite dev",
-    "build": "bun run build:wallet && vite build",
-    "build:dev": "bun run build:wallet && vite build --mode development",
+    "dev": "bun run build:wallet && bun run build:manifest && vite dev",
+    "build": "bun run build:wallet && bun run build:manifest && vite build",
+    "build:dev": "bun run build:wallet && bun run build:manifest && vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
     "test:frontend": "node --test tests/frontend/*.test.js",
@@ -14,7 +14,8 @@
     "push:origin": "git push origin main",
     "push:public": "python3 scripts/sync-public.py",
     "push:all": "git push origin main && python3 scripts/sync-public.py",
-    "build:wallet": "vite build --config vite.wallet.config.ts"
+    "build:wallet": "vite build --config vite.wallet.config.ts",
+    "build:manifest": "node scripts/build-manifest.mjs"
   },
   "overrides": {
     "rolldown": "1.2.1"
