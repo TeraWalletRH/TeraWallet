@@ -7,8 +7,10 @@ import {
   plan,
   wipe,
   CATEGORIES,
+  CACHES,
   LIMITS,
   PREFIX,
+  wipeCaches,
 } from "../../public/tera/wallet/wipe.js";
 
 // A stand-in for Web Storage: plain own properties, plus removeItem.
@@ -178,4 +180,48 @@ test("every category carries a label and an explanation", () => {
     assert.ok(category.detail, `${category.id} explains nothing`);
     assert.equal(typeof category.match, "function");
   }
+});
+
+// A stand-in for the Cache API: names in, names deleted.
+function cacheStorage(names = [], { refuse = [] } = {}) {
+  const present = new Set(names);
+  return {
+    present,
+    async delete(name) {
+      if (refuse.includes(name)) throw new Error("blocked");
+      return present.delete(name);
+    },
+    async keys() {
+      return [...present];
+    },
+  };
+}
+
+test("the cached model is removed, because the prefix scan cannot see it", async () => {
+  // The weights are 168MB in cache storage. A wipe that reported the browser
+  // clear while leaving them behind would be the exact overclaim this control
+  // exists to avoid.
+  const caches = cacheStorage(["transformers-cache", "unrelated-cache"]);
+  const result = await wipeCaches(caches);
+  assert.equal(result.removed, 1);
+  assert.equal(result.remaining, 0);
+  assert.deepEqual([...caches.present], ["unrelated-cache"], "other caches are left alone");
+});
+
+test("a cache that refuses removal is reported, not assumed gone", async () => {
+  const caches = cacheStorage(CACHES, { refuse: ["transformers-cache"] });
+  const result = await wipeCaches(caches);
+  assert.equal(result.removed, 1);
+  assert.equal(result.remaining, 1);
+});
+
+test("a browser without cache storage wipes cleanly rather than throwing", async () => {
+  assert.deepEqual(await wipeCaches(undefined), { removed: 0, remaining: 0 });
+});
+
+test("the marker that the model was verified is a known category, not 'other'", () => {
+  // It is written under the tera- prefix precisely so the existing scan finds
+  // it; if it ever fell through to OTHER the owner would be told this site
+  // stored something undescribed.
+  assert.equal(categoryFor("tera-engine-verified-v1").id, "engine");
 });

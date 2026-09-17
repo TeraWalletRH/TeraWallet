@@ -63,9 +63,13 @@ export const STAGES = [
   {
     id: "submitted",
     side: OWNER,
-    label: "The transaction is broadcast",
+    // Not "broadcast": this chain has no peer-to-peer queue to broadcast into.
+    // The transaction is handed to one sequencer, which reads it in full before
+    // anyone else and decides where it lands. Calling that a broadcast made the
+    // most privileged step on the path sound like the least.
+    label: "The transaction is handed to the sequencer",
     detail:
-      "You pay the network fee. Tera learns the hash only if you choose to sync the receipt for your audit trail.",
+      "Your wallet's provider passes it to the sequencer, which orders it. There is no public queue for a stranger to watch, and no way around that one party either. You pay the network fee. Tera learns the hash only if you choose to sync the receipt for your audit trail.",
   },
 ];
 

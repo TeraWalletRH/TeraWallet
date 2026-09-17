@@ -122,6 +122,7 @@ test("summarize counts identifying requests and model-provider requests", () => 
   ];
   assert.deepEqual(summarize(log), {
     requests: 3,
+    onDevice: 0,
     simulated: 0,
     identifying: 1,
     toModelProvider: 1,
@@ -157,4 +158,18 @@ test("the export carries field names, destination and retention only", () => {
   const serialized = JSON.stringify(output);
   assert.equal(serialized.includes("buy SPCX"), false);
   assert.equal(serialized.includes(owner), false);
+});
+
+test("a turn answered on this device is logged but is not a request", () => {
+  // The entry exists so the absence of a request is visible. Counting it as a
+  // request would make the on-device engine look like the thing it replaces.
+  const log = [
+    { ...describeRequest("/api/assets"), onDevice: true, sent: ["message"], processors: [] },
+    describeRequest("/api/assets"),
+  ];
+  const totals = summarize(log);
+  assert.equal(totals.requests, 1);
+  assert.equal(totals.onDevice, 1);
+  // Fields it never sent must not widen the count of fields that left.
+  assert.equal(totals.fields, new Set(describeRequest("/api/assets").sent).size);
 });
