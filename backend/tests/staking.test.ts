@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { advanceEpoch, changeStake, reserveSummary, REWARD_SCALE, settlePosition } from "../src/staking";
 import request from "supertest";
 import app from "../src/app";
+import { canTransition, payoutTotal } from "../src/staking-outbox";
 
 describe("TERA staking reward ledger", () => {
   const epoch = {
@@ -38,6 +39,17 @@ describe("TERA staking reward ledger", () => {
     const short = reserveSummary(999n, 900n, 100n);
     expect(short.solvent).toBe(false);
     expect(short.surplus).toBe(-1n);
+  });
+});
+
+describe("staking payout outbox", () => {
+  it("only allows a stored signed payout to be broadcast and confirmed", () => {
+    expect(canTransition('requested', 'signed')).toBe(true);
+    expect(canTransition('requested', 'broadcast')).toBe(false);
+    expect(canTransition('signed', 'broadcast')).toBe(true);
+    expect(canTransition('broadcast', 'confirmed')).toBe(true);
+    expect(canTransition('confirmed', 'broadcast')).toBe(false);
+    expect(payoutTotal(10n, 5n)).toBe(15n);
   });
 });
 
