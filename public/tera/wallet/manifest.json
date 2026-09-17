@@ -2,7 +2,7 @@
   "manifest": "Tera wallet build manifest",
   "version": 1,
   "release": "r-8c3a222c8e9c",
-  "builtAt": "2026-09-17T06:37:24.093Z",
+  "builtAt": "2026-09-17T06:39:08.924Z",
   "algorithm": "sha256",
   "base": "/tera/wallet/",
   "note": "Hashes of the wallet modules this site serves. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
