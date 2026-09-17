@@ -98,6 +98,14 @@ router.get("/api/staking/epochs", async (_req, res) => {
   } catch { res.status(503).json({success:false,error:'Unable to read staking epochs.'}); }
 });
 
+router.get("/api/admin/staking/epochs", requireAdmin, async (_req, res) => {
+  if (!pool) { res.status(503).json({ success:false, error:'Staking ledger is unavailable.' }); return; }
+  try {
+    const result=await pool.query("SELECT id,token_address,pool_address,funded_amount,funding_tx_hash,starts_at,ends_at,reward_rate_per_second,total_active_stake,distributed_rewards,status,created_at FROM staking_epochs ORDER BY created_at DESC");
+    res.json({success:true,epochs:result.rows});
+  } catch { res.status(503).json({success:false,error:'Unable to read admin epochs.'}); }
+});
+
 /** Exact TERA transfer the wallet should review and submit when staking. */
 router.post("/api/staking/prepare-deposit", (req, res) => {
   try {
