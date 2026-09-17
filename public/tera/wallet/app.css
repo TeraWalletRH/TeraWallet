@@ -1036,6 +1036,14 @@ h1:focus {
   padding-left: 12px;
 }
 
+/* The export note carries the ordinary left border until the text being
+   exported has never left the device. That case is the one an owner can still
+   change their mind about, so it takes the same colour the wallet uses
+   everywhere else for something it has stopped or wants read twice. */
+.note-first-send {
+  border-left-color: #945f3d;
+}
+
 /* A receipt's four states read at a glance. "Unproven" is deliberately not
    styled as a failure and deliberately not styled as a pass: it is the state
    most of the interesting checks land in, and flattening it either way would
