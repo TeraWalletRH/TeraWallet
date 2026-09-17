@@ -254,6 +254,47 @@ export function bundle(receipt, { input, output }) {
 export const EXPORT_WARNING =
   "A receipt file contains the message and the reply in full. For a turn answered on this device, that text has not left this browser until now — exporting it is you sending it, and whoever you give the file to can read it.";
 
+/**
+ * What an owner needs in front of them to decide on one particular export.
+ *
+ * `EXPORT_WARNING` states the general case in a sentence, which is what belongs
+ * in a panel read before any receipt is chosen. Once a receipt is chosen the
+ * wallet knows something more exact: whether this text has ever left the device.
+ * A turn answered here and a turn answered by the service produce the same file
+ * and carry very different consequences, and showing an owner the wrong one of
+ * those is worse than showing them nothing.
+ */
+export function exportNotice(receipt = {}) {
+  const firstSend = !receipt.sent;
+  return {
+    firstSend,
+    headline: firstSend
+      ? "This text has never left your browser."
+      : "This text was already sent when you asked.",
+    detail: firstSend
+      ? "The turn was answered on this device. Saving the file is the first time the message and the reply leave it."
+      : "Tera's assistant service already received this message. Saving the file sends it nowhere new, but it does make a copy you can pass on.",
+    consequence:
+      "Anyone you give the file to can read both in full. There is no way to take it back once it is out.",
+    contents: [
+      { label: "Your message", detail: "The full text you typed, exactly as written." },
+      { label: "The reply", detail: "The full text of the answer you were given." },
+      {
+        label: "Receipt details",
+        detail: "Which engine answered, the build release, and the time.",
+      },
+      ...(receipt.signature
+        ? [
+            {
+              label: "Your signature",
+              detail: "The signature you added, and the address that made it.",
+            },
+          ]
+        : []),
+    ],
+  };
+}
+
 const check = (id, label, status, detail) => ({ id, label, status, detail });
 
 /**
