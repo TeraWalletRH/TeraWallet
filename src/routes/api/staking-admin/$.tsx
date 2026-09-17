@@ -19,7 +19,12 @@ async function proxy({ request, params }: { request: Request; params: { _splat?:
   const contentType = response.headers.get("content-type");
   const setCookie = response.headers.get("set-cookie");
   if (contentType) out.set("content-type", contentType);
-  if (setCookie) out.set("set-cookie", setCookie);
+  // The browser receives this cookie from the Tera site, rather than directly
+  // from api.terawallet.app. Scope it to this proxy path so later admin calls
+  // send it back here and the proxy can forward it upstream.
+  if (setCookie) {
+    out.set("set-cookie", setCookie.replace(/Path=\/api\/admin\/staking/gi, "Path=/api/staking-admin"));
+  }
   return new Response(response.body, { status: response.status, headers: out });
 }
 
