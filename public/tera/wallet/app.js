@@ -135,6 +135,7 @@ import {
   ANSWERED_BY,
   CLAIMS as RECEIPT_CLAIMS,
   EXPORT_WARNING,
+  exportNotice,
   create as createReceipt,
   bundle as receiptBundle,
   verify as verifyReceipt,
@@ -886,6 +887,32 @@ async function openReceipt(index) {
      <p class="micro">${esc(EXPORT_WARNING)}</p>
      <div class="actions">${receipt.signature ? "" : button("Sign this receipt", "receipt-sign", `data-index="${Number(index)}" ${state.owner ? "" : "disabled"}`)}${button("Export receipt", "receipt-export", `data-index="${Number(index)}"`)}${button("Close", "close")}</div>
      ${receipt.signature ? "" : `<p class="micro">Signing asks your wallet for a signature over a short piece of readable text. It moves nothing and cannot authorise a transaction — the first line of what you will be shown is <code>${esc(DOMAIN)}</code>, which is what keeps it from being usable as anything else this wallet asks you to sign.</p>`}`,
+  );
+}
+
+// The export decision, in the wallet's own dialog. Everything shown here is
+// derived from the receipt in hand rather than written once for all receipts,
+// because the honest sentence differs: a turn answered on this device has text
+// that has never left, and a turn the service answered does not.
+function receiptExportDialog(index) {
+  const message = state.chat[Number(index)];
+  const receipt = message?.receipt;
+  if (!receipt) return;
+  const notice = exportNotice(receipt);
+  dialog(
+    "Export this receipt?",
+    `<p><b>${esc(notice.headline)}</b> ${esc(notice.detail)}</p>
+     <div class="note ${notice.firstSend ? "note-first-send" : ""}"><p>${esc(notice.consequence)}</p></div>
+     <div class="section-label">What the file contains</div>
+     <div class="table-scroll"><table><thead><tr><th>Part</th><th>Detail</th></tr></thead><tbody>${notice.contents
+       .map(
+         (part) =>
+           `<tr><td><b>${esc(part.label)}</b></td><td class="privacy-wrap">${esc(part.detail)}</td></tr>`,
+       )
+       .join("")}</tbody></table></div>
+     ${pair("Receipt", receipt.shortRef)}${pair("Answered by", ANSWERED_BY[receipt.answeredBy]?.label || "Not recorded")}${pair("File name", `tera-receipt-${receipt.shortRef}.json`)}
+     <div class="actions"><button class="btn primary" data-action="receipt-export-confirm" data-index="${Number(index)}">Save the file</button>${button("Keep it here", "close")}</div>
+     <p class="micro">Nothing is uploaded. The file is written to this device's downloads, and where it goes after that is up to you.</p>`,
   );
 }
 
@@ -3455,20 +3482,22 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (action === "receipt-export") {
+      const index = Number(target.dataset.index);
+      // The confirmation is the point, so it is the wallet's own dialog rather
+      // than a browser prompt: the same surface, wording and spacing as every
+      // other decision here, and room to show what the file actually holds.
+      if (state.chat[index]?.receipt) receiptExportDialog(index);
+    }
+    if (action === "receipt-export-confirm") {
       const message = state.chat[Number(target.dataset.index)];
       if (message?.receipt) {
-        // The confirmation is the point. For a turn answered on this device,
-        // this click is the first time that text leaves the browser.
-        if (
-          !window.confirm(`${EXPORT_WARNING}
-
-Export it?`)
-        )
-          return;
         downloadJson(
           receiptBundle(message.receipt, message.transcript || {}),
           `tera-receipt-${message.receipt.shortRef}.json`,
         );
+        closeDialog();
+        state.notice = `Receipt ${message.receipt.shortRef} was saved to your downloads. The message and the reply are in that file in full.`;
+        render();
       }
     }
     if (action === "receipt-check" && state.records[index])
