@@ -66,9 +66,10 @@ import {
   poolSummary,
   POOL_LIMITS,
   EndpointError,
+  READ_METHODS,
 } from "./endpoint.js";
 import { parties, egressStatus, egressSummary, exportableEgress, REACH } from "./egress.js";
-import { describeSubmission } from "./submission.js";
+import { describeSubmission, SUBMISSION_LIMITS, WHY_FIXED } from "./submission.js";
 import {
   minimise,
   rehydrate,
@@ -78,7 +79,13 @@ import {
   KIND_LABELS,
   PROPOSE_KEEP,
 } from "./minimise.js";
-import { GATE_LABELS, explainGate, localChecks, localSummary } from "./checks.js";
+import {
+  GATE_LABELS,
+  GATE_EXPLANATIONS,
+  explainGate,
+  localChecks,
+  localSummary,
+} from "./checks.js";
 import { snapshot, appendVersion, versionTrail, pruneVersions, formatAmount } from "./history.js";
 import {
   STAGES,
@@ -105,6 +112,13 @@ import {
   buildTurn,
   screenReply,
 } from "./engine.js";
+import {
+  ANSWER,
+  NAVIGATE,
+  COMPOSE,
+  parse as parseMessage,
+  respond as respondLocally,
+} from "./parse.js";
 import {
   ACTIONS,
   createPreset,
@@ -203,7 +217,12 @@ const engine = (() => {
     worker = new Worker("/tera/wallet/engine.worker.js", { type: "module" });
     worker.onmessage = ({ data }) => {
       if (data.type === "progress") {
-        state.engineStatus = { phase: data.phase, loaded: data.loaded, total: data.total, file: data.file };
+        state.engineStatus = {
+          phase: data.phase,
+          loaded: data.loaded,
+          total: data.total,
+          file: data.file,
+        };
         if (route() === "privacy" || route() === "agent") queueMicrotask(render);
         return;
       }
@@ -491,10 +510,13 @@ async function unlockEncryptedStorage(passphrase = "") {
       )
     : [];
   state.drafts = Array.isArray(vault?.drafts) ? vault.drafts : [];
-  state.bridges = Array.isArray(vault?.bridges) ? vault.bridges.filter(r => sameAddress(r.ownerAddress, state.owner) && isHash(r.requestId)) : [];
+  state.bridges = Array.isArray(vault?.bridges)
+    ? vault.bridges.filter((r) => sameAddress(r.ownerAddress, state.owner) && isHash(r.requestId))
+    : [];
   // Version history follows the same retention window as the rest of the vault.
   state.versions = pruneVersions(vault?.versions, state.vaultRetentionDays);
-  state.agentSessionToken = typeof vault?.agentSessionToken === "string" ? vault.agentSessionToken : "";
+  state.agentSessionToken =
+    typeof vault?.agentSessionToken === "string" ? vault.agentSessionToken : "";
   state.presets = Array.isArray(vault?.presets) ? vault.presets.map(createPreset) : [];
   // A stored endpoint is re-validated on unlock rather than trusted, so an old
   // or edited vault cannot point balance reads somewhere this wallet refuses.
@@ -577,8 +599,15 @@ async function deleteServerAssistantData() {
   connected();
   const timestamp = Date.now();
   const message = `Tera Wallet data deletion\nWallet: ${state.owner.toLowerCase()}\nTimestamp: ${timestamp}`;
-  const signature = await state.provider.request({ method: "personal_sign", params: [message, state.owner] });
-  const result = await api(`/api/account/${state.owner}/assistant-data`, { signature, timestamp }, { method: "DELETE" });
+  const signature = await state.provider.request({
+    method: "personal_sign",
+    params: [message, state.owner],
+  });
+  const result = await api(
+    `/api/account/${state.owner}/assistant-data`,
+    { signature, timestamp },
+    { method: "DELETE" },
+  );
   state.notice = `Stored assistant proposal data deleted (${result.redactedIntents} redacted). Confirmed receipts remain.`;
 }
 function clearLocalAssistantData() {
@@ -648,7 +677,15 @@ function render() {
       assets: registry,
       agent: () => `<div class="live-agent panel">${chat()}</div>`,
       approvals,
-      bridge: () => bridgeView({ esc, pair, button, records: state.bridges, owner: state.owner, demo: state.demo }),
+      bridge: () =>
+        bridgeView({
+          esc,
+          pair,
+          button,
+          records: state.bridges,
+          owner: state.owner,
+          demo: state.demo,
+        }),
       policy,
       sessions,
       receipts,
@@ -752,7 +789,9 @@ function engineChip() {
   const { phase, loaded, total } = state.engineStatus;
   if (phase === "ready") return chip("Nothing will be sent");
   if (phase === "verify" || phase === "load")
-    return chip(total ? `Loading model · ${Math.round((loaded / total) * 100)}%` : "Loading model…");
+    return chip(
+      total ? `Loading model · ${Math.round((loaded / total) * 100)}%` : "Loading model…",
+    );
   if (phase === "failed") return chip("Model unavailable", true);
   return chip("Model not loaded", true);
 }
@@ -760,7 +799,8 @@ function engineChip() {
 function engineHint() {
   if (state.engine !== DEVICE) return ENGINES[SERVICE].sends;
   const capability = engineCapabilities();
-  if (!capability.supported) return `${capability.reason} Questions cannot be answered on this device.`;
+  if (!capability.supported)
+    return `${capability.reason} Questions cannot be answered on this device.`;
   if (state.engineStatus.phase === "failed")
     return `${state.engineError} Nothing was sent in its place.`;
   if (state.engineStatus.phase !== "ready")
@@ -785,8 +825,22 @@ function minimiseSegments(segments) {
     .join("");
 }
 function chatBubble(message) {
-  if (message.role !== "user")
-    return `<div class="chat-bubble${message.withheld ? " withheld" : ""}"><strong class="chat-role">${message.device ? "On this device" : "Tera assistant"}${message.withheld ? ` ${chip("Answer withheld", true)}` : ""}</strong><div class="assistant-markdown">${renderAssistantMarkdown(message.text)}</div>${message.device ? `<p class="micro">${esc(attribution(DEVICE))}</p>` : ""}</div>`;
+  if (message.role !== "user") {
+    // A deterministic answer is labelled as the wallet's own text, not as an
+    // assistant reply. It is a stronger claim than either engine can make and
+    // the owner should be able to tell the difference at a glance.
+    const role = message.local
+      ? `From this wallet's code${message.cites ? ` ${chip(message.cites)}` : ""}`
+      : message.device
+        ? "On this device"
+        : "Tera assistant";
+    const footer = message.note
+      ? `<p class="micro">${esc(message.note)}</p>`
+      : message.device
+        ? `<p class="micro">${esc(attribution(DEVICE))}</p>`
+        : "";
+    return `<div class="chat-bubble${message.withheld ? " withheld" : ""}${message.local ? " sourced" : ""}"><strong class="chat-role">${role}${message.withheld ? ` ${chip("Answer withheld", true)}` : ""}</strong><div class="assistant-markdown">${renderAssistantMarkdown(message.text)}</div>${footer}</div>`;
+  }
   const replaced = message.removed?.length || 0;
   const detail = message.minimised
     ? `<details class="minimise-sent"><summary>${replaced} ${replaced === 1 ? "value" : "values"} replaced · what left this device</summary><pre>${esc(message.sent)}</pre>${message.kept?.length ? `<p class="micro">Kept as typed: ${esc(message.kept.map((kind) => KIND_LABELS[kind].toLowerCase()).join(", "))}.</p>` : ""}</details>`
@@ -795,7 +849,7 @@ function chatBubble(message) {
 }
 function chat() {
   return `<div class="section-label">Agent assistant ${chip("Owner supervised")}</div>
-    <div class="note">Ask a question or request an action. Only the message you submit and the wallet address needed for a proposal are sent.</div>
+    <div class="note">Ask a question or request an action. Questions this wallet can answer exactly from its own code — the five checks, the approval boundary, what each privacy control does — are answered here from that code, with no model and no request. Anything else goes to the engine you pick below.</div>
     <div class="toolbar">${state.agentSessionToken ? chip("Scoped token connected") + button("Disconnect token", "agent-token-disconnect") : button("Connect session token", "agent-token-connect", !state.owner ? "disabled" : "")}<label class="share-toggle minimise-toggle"><input type="checkbox" data-action="minimise-toggle" ${state.minimise ? "checked" : ""}> Minimise before sending</label></div>
     <div class="toolbar engine-toolbar"><label class="share-toggle"><span>Answered by</span> <select data-action="engine-select" aria-label="Which engine answers a question">${[SERVICE, DEVICE].map((id) => `<option value="${id}" ${state.engine === id ? "selected" : ""}>${esc(ENGINES[id].label)}</option>`).join("")}</select></label>${engineChip()}</div>
     <p class="micro" id="engine-hint">${esc(engineHint())}</p>
@@ -809,7 +863,9 @@ function chat() {
 function connectAgentSessionToken() {
   connected();
   if (!state.vaultKey)
-    throw new Error("Unlock encrypted local storage in Settings before connecting a session token.");
+    throw new Error(
+      "Unlock encrypted local storage in Settings before connecting a session token.",
+    );
   dialog(
     "Connect a scoped session token",
     `<form id="agent-token-form"><div class="field"><label for="agent-token">Session token</label><input id="agent-token" name="token" autocomplete="off" required></div><p class="micro">The token is kept only in Tera's encrypted local vault and sent to Tera when you prepare an assistant proposal. It is never sent to the model provider.</p><p class="live-form-error" role="alert"></p><button class="btn primary">Connect token ↗</button></form>`,
@@ -1087,7 +1143,9 @@ function showSessionToken(result, title = "Service token created") {
 
 function createServiceSession() {
   connected();
-  const assets = state.assets.filter((asset) => isAddress(asset.address) && asset.status === "ACTIVE");
+  const assets = state.assets.filter(
+    (asset) => isAddress(asset.address) && asset.status === "ACTIVE",
+  );
   if (!assets.length) throw new Error("Load the asset registry before creating a service token.");
   dialog(
     "Create a short-lived service token",
@@ -1449,7 +1507,8 @@ function applyVaultPayload(payload) {
     try {
       state.rpcEndpoints = poolUrls(createPool(importedEndpoints));
     } catch {
-      state.notice = "The balance endpoints in that file were not acceptable and were not restored.";
+      state.notice =
+        "The balance endpoints in that file were not acceptable and were not restored.";
     }
   }
 }
@@ -1599,12 +1658,11 @@ function duressWipeDialog() {
     const caches = await wipeCaches(globalThis.caches);
     forgetEverything();
     closeDialog();
-    const cached = caches.removed
-      ? ` The cached on-device model was removed as well.`
-      : "";
-    state.notice = result.remaining || caches.remaining
-      ? `${result.removed} removed, but ${result.remaining + caches.remaining} could not be. This browser is blocking storage changes; clear site data from browser settings.`
-      : `${result.removed} stored ${result.removed === 1 ? "artefact" : "artefacts"} destroyed.${cached} Nothing was sent anywhere.`;
+    const cached = caches.removed ? ` The cached on-device model was removed as well.` : "";
+    state.notice =
+      result.remaining || caches.remaining
+        ? `${result.removed} removed, but ${result.remaining + caches.remaining} could not be. This browser is blocking storage changes; clear site data from browser settings.`
+        : `${result.removed} stored ${result.removed === 1 ? "artefact" : "artefacts"} destroyed.${cached} Nothing was sent anywhere.`;
     render();
   };
 }
@@ -1903,7 +1961,7 @@ async function setAccount(accounts) {
   }
   if (version === generation) await refreshAccount();
 }
-function createProposal(symbol) {
+function createProposal(symbol, draft = null) {
   connected();
   if (!state.assetsLoaded) throw new Error("Load the asset registry before preparing a proposal.");
   const assets = state.assets.filter((a) => isAddress(a.address) && a.status === "ACTIVE");
@@ -1912,6 +1970,14 @@ function createProposal(symbol) {
     `<form id="proposal-form"><div class="field"><label for="proposal-asset">Asset</label><select id="proposal-asset" name="asset">${assets.map((a) => `<option value="${esc(a.symbol)}" ${a.symbol === symbol ? "selected" : ""}>${esc(a.symbol)} · ${esc(a.name)}</option>`).join("")}</select></div><div class="field"><label for="proposal-action">Action</label><select id="proposal-action" name="action"><option>TRANSFER</option><option>BUY</option><option>SELL</option></select></div><div class="field"><label id="proposal-amount-label" for="proposal-amount">Token amount</label><input id="proposal-amount" name="amount" inputmode="decimal" required placeholder="0.00" pattern="[0-9]+(\\.[0-9]+)?"></div><div class="field"><label for="proposal-recipient">Recipient</label><input id="proposal-recipient" name="recipient" placeholder="Required for transfers" autocomplete="off"></div><p id="proposal-help" class="micro"></p><p class="live-form-error" role="alert"></p><button class="btn primary">Run the checks ↗</button></form>`,
   );
   const form = document.getElementById("proposal-form");
+  // A draft read out of a message fills the same fields the owner would type
+  // into. Nothing is submitted: they still press the button and read the checks.
+  if (draft && form) {
+    const amount = form.querySelector('[name="amount"]');
+    const recipient = form.querySelector('[name="recipient"]');
+    if (amount && draft.amount) amount.value = draft.amount;
+    if (recipient && draft.recipient) recipient.value = draft.recipient;
+  }
   const updateProposalFields = () => {
     const data = new FormData(form);
     const action = data.get("action");
@@ -2090,97 +2156,143 @@ async function refreshBridge(record) {
   try {
     const { status } = await api(`/api/bridge/status/${record.requestId}`);
     if (version !== generation) return;
-    if (status.originChainId && status.originChainId !== 4663) throw new Error("Unexpected bridge origin.");
-    if (status.destinationChainId && status.destinationChainId !== record.destinationChainId) throw new Error("Unexpected bridge destination.");
+    if (status.originChainId && status.originChainId !== 4663)
+      throw new Error("Unexpected bridge origin.");
+    if (status.destinationChainId && status.destinationChainId !== record.destinationChainId)
+      throw new Error("Unexpected bridge destination.");
     record.status = status.status;
     record.destinationHashes = Array.isArray(status.txHashes) ? status.txHashes : [];
     record.error = status.failReason && status.failReason !== "N/A" ? status.failReason : "";
-  } catch (error) { if (version === generation) record.error = errorMessage(error); }
-  if (version === generation) { await persist(); render(); }
+  } catch (error) {
+    if (version === generation) record.error = errorMessage(error);
+  }
+  if (version === generation) {
+    await persist();
+    render();
+  }
 }
 
 function reviewBridge(quote, input, version) {
-  const fee = entry => entry?.currency ? `${formatUnits(entry.amount, entry.currency.decimals)} ${entry.currency.symbol}` : "Unavailable";
+  const fee = (entry) =>
+    entry?.currency
+      ? `${formatUnits(entry.amount, entry.currency.decimals)} ${entry.currency.symbol}`
+      : "Unavailable";
   const sourceEth = input.originCurrency === "0x0000000000000000000000000000000000000000";
   const sourceSymbol = sourceEth ? "ETH" : "USDG";
   const sourceDecimals = sourceEth ? 18 : 6;
   const outSymbol = quote.input?.destination?.symbol || "destination token";
   const outDecimals = quote.input?.destination?.decimals ?? 6;
-  const panel = dialog("Review your bridge", `${pair("From", `Robinhood Chain · ${sourceSymbol}`)}${pair("To", `${quote.input?.destination?.name || "Destination"} · ${outSymbol}`)}${pair("Receiving address", input.recipient)}${pair(`${sourceSymbol} input`, formatUnits(input.amount, sourceDecimals))}${pair(`Expected ${outSymbol}`, formatUnits(quote.amountOut, outDecimals))}${pair(`Minimum ${outSymbol}`, formatUnits(quote.minimumAmountOut, outDecimals))}${pair("Relay fee (included in quote)", fee(quote.fees?.relayer))}${pair("Estimated network fee (additional)", fee(quote.fees?.gas))}${pair("Quote expires", new Date(quote.expiresAt).toLocaleTimeString())}<p class="micro">Relay handles delivery to this address. Source confirmation alone does not mean delivery is complete. Delivery or refund progress will appear below. ${state.vaultKey ? "Tracking is saved in your encrypted vault." : "Unlock the vault in Settings to save tracking across reloads."}</p><p id="bridge-progress" role="status"></p><button class="btn" id="bridge-sign">Approve bridge in wallet ↗</button>`);
+  const panel = dialog(
+    "Review your bridge",
+    `${pair("From", `Robinhood Chain · ${sourceSymbol}`)}${pair("To", `${quote.input?.destination?.name || "Destination"} · ${outSymbol}`)}${pair("Receiving address", input.recipient)}${pair(`${sourceSymbol} input`, formatUnits(input.amount, sourceDecimals))}${pair(`Expected ${outSymbol}`, formatUnits(quote.amountOut, outDecimals))}${pair(`Minimum ${outSymbol}`, formatUnits(quote.minimumAmountOut, outDecimals))}${pair("Relay fee (included in quote)", fee(quote.fees?.relayer))}${pair("Estimated network fee (additional)", fee(quote.fees?.gas))}${pair("Quote expires", new Date(quote.expiresAt).toLocaleTimeString())}<p class="micro">Relay handles delivery to this address. Source confirmation alone does not mean delivery is complete. Delivery or refund progress will appear below. ${state.vaultKey ? "Tracking is saved in your encrypted vault." : "Unlock the vault in Settings to save tracking across reloads."}</p><p id="bridge-progress" role="status"></p><button class="btn" id="bridge-sign">Approve bridge in wallet ↗</button>`,
+  );
   const sign = panel.querySelector("#bridge-sign");
   sign.onclick = async () => {
     if (state.busy) return;
     sign.disabled = true;
     state.busy = true;
     let record;
-    const progress = message => { panel.querySelector("#bridge-progress").textContent = message; };
+    const progress = (message) => {
+      panel.querySelector("#bridge-progress").textContent = message;
+    };
     const active = () => {
-      if (version !== generation || !panel.open) throw new Error("Wallet or review changed. Request a fresh bridge quote.");
+      if (version !== generation || !panel.open)
+        throw new Error("Wallet or review changed. Request a fresh bridge quote.");
     };
     try {
       active();
       correctNetwork();
-      await sendBridge(state.provider, quote, input, active, async (step, hash) => {
-        // Capture submitted hashes before any subsequent network operation.
-        if (version !== generation) {
-          progress(`Transaction submitted: ${hash}. Track Relay reference ${quote.requestId}.`);
-          throw new Error(`Wallet changed after submission. Relay reference: ${quote.requestId}; transaction: ${hash}`);
-        }
-        if (!record) {
-          record = { ...input, requestId: quote.requestId, status: "waiting", createdAt: new Date().toISOString() };
-          state.bridges.unshift(record);
-        }
-        if (step === "deposit") { record.depositHash = hash; record.status = "depositing"; }
-        else record.approvalHash = hash;
-        await persist();
-      }, progress);
+      await sendBridge(
+        state.provider,
+        quote,
+        input,
+        active,
+        async (step, hash) => {
+          // Capture submitted hashes before any subsequent network operation.
+          if (version !== generation) {
+            progress(`Transaction submitted: ${hash}. Track Relay reference ${quote.requestId}.`);
+            throw new Error(
+              `Wallet changed after submission. Relay reference: ${quote.requestId}; transaction: ${hash}`,
+            );
+          }
+          if (!record) {
+            record = {
+              ...input,
+              requestId: quote.requestId,
+              status: "waiting",
+              createdAt: new Date().toISOString(),
+            };
+            state.bridges.unshift(record);
+          }
+          if (step === "deposit") {
+            record.depositHash = hash;
+            record.status = "depositing";
+          } else record.approvalHash = hash;
+          await persist();
+        },
+        progress,
+      );
       progress("Deposit submitted. Tracking destination delivery.");
       await refreshBridge(record);
     } catch (error) {
       progress(`${errorMessage(error)} Request a fresh quote only if no deposit was submitted.`);
-      if (record) { record.error = errorMessage(error); await persist(); }
-    } finally { state.busy = false; render(); }
+      if (record) {
+        record.error = errorMessage(error);
+        await persist();
+      }
+    } finally {
+      state.busy = false;
+      render();
+    }
   };
 }
 
 setInterval(() => {
   if (route() !== "bridge" || state.busy || document.hidden) return;
-  const record = state.bridges.find(r => r.depositHash && !["success", "failure", "refund"].includes(r.status));
+  const record = state.bridges.find(
+    (r) => r.depositHash && !["success", "failure", "refund"].includes(r.status),
+  );
   if (record && !polling) {
     polling = true;
-    void refreshBridge(record).finally(() => { polling = false; });
+    void refreshBridge(record).finally(() => {
+      polling = false;
+    });
   }
 }, 10000);
 
 function bindForms() {
   const bridgeForm = document.getElementById("bridge-form");
-  if (bridgeForm) bridgeForm.onsubmit = async (event) => {
-    event.preventDefault();
-    if (state.busy || state.demo) return;
-    const version = generation;
-    const submit = bridgeForm.querySelector("button");
-    submit.disabled = true;
-    try {
-      correctNetwork();
-      const input = bridgeFormInput(bridgeForm, state.owner);
-      const { quote } = await api("/api/bridge/quote", input);
-      if (version !== generation) return;
-      checkBridgeQuote(quote, input);
-      reviewBridge(quote, input, version);
-    } catch (error) {
-      bridgeForm.querySelector('[role="alert"]').textContent = errorMessage(error);
-    } finally { submit.disabled = false; }
-  };
+  if (bridgeForm)
+    bridgeForm.onsubmit = async (event) => {
+      event.preventDefault();
+      if (state.busy || state.demo) return;
+      const version = generation;
+      const submit = bridgeForm.querySelector("button");
+      submit.disabled = true;
+      try {
+        correctNetwork();
+        const input = bridgeFormInput(bridgeForm, state.owner);
+        const { quote } = await api("/api/bridge/quote", input);
+        if (version !== generation) return;
+        checkBridgeQuote(quote, input);
+        reviewBridge(quote, input, version);
+      } catch (error) {
+        bridgeForm.querySelector('[role="alert"]').textContent = errorMessage(error);
+      } finally {
+        submit.disabled = false;
+      }
+    };
   const bridgeChain = document.getElementById("bridge-chain");
   const bridgeToken = document.getElementById("bridge-token");
-  if (bridgeChain && bridgeToken) bridgeChain.onchange = () => {
-    const sol = bridgeChain.value === "792703809";
-    bridgeToken.innerHTML = sol
-      ? '<option value="11111111111111111111111111111111">SOL</option><option value="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v">USDC</option><option value="Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB">USDT</option>'
-      : bridgeChain.value === "5042"
-        ? '<option value="0x3600000000000000000000000000000000000000">USDC</option>'
-      : '<option value="0x0000000000000000000000000000000000000000">ETH</option><option value="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913">USDC</option>';
-  };
+  if (bridgeChain && bridgeToken)
+    bridgeChain.onchange = () => {
+      const sol = bridgeChain.value === "792703809";
+      bridgeToken.innerHTML = sol
+        ? '<option value="11111111111111111111111111111111">SOL</option><option value="EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v">USDC</option><option value="Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB">USDT</option>'
+        : bridgeChain.value === "5042"
+          ? '<option value="0x3600000000000000000000000000000000000000">USDC</option>'
+          : '<option value="0x0000000000000000000000000000000000000000">ETH</option><option value="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913">USDC</option>';
+    };
   const filter = document.getElementById("asset-filter");
   if (filter)
     filter.onsubmit = (event) => {
@@ -2304,8 +2416,37 @@ function reviewMessage(plan) {
   );
 }
 
+// What `parse.js` builds its answers out of. Every entry is the live export, so
+// an answer cannot drift from the panel that shows the same text — rewording a
+// limit in ohttp.js rewords the answer with it.
+function answerSources() {
+  return {
+    gates: GATES,
+    gateLabels: GATE_LABELS,
+    gateExplanations: GATE_EXPLANATIONS,
+    stages: STAGES,
+    sideNotes: SIDE_NOTES,
+    owner: OWNER,
+    kindLabels: KIND_LABELS,
+    proposeKeep: PROPOSE_KEEP,
+    ohttpLimits: OHTTP_LIMITS,
+    engineLimits: ENGINE_LIMITS,
+    wipeLimits: WIPE_LIMITS,
+    localOnly: LOCAL_ONLY,
+    submissionModel: describeSubmission({ chainId }).model,
+    submissionLimits: SUBMISSION_LIMITS,
+    whyFixed: WHY_FIXED,
+    readMethods: READ_METHODS,
+  };
+}
+
 async function sendMessage(plan) {
   const { message, mode, keep, result } = plan;
+  // Before either engine. A question this wallet can answer exactly from its
+  // own code is answered that way, because the alternative is a paraphrase of
+  // text that was written and reviewed carefully — and a request, or a model,
+  // to produce it. Proposals are never handled here: they need the gates.
+  if (mode !== "propose" && answeredLocally(message)) return;
   const routing = plan.routing || routeMessage({ mode, engine: state.engine });
   // An owner who chose the on-device engine does not get a network request
   // because the model was not ready. Nothing is sent, and the reason is shown.
@@ -2412,6 +2553,106 @@ async function sendMessage(plan) {
  * was answered without a request, because a privacy centre that simply showed
  * nothing would be indistinguishable from a broken one.
  */
+/**
+ * Try the deterministic layer. Returns true when the message was fully dealt
+ * with here, so `sendMessage` stops before it reaches an engine.
+ *
+ * A compose match is the interesting case. "Send 50 USDG to 0x…" is understood
+ * completely, and the honest thing to do with that understanding is fill in the
+ * form and stop — not skip to a transaction. Everything after this point is the
+ * owner pressing the same buttons they always press, through the same checks.
+ */
+function answeredLocally(message) {
+  const parsed = parseMessage(message);
+  if (!parsed.matched) return false;
+
+  if (parsed.kind === ANSWER) {
+    const answer = respondLocally(parsed, answerSources());
+    if (!answer) return false;
+    state.chat.push({ role: "user", text: message, local: true });
+    state.chat.push({
+      role: "assistant",
+      text: `**${answer.title}**
+
+${answer.body}`,
+      local: true,
+      cites: answer.module,
+      note: answer.note,
+    });
+    state.privacyLog = appendLog(state.privacyLog, {
+      at: Date.now(),
+      id: "parse-local",
+      label: `Answered from this wallet's ${answer.module}`,
+      purpose:
+        "The question matched a fixed pattern with an exact answer in this wallet's own code. No model ran and no request was built.",
+      method: "None",
+      path: "No request",
+      sent: [],
+      withheld: ["The message you typed", "Your wallet address", "The network address you are on"],
+      processors: ["Nobody. No request was made."],
+      identifies: false,
+      retention: "Nothing to retain anywhere else. The exchange is in this page session only.",
+      onDevice: true,
+    });
+    render();
+    return true;
+  }
+
+  if (parsed.kind === NAVIGATE) {
+    navigate(parsed.page);
+    return true;
+  }
+
+  if (parsed.kind === COMPOSE) {
+    composeTransfer(parsed.slots);
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Carry an understood transfer into the composer. It does not prepare, submit
+ * or sign anything: the owner still presses Prepare, still reads the five
+ * checks, and still approves in their own wallet.
+ */
+function composeTransfer(slots) {
+  const asset = state.assets.find(
+    (entry) => entry.symbol.toUpperCase() === slots.symbol.toUpperCase(),
+  );
+  if (slots.symbol && state.assetsLoaded && !asset) {
+    state.chat.push({
+      role: "assistant",
+      text: `There is no **${esc(slots.symbol)}** in the asset registry, so nothing was filled in. Open the registry to see what this wallet supports.`,
+      local: true,
+      note: "Read from your message on this device. No model ran and no request was made.",
+    });
+    render();
+    return;
+  }
+  try {
+    // The same dialog the owner opens from the registry, with the parts of
+    // their sentence already in it.
+    createProposal(asset?.symbol, { amount: slots.amount, recipient: slots.recipient });
+    state.chat.push({
+      role: "assistant",
+      text: `Opened the prepare form with **${slots.amount}${asset ? ` ${asset.symbol}` : ""}** to \`${slots.recipient}\` filled in.
+
+Nothing has been prepared or sent. Check it, run the five checks, and approve in your own wallet.`,
+      local: true,
+      note: "Read from your message on this device. No model ran and no request was made.",
+    });
+  } catch (error) {
+    state.chat.push({
+      role: "assistant",
+      text: `${errorMessage(error)}
+
+Your message was understood on this device and was not sent anywhere.`,
+      local: true,
+    });
+  }
+  render();
+}
+
 async function answerOnDevice(plan) {
   const { message } = plan;
   const version = generation;
@@ -2438,7 +2679,8 @@ async function answerOnDevice(plan) {
         "The message was answered by the model running in this tab. No request was built, so nothing was sent to Tera, to a relay, or to a model provider.",
       method: "None",
       path: "No request",
-      retention: "Nothing to retain anywhere else. The exchange is in this page session only and is cleared on reload.",
+      retention:
+        "Nothing to retain anywhere else. The exchange is in this page session only and is cleared on reload.",
       sent: [],
       withheld: ["The message you typed", "Your wallet address", "The network address you are on"],
       processors: ["Nobody. No request was made."],
@@ -2809,14 +3051,24 @@ document.addEventListener("click", async (event) => {
       render();
     }
     if (action === "assistant-local-clear") {
-      if (!window.confirm("Delete assistant messages, drafts, proposal versions, presets, and local request metadata from this device?")) return;
+      if (
+        !window.confirm(
+          "Delete assistant messages, drafts, proposal versions, presets, and local request metadata from this device?",
+        )
+      )
+        return;
       clearLocalAssistantData();
       await persist();
       state.notice = "Local assistant data was deleted from this device.";
       render();
     }
     if (action === "assistant-server-clear") {
-      if (!window.confirm("Sign a wallet request to delete stored unconfirmed assistant proposal data? Confirmed receipts remain.")) return;
+      if (
+        !window.confirm(
+          "Sign a wallet request to delete stored unconfirmed assistant proposal data? Confirmed receipts remain.",
+        )
+      )
+        return;
       await deleteServerAssistantData();
       render();
     }
