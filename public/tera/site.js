@@ -146,29 +146,16 @@ function installTokenHero(){
  const zh=locale()==='zh';
  const existing=$('#tera-token-hero');
  if(existing){
-  const label=$('[data-token-label]',existing);
+  const label=$('[data-token-label]',existing),burn=$('[data-token-burn]',existing);
   if(label)label.textContent=zh?'合约地址':'CONTRACT ADDRESS';
+  if(burn)burn.textContent=zh?'已销毁 2 亿枚 $TERA':'200M $TERA BURNED';
   return;
  }
  if(!heading)return;
  const card=document.createElement('div');card.id='tera-token-hero';card.className='tera-token-hero';
- card.innerHTML=`<span class="tera-token-label" data-token-label>${zh?'合约地址':'CONTRACT ADDRESS'}</span><code>${address}</code><button type="button" aria-label="Copy contract address">Copy</button><a href="https://dexscreener.com/search?q=${address}" target="_blank" rel="noopener noreferrer">Dexscreener ↗</a>`;
+ card.innerHTML=`<span class="tera-token-label" data-token-label>${zh?'合约地址':'CONTRACT ADDRESS'}</span><code>${address}</code><span class="tera-token-burn" data-token-burn>${zh?'已销毁 2 亿枚 $TERA':'200M $TERA BURNED'}</span><button type="button" aria-label="Copy contract address">Copy</button><a href="https://dexscreener.com/search?q=${address}" target="_blank" rel="noopener noreferrer">Dexscreener ↗</a>`;
  (heading.parentElement||heading).append(card);
  const copy=$('button',card);copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(address);copy.textContent='Copied';setTimeout(()=>{copy.textContent='Copy'},1600)}catch{copy.textContent='Copy unavailable';setTimeout(()=>{copy.textContent='Copy'},1600)}});
-}
-
-function installBurnMilestone(){
- const heading=[...document.querySelectorAll('h1')].find(h=>/your assets|你的资产/i.test(h.textContent.replace(/\s+/g,' ')));
- const zh=locale()==='zh',existing=$('#tera-burn-milestone');
- if(existing){const title=$('[data-burn-title]',existing),copy=$('[data-burn-copy]',existing);if(title)title.textContent=zh?'已销毁 2 亿枚 $TERA':'200M $TERA BURNED';if(copy)copy.textContent=zh?'已完成供应量里程碑':'COMPLETED SUPPLY MILESTONE';const faq=[...document.querySelectorAll('h1,h2,h3')].find(h=>/^(faq|常见问题)$/i.test(h.textContent.replace(/\s+/g,'')));const host=faq?.closest('section')||faq?.parentElement;if(host&&existing.nextElementSibling!==host)host.insertAdjacentElement('beforebegin',existing);return}
- if(!heading)return;
- const section=document.createElement('section');section.id='tera-burn-milestone';section.className='tera-burn-milestone';
- section.innerHTML=`<span data-burn-copy>${zh?'已完成供应量里程碑':'COMPLETED SUPPLY MILESTONE'}</span><strong data-burn-title>${zh?'已销毁 2 亿枚 $TERA':'200M $TERA BURNED'}</strong><a href="/roadmap/">${zh?'查看路线图':'View roadmap'} ↗</a>`;
- // Keep the burn record as a standalone milestone near the questions it may
- // prompt, rather than mixing it into the opening wallet message.
- const faq=[...document.querySelectorAll('h1,h2,h3')].find(h=>/^(faq|常见问题)$/i.test(h.textContent.replace(/\s+/g,'')));
- const host=faq?.closest('section')||faq?.parentElement;
- if(host)host.insertAdjacentElement('beforebegin',section);
 }
 
 function phaseControl(target){const c=target.closest('[data-highlight]');if(!c)return false;const name=c.textContent.trim();if(!['first','next','first milestone','next milestone'].includes(name))return false;let section=c.parentElement;while(section&&(!section.querySelector('h2')||![...section.querySelectorAll('p')].some(p=>/^[A-F]$/.test(p.textContent.trim()))))section=section.parentElement;if(!section||!section.querySelector('h2').textContent.replace(/\s/g,'').includes('Roadmap'))return false;const next=name.startsWith('next');section.querySelectorAll('p').forEach(p=>{if(/^[A-F]$/.test(p.textContent.trim())){if(!p.dataset.phasePair)p.dataset.phasePair=String(Math.floor((p.textContent.trim().charCodeAt(0)-65)/2));const value=String.fromCharCode(65+Number(p.dataset.phasePair)*2+(next?1:0));if(p.textContent!==value){p.textContent=value;p.animate([{opacity:.3,transform:'translateY(6px)'},{opacity:1,transform:'translateY(0)'}],{duration:300})}}});section.querySelectorAll('[data-highlight]').forEach(b=>{if(['first','next','first milestone','next milestone'].includes(b.textContent.trim()))b.setAttribute('aria-pressed',String(b===c))});return true}
@@ -186,9 +173,9 @@ installMenu();enhance();scrubTemplateLeftovers();
 let localeTimer=null,tokenTimer=null,scrubTimer=null;
 const localeObserver=new MutationObserver(scheduleLocaleTranslation);
 function observeLocale(){localeObserver.observe(document.body,{childList:true,characterData:true,subtree:true})}
-function scheduleTokenHero(){if(tokenTimer!==null)return;tokenTimer=setTimeout(()=>{tokenTimer=null;installTokenHero();installBurnMilestone()},100)}
+function scheduleTokenHero(){if(tokenTimer!==null)return;tokenTimer=setTimeout(()=>{tokenTimer=null;installTokenHero()},100)}
 function scheduleTemplateScrub(){if(scrubTimer!==null)return;scrubTimer=setTimeout(()=>{scrubTimer=null;scrubTemplateLeftovers()},0)}
 function scheduleLocaleTranslation(){scheduleTokenHero();scheduleTemplateScrub();if(locale()!=='zh'||localeTimer!==null)return;localeTimer=setTimeout(()=>{localeTimer=null;localeObserver.disconnect();try{installTokenHero();installLocaleControls();translatePage('zh')}finally{observeLocale()}},0)}
-observeLocale();scheduleLocaleTranslation();installBurnMilestone();
+observeLocale();scheduleLocaleTranslation();
 addEventListener('load',()=>{scheduleTokenHero();[500,1500,3000].forEach(delay=>setTimeout(scheduleTokenHero,delay));scheduleLocaleTranslation()});
 })();
