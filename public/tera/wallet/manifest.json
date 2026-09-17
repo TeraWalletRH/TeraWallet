@@ -1,21 +1,21 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-7c97fec285d6",
-  "builtAt": "2026-09-16T21:07:32.660Z",
+  "release": "r-c22776fe0d2d",
+  "builtAt": "2026-09-17T00:11:16.849Z",
   "algorithm": "sha256",
   "base": "/tera/wallet/",
   "note": "Hashes of the wallet modules this site serves. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
   "files": [
     {
       "path": "app.css",
-      "hash": "sha256-4y2B9BNyl6Akw53eUp7qi3J9Pxyu+vn6LSfoaQRsc8c=",
-      "bytes": 17023
+      "hash": "sha256-ldcrq/t1kvQNtbgSHm6W93rGKS50r0+7bP2WRZcVE3A=",
+      "bytes": 17264
     },
     {
       "path": "app.js",
-      "hash": "sha256-k9MnNQ1Vere8KGc7IgL1yM69UbWv81TUVYvrT/IFpDk=",
-      "bytes": 129269
+      "hash": "sha256-MtwAI9m+hL/Rxy31EkVZzLG0Yp5WQqgaUOZfN7PJbu4=",
+      "bytes": 134298
     },
     {
       "path": "boundary.js",
@@ -106,7 +106,12 @@
       "path": "vault.js",
       "hash": "sha256-7hFV+o7jn+PkNbbBcP4MvY/52EnuYItD2J5P+i/hjPc=",
       "bytes": 5802
+    },
+    {
+      "path": "wipe.js",
+      "hash": "sha256-qJaXWt2PyFUPJlh5rrnDgF2Om/mtwMl5GHOAY25vYx8=",
+      "bytes": 5220
     }
   ],
-  "filesHash": "sha256-fJf+woXWlIjm072sxi05Bf0utgdetA68t2I+6KdXBXg="
+  "filesHash": "sha256-wid2/g0tV49C9UEfES1ZJyyA2CK9InTyc4LRrXPX4lY="
 }

@@ -39,6 +39,7 @@ import {
   recoverFromShares,
   passphraseIssue,
 } from "./recovery.js";
+import { plan as wipePlan, wipe as wipeStorages, LIMITS as WIPE_LIMITS } from "./wipe.js";
 import { bridgeView, bridgeFormInput, checkBridgeQuote, sendBridge } from "./bridge.js";
 import {
   LOCAL_ONLY,
@@ -1244,6 +1245,121 @@ function useRecoveryDialog() {
   };
 }
 
+const WIPE_WORD = "WIPE";
+function storagesToWipe() {
+  const storages = [];
+  try {
+    storages.push(localStorage);
+  } catch {
+    /* A browser with storage blocked has nothing here to remove. */
+  }
+  try {
+    storages.push(sessionStorage);
+  } catch {
+    /* Same. */
+  }
+  return storages;
+}
+function duressPanel() {
+  const summary = wipePlan(storagesToWipe());
+  return `<p>Destroy everything this site has stored in this browser, for every account, in one step. It works whether or not a wallet is connected and whether or not the vault is unlocked.</p>
+    ${pair("Artefacts stored now", String(summary.total))}
+    ${summary.accounts ? pair("Accounts represented", String(summary.accounts)) : ""}
+    <div class="actions">${button("Wipe this browser", "duress-wipe", summary.total ? "" : "disabled")}</div>
+    <p class="micro">No network request is made. Nothing is told to Tera, and nothing needs a signature — which is the point: it works when you cannot safely do anything else.</p>
+    <p class="micro"><b>What it cannot reach.</b></p>
+    <ul class="wipe-limits">${WIPE_LIMITS.map((limit) => `<li>${esc(limit)}</li>`).join("")}</ul>`;
+}
+function duressWipeDialog() {
+  const summary = wipePlan(storagesToWipe());
+  if (!summary.total) {
+    state.notice = "There is nothing stored in this browser to wipe.";
+    render();
+    return;
+  }
+  dialog(
+    "Wipe this browser",
+    `<p>This destroys ${esc(summary.total)} stored ${summary.total === 1 ? "artefact" : "artefacts"}${summary.accounts > 1 ? `, across ${esc(summary.accounts)} accounts` : ""}. It cannot be undone, and nothing here can bring any of it back.</p>
+     <div class="table-scroll"><table><thead><tr><th>What goes</th><th>Count</th></tr></thead><tbody>${summary.categories
+       .map(
+         (category) =>
+           `<tr><td><b>${esc(category.label)}</b><small>${esc(category.detail)}</small></td><td>${esc(category.count)}</td></tr>`,
+       )
+       .join("")}</tbody></table></div>
+     <form id="duress-form"><div class="field"><label for="duress-word">Type ${WIPE_WORD} to confirm</label><input id="duress-word" name="word" autocomplete="off" autocapitalize="characters" spellcheck="false" required></div>
+     <p class="micro">Records Tera already holds are not affected by this, and no request is sent. Deleting those is a separate control that needs your signature.</p>
+     <p class="live-form-error" role="alert"></p>
+     <div class="actions"><button class="btn primary">Wipe everything</button>${button("Cancel", "close")}</div></form>`,
+  );
+  const form = document.getElementById("duress-form");
+  const error = form.querySelector('[role="alert"]');
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    if (String(new FormData(form).get("word")).trim().toUpperCase() !== WIPE_WORD) {
+      error.textContent = `Type ${WIPE_WORD} exactly to confirm.`;
+      return;
+    }
+    const result = wipeStorages(storagesToWipe());
+    forgetEverything();
+    closeDialog();
+    state.notice = result.remaining
+      ? `${result.removed} removed, but ${result.remaining} could not be. This browser is blocking storage changes; clear site data from browser settings.`
+      : `${result.removed} stored ${result.removed === 1 ? "artefact" : "artefacts"} destroyed. Nothing was sent anywhere.`;
+    render();
+  };
+}
+// Storage is only half of it: the same data is in memory on this page until it
+// is cleared too, and the page is left as if it had just been opened.
+function forgetEverything() {
+  generation++;
+  // Deliberately not exitDemo(): that reloads the asset registry, which would
+  // put a network request in the middle of a control whose whole promise is
+  // that it makes none. The demo's sample data is dropped here instead.
+  if (state.demo) {
+    state.demo = false;
+    state.guide = 0;
+    state.assets = [];
+    state.assetsLoaded = false;
+  }
+  state.owner = "";
+  state.provider = null;
+  state.chain = null;
+  state.account = null;
+  state.history = [];
+  state.sessions = [];
+  state.balances = {};
+  state.records = [];
+  state.bridges = [];
+  state.drafts = [];
+  state.versions = {};
+  state.presets = [];
+  state.simulation = null;
+  state.chat = [];
+  state.privacyLog = [];
+  state.approval = null;
+  state.errors = {};
+  state.loading = false;
+  state.busy = false;
+  state.vaultKey = null;
+  state.keyInfo = null;
+  state.vaultKeyEpoch = 1;
+  state.recovery = null;
+  state.agentSessionToken = "";
+  state.rpcEndpoint = "";
+  state.rpcChecked = null;
+  state.rpcError = "";
+  state.rpcReads = 0;
+  state.query = "";
+  state.category = "all";
+  recoveryState.shares = [];
+  recoveryState.blob = null;
+  try {
+    window.teraRainbowKit?.disconnect();
+  } catch {
+    /* The wallet connection is the extension's to keep; the wipe does not depend on it. */
+  }
+}
+
 function balanceReadsPanel() {
   const own = Boolean(state.rpcEndpoint);
   const described = own ? describeEndpoint(state.rpcEndpoint) : null;
@@ -1287,7 +1403,7 @@ async function saveBalanceEndpoint() {
 }
 
 function settings() {
-  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
+  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
 async function loadAssets() {
@@ -2214,6 +2330,7 @@ document.addEventListener("click", async (event) => {
         render();
       }
     }
+    if (action === "duress-wipe") duressWipeDialog();
     if (action === "vault-rotate") rotateVaultKeyDialog();
     if (action === "vault-rotate-confirm") {
       closeDialog();
