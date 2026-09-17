@@ -51,3 +51,15 @@ export async function verifyBuildManifest(
     recovered.toLowerCase() === expectedSigner.toLowerCase()
   );
 }
+
+/**
+ * Recover the address that signed a receipt.
+ *
+ * Deliberately just a recovery, with no expected signer and no opinion: the
+ * receipt names the address it claims, and `receipt.js` is where that claim is
+ * compared and reported. Splitting it this way keeps the wallet module free of
+ * any dependency and keeps this file free of any judgement.
+ */
+export async function recoverReceiptSigner(message: string, signature: `0x${string}`) {
+  return recoverMessageAddress({ message, signature });
+}

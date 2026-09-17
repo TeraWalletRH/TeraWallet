@@ -15,7 +15,11 @@ import {
   evaluateLocalPolicy,
 } from "./core.js";
 import { renderAssistantMarkdown } from "./markdown.js";
-import { verifyPolicyBundle, verifyBuildManifest } from "/tera/connect/policy-verify.js";
+import {
+  verifyPolicyBundle,
+  verifyBuildManifest,
+  recoverReceiptSigner,
+} from "/tera/connect/policy-verify.js";
 import {
   verifyManifest,
   badge as integrityBadge,
@@ -124,6 +128,20 @@ import {
   LIMITS as INGRESS_LIMITS,
   KINDS as INGRESS_KINDS,
 } from "./ingress.js";
+import {
+  CODE as RECEIPT_CODE,
+  DEVICE as RECEIPT_DEVICE,
+  SERVICE as RECEIPT_SERVICE,
+  ANSWERED_BY,
+  CLAIMS as RECEIPT_CLAIMS,
+  EXPORT_WARNING,
+  create as createReceipt,
+  bundle as receiptBundle,
+  verify as verifyReceipt,
+  tally as receiptTally,
+  sign as signReceipt,
+  DOMAIN,
+} from "./receipt.js";
 import {
   ACTIONS,
   createPreset,
@@ -827,6 +845,50 @@ function ingressBanner() {
     <div class="actions">${button("Dismiss", "ingress-dismiss")}</div></div>`;
 }
 
+// One line under a reply: who answered, whether anything left, and a handle for
+// the turn. The handle is what makes two receipts comparable later.
+function receiptChip(message) {
+  const receipt = message.receipt;
+  if (!receipt) return "";
+  const index = state.chat.indexOf(message);
+  return `<p class="micro receipt-line">${chip(receipt.sent ? "Sent to Tera" : "Nothing sent", receipt.sent)}<code>${esc(receipt.shortRef)}</code>${button("Receipt", "receipt-open", `data-index="${index}"`)}</p>`;
+}
+
+/**
+ * Show a receipt, rechecked in front of the owner.
+ *
+ * It is verified on open rather than displayed from what was stored, so what is
+ * on screen is the result of running the checks now — including against a
+ * transcript the page could in principle have altered since.
+ */
+async function openReceipt(index) {
+  const message = state.chat[Number(index)];
+  const receipt = message?.receipt;
+  if (!receipt) return;
+  const source = ANSWERED_BY[receipt.answeredBy];
+  const result = await verifyReceipt(receiptBundle(receipt, message.transcript || {}), {
+    recover: recoverReceiptSigner,
+  });
+  const counts = receiptTally(result.checks);
+  const mark = { pass: "PASS", fail: "FAILED", unverifiable: "UNPROVEN", skipped: "N/A" };
+  dialog(
+    `Receipt ${receipt.shortRef}`,
+    `<p><b>${esc(source.label)}.</b> ${esc(source.detail)}</p>
+     ${pair("Answered by", source.label)}${receipt.module ? pair("Read from", receipt.module) : ""}${receipt.model ? pair("Model", receipt.model) : ""}${pair("Anything sent", receipt.sent ? "Yes, to Tera's assistant service" : "No request was made")}${receipt.minimised ? pair("Replaced before sending", `${receipt.replaced} ${receipt.replaced === 1 ? "value" : "values"}`) : ""}${pair("Build release", receipt.release || "Not recorded")}${pair("Recorded at", receipt.at)}
+     <div class="section-label">Checks<span class="micro">${counts.pass} passed · ${counts.failed} failed · ${counts.unverifiable} unproven · ${counts.skipped} not applicable</span></div>
+     <div class="table-scroll"><table><thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody>${result.checks
+       .map(
+         (entry) =>
+           `<tr><td>${esc(entry.label)}</td><td><b class="receipt-${esc(entry.status)}">${mark[entry.status]}</b></td><td class="privacy-wrap">${esc(entry.detail)}</td></tr>`,
+       )
+       .join("")}</tbody></table></div>
+     <div class="note"><strong>What this receipt does not establish</strong><ul class="micro">${RECEIPT_CLAIMS.cannot.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div>
+     <p class="micro">${esc(EXPORT_WARNING)}</p>
+     <div class="actions">${receipt.signature ? "" : button("Sign this receipt", "receipt-sign", `data-index="${Number(index)}" ${state.owner ? "" : "disabled"}`)}${button("Export receipt", "receipt-export", `data-index="${Number(index)}"`)}${button("Close", "close")}</div>
+     ${receipt.signature ? "" : `<p class="micro">Signing asks your wallet for a signature over a short piece of readable text. It moves nothing and cannot authorise a transaction — the first line of what you will be shown is <code>${esc(DOMAIN)}</code>, which is what keeps it from being usable as anything else this wallet asks you to sign.</p>`}`,
+  );
+}
+
 function minimiseHint() {
   return state.minimise
     ? "Addresses, references, contact details and figures are replaced with placeholders on this device before the message is sent. The reply is re-hydrated here. This removes the values, not the context — it does not make you anonymous."
@@ -858,7 +920,7 @@ function chatBubble(message) {
       : message.device
         ? `<p class="micro">${esc(attribution(DEVICE))}</p>`
         : "";
-    return `<div class="chat-bubble${message.withheld ? " withheld" : ""}${message.local ? " sourced" : ""}"><strong class="chat-role">${role}${message.withheld ? ` ${chip("Answer withheld", true)}` : ""}</strong><div class="assistant-markdown">${renderAssistantMarkdown(message.text)}</div>${footer}</div>`;
+    return `<div class="chat-bubble${message.withheld ? " withheld" : ""}${message.local ? " sourced" : ""}"><strong class="chat-role">${role}${message.withheld ? ` ${chip("Answer withheld", true)}` : ""}</strong><div class="assistant-markdown">${renderAssistantMarkdown(message.text)}</div>${footer}${receiptChip(message)}</div>`;
   }
   const replaced = message.removed?.length || 0;
   const detail = message.minimised
@@ -2482,6 +2544,39 @@ function refuseMessage(form, verdict) {
   render();
 }
 
+/**
+ * Attach a receipt to the turn that just finished.
+ *
+ * Written after the reply is on screen rather than before it is produced: a
+ * receipt for an answer that never arrived would be a record of an intention.
+ * The release and integrity status come from the page's own check, and the
+ * receipt records them as the page's claim — `receipt.js` is what refuses to
+ * present them as anything more.
+ */
+async function attachReceipt(
+  message,
+  { answeredBy, input, output, module: source, model, replaced },
+) {
+  try {
+    const receipt = await createReceipt({
+      answeredBy,
+      input,
+      output,
+      release: state.integrity?.release || "",
+      integrity: state.integrity?.status || "",
+      module: source || "",
+      model: model || "",
+      replaced: replaced || 0,
+    });
+    message.receipt = receipt;
+    message.transcript = { input, output };
+  } catch {
+    // A turn without a receipt is a turn without a receipt. It must never be a
+    // turn without an answer.
+  }
+  render();
+}
+
 // What `parse.js` builds its answers out of. Every entry is the live export, so
 // an answer cannot drift from the panel that shows the same text — rewording a
 // limit in ohttp.js rewords the answer with it.
@@ -2571,14 +2666,21 @@ async function sendMessage(plan) {
     }
     if (version !== generation) return;
     const restore = (text) => (minimised ? rehydrate(text, result.placeholders) : text);
-    state.chat.push({
-      role: "assistant",
-      text: restore(
-        response.reply ||
-          response.explanation ||
-          response.error ||
-          "Review the proposal in Approvals.",
-      ),
+    const served =
+      response.reply ||
+      response.explanation ||
+      response.error ||
+      "Review the proposal in Approvals.";
+    const reply = { role: "assistant", text: restore(served) };
+    state.chat.push(reply);
+    // Committed to the skeleton that was sent and the reply as it came back,
+    // before re-hydration. That pair is the boundary; what the owner typed and
+    // what they read are both local and neither belongs in this record.
+    void attachReceipt(reply, {
+      answeredBy: RECEIPT_SERVICE,
+      input: outgoing,
+      output: served,
+      replaced: minimised ? result.placeholders.length : 0,
     });
     if (mode === "propose") {
       // The explanation is shown beside the proposal too, so it is re-hydrated
@@ -2636,7 +2738,7 @@ function answeredLocally(message) {
     const answer = respondLocally(parsed, answerSources());
     if (!answer) return false;
     state.chat.push({ role: "user", text: message, local: true });
-    state.chat.push({
+    const reply = {
       role: "assistant",
       text: `**${answer.title}**
 
@@ -2644,6 +2746,13 @@ ${answer.body}`,
       local: true,
       cites: answer.module,
       note: answer.note,
+    };
+    state.chat.push(reply);
+    void attachReceipt(reply, {
+      answeredBy: RECEIPT_CODE,
+      input: message,
+      output: reply.text,
+      module: answer.module,
     });
     state.privacyLog = appendLog(state.privacyLog, {
       at: Date.now(),
@@ -2731,11 +2840,21 @@ async function answerOnDevice(plan) {
     // Screened before it is rendered. A small model answers "what is my
     // balance?" with a number it made up, and the owner has no way to tell.
     const screened = screenReply(raw);
-    state.chat.push({
+    const reply = {
       role: "assistant",
       text: screened.text,
       device: true,
       withheld: screened.withheld,
+    };
+    state.chat.push(reply);
+    // The receipt commits to what the model actually produced, not to the
+    // screened stand-in. A withheld reply is a fact about this turn, and a
+    // receipt that hashed the refusal notice instead would hide it.
+    void attachReceipt(reply, {
+      answeredBy: RECEIPT_DEVICE,
+      input: message,
+      output: raw,
+      model: state.engineInfo?.model || "",
     });
     state.privacyLog = appendLog(state.privacyLog, {
       at: Date.now(),
@@ -3309,6 +3428,48 @@ document.addEventListener("click", async (event) => {
     if (action === "privacy-clear") {
       state.privacyLog = [];
       render();
+    }
+    if (action === "receipt-open") await openReceipt(target.dataset.index);
+    if (action === "receipt-sign") {
+      const message = state.chat[Number(target.dataset.index)];
+      if (!message?.receipt) return;
+      connected();
+      const owner = state.owner;
+      const signed = await signReceipt(message.receipt, {
+        signer: owner,
+        // The provider is handed the exact text `receipt.js` composed. Nothing
+        // between here and the wallet window may alter it, or the signature
+        // would cover something the owner did not read.
+        sign: (text) =>
+          state.provider.request({
+            method: "personal_sign",
+            params: [
+              `0x${[...new TextEncoder().encode(text)].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`,
+              owner,
+            ],
+          }),
+      });
+      message.receipt = signed;
+      closeDialog();
+      await openReceipt(target.dataset.index);
+      return;
+    }
+    if (action === "receipt-export") {
+      const message = state.chat[Number(target.dataset.index)];
+      if (message?.receipt) {
+        // The confirmation is the point. For a turn answered on this device,
+        // this click is the first time that text leaves the browser.
+        if (
+          !window.confirm(`${EXPORT_WARNING}
+
+Export it?`)
+        )
+          return;
+        downloadJson(
+          receiptBundle(message.receipt, message.transcript || {}),
+          `tera-receipt-${message.receipt.shortRef}.json`,
+        );
+      }
     }
     if (action === "receipt-check" && state.records[index])
       await updateReceipt(state.records[index]);

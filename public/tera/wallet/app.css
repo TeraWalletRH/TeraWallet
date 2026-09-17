@@ -1035,3 +1035,30 @@ h1:focus {
   border-left: 2px solid #945f3d;
   padding-left: 12px;
 }
+
+/* A receipt's four states read at a glance. "Unproven" is deliberately not
+   styled as a failure and deliberately not styled as a pass: it is the state
+   most of the interesting checks land in, and flattening it either way would
+   be the whole problem. */
+.receipt-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+.receipt-line code {
+  font: 11px monospace;
+  opacity: 0.7;
+}
+.receipt-pass {
+  color: #768143;
+}
+.receipt-fail {
+  color: #945f3d;
+}
+.receipt-unverifiable {
+  color: #b5977b;
+}
+.receipt-skipped {
+  opacity: 0.5;
+}
