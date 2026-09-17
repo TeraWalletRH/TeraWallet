@@ -43,3 +43,11 @@ CREATE TABLE IF NOT EXISTS staking_events (
 CREATE INDEX IF NOT EXISTS idx_staking_epochs_status ON staking_epochs(status);
 CREATE INDEX IF NOT EXISTS idx_staking_positions_wallet ON staking_positions(wallet_address);
 CREATE INDEX IF NOT EXISTS idx_staking_events_epoch ON staking_events(epoch_id, created_at DESC);
+
+CREATE TABLE IF NOT EXISTS staking_admin_sessions (
+  token_hash CHAR(64) PRIMARY KEY,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_staking_admin_sessions_expiry ON staking_admin_sessions(expires_at);
