@@ -21,7 +21,12 @@ export const LOCAL_ONLY = [
       "With prompt minimisation on, addresses, references, contact details and figures are replaced with placeholders before an assistant message is sent. The original text and the mapping back to it stay in this page, and the reply is re-hydrated here.",
   },
   {
-    label: "Questions answered on this device",
+    label: "Questions answered from this wallet's own code",
+    detail:
+      "Questions with an exact answer in the wallet's source — what each check evaluates, what a wipe cannot reach, what a relay learns — are answered from that source on this device. No model runs and no request is built, and the answer names the file it came from so you can read it yourself.",
+  },
+  {
+    label: "Questions answered by the on-device model",
     detail:
       "With the on-device engine selected, a question is answered by a model running in this tab and no request is built at all. It cannot prepare a proposal, so preparing one still goes to Tera's assistant service.",
   },

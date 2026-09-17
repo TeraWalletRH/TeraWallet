@@ -1012,3 +1012,19 @@ h1:focus {
   line-height: 1.7;
   resize: vertical;
 }
+
+/* A deterministic answer is quoted from the wallet's own source, so it is
+   marked differently from an engine reply: this is the wallet speaking, not an
+   assistant summarising it. A withheld reply is marked differently again,
+   because it is the absence of an answer rather than a quiet one. */
+.chat-bubble.sourced {
+  border-left: 2px solid #768143;
+  padding-left: 12px;
+}
+.chat-bubble.withheld {
+  border-left: 2px solid #945f3d;
+  padding-left: 12px;
+}
+.chat-bubble.sourced > .chat-role {
+  color: #c2cbb5;
+}
