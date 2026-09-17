@@ -36,6 +36,11 @@ export const LOCAL_ONLY = [
       "Kept only in the encrypted local vault after you connect it. It is sent to Tera only when you prepare an assistant proposal and is never sent to the model provider.",
   },
   {
+    label: "Your balance-read endpoint",
+    detail:
+      "If you point balance reads at your own node, the address is kept in the encrypted local vault because it can carry your API key. Tera never receives it, and only its host is ever displayed or exported.",
+  },
+  {
     label: "Balance visibility and filters",
     detail: "Interface state that stays in the page and is never transmitted.",
   },

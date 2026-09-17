@@ -954,3 +954,51 @@ h1:focus {
     font-size: 11px;
   }
 }
+.integrity-chip {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.integrity-alarm {
+  border-color: #b5977b;
+  background: #efe4d8;
+}
+.integrity-alarm b {
+  font-weight: 600;
+}
+.integrity-alarm a {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+.integrity-table {
+  margin: 18px 0;
+  max-height: 320px;
+}
+.integrity-table td small {
+  font-family: "IBM Plex Mono", "Courier New", monospace;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.integrity-table td {
+  white-space: normal;
+  vertical-align: top;
+}
+
+.panel-duress {
+  border-color: #b5977b;
+}
+.panel-duress h2 {
+  color: #8a5430;
+}
+.wipe-limits {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #6c7763;
+}
+.wipe-limits li {
+  margin-bottom: 6px;
+}
