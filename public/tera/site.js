@@ -160,12 +160,15 @@ function installTokenHero(){
 function installBurnMilestone(){
  const heading=[...document.querySelectorAll('h1')].find(h=>/your assets|你的资产/i.test(h.textContent.replace(/\s+/g,' ')));
  const zh=locale()==='zh',existing=$('#tera-burn-milestone');
- if(existing){const title=$('[data-burn-title]',existing),copy=$('[data-burn-copy]',existing);if(title)title.textContent=zh?'已销毁 2 亿枚 $TERA':'200M $TERA BURNED';if(copy)copy.textContent=zh?'已完成供应量里程碑':'COMPLETED SUPPLY MILESTONE';return}
+ if(existing){const title=$('[data-burn-title]',existing),copy=$('[data-burn-copy]',existing);if(title)title.textContent=zh?'已销毁 2 亿枚 $TERA':'200M $TERA BURNED';if(copy)copy.textContent=zh?'已完成供应量里程碑':'COMPLETED SUPPLY MILESTONE';const faq=[...document.querySelectorAll('h1,h2,h3')].find(h=>/^(faq|常见问题)$/i.test(h.textContent.replace(/\s+/g,'')));const host=faq?.closest('section')||faq?.parentElement;if(host&&existing.nextElementSibling!==host)host.insertAdjacentElement('beforebegin',existing);return}
  if(!heading)return;
  const section=document.createElement('section');section.id='tera-burn-milestone';section.className='tera-burn-milestone';
  section.innerHTML=`<span data-burn-copy>${zh?'已完成供应量里程碑':'COMPLETED SUPPLY MILESTONE'}</span><strong data-burn-title>${zh?'已销毁 2 亿枚 $TERA':'200M $TERA BURNED'}</strong><a href="/roadmap/">${zh?'查看路线图':'View roadmap'} ↗</a>`;
- const host=heading.closest('section')||heading.parentElement;
- host?.insertAdjacentElement('afterend',section);
+ // Keep the burn record as a standalone milestone near the questions it may
+ // prompt, rather than mixing it into the opening wallet message.
+ const faq=[...document.querySelectorAll('h1,h2,h3')].find(h=>/^(faq|常见问题)$/i.test(h.textContent.replace(/\s+/g,'')));
+ const host=faq?.closest('section')||faq?.parentElement;
+ if(host)host.insertAdjacentElement('beforebegin',section);
 }
 
 function phaseControl(target){const c=target.closest('[data-highlight]');if(!c)return false;const name=c.textContent.trim();if(!['first','next','first milestone','next milestone'].includes(name))return false;let section=c.parentElement;while(section&&(!section.querySelector('h2')||![...section.querySelectorAll('p')].some(p=>/^[A-F]$/.test(p.textContent.trim()))))section=section.parentElement;if(!section||!section.querySelector('h2').textContent.replace(/\s/g,'').includes('Roadmap'))return false;const next=name.startsWith('next');section.querySelectorAll('p').forEach(p=>{if(/^[A-F]$/.test(p.textContent.trim())){if(!p.dataset.phasePair)p.dataset.phasePair=String(Math.floor((p.textContent.trim().charCodeAt(0)-65)/2));const value=String.fromCharCode(65+Number(p.dataset.phasePair)*2+(next?1:0));if(p.textContent!==value){p.textContent=value;p.animate([{opacity:.3,transform:'translateY(6px)'},{opacity:1,transform:'translateY(0)'}],{duration:300})}}});section.querySelectorAll('[data-highlight]').forEach(b=>{if(['first','next','first milestone','next milestone'].includes(b.textContent.trim()))b.setAttribute('aria-pressed',String(b===c))});return true}
