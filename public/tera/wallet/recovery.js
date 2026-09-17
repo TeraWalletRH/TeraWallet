@@ -144,6 +144,11 @@ export function decodeShare(value) {
     throw new Error("That share is not readable. Check it was copied in full.");
   }
   if (body.length < 2) throw new Error("That share is too short to be valid.");
+  // Base64's unused final bits can be changed without changing the decoded
+  // bytes. Refuse that non-canonical spelling so every written character is
+  // covered by the transcription check.
+  if (toUrlSafe(bytesToBase64(body)) !== parts[3])
+    throw new Error("That share failed its checksum. A character is wrong or missing.");
   if (crc32(body).toString(16).padStart(8, "0") !== parts[4])
     throw new Error("That share failed its checksum. A character is wrong or missing.");
   return { x: body[0], y: body.slice(1), threshold, shares };
