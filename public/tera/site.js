@@ -145,9 +145,17 @@ function scrubTemplateLeftovers(){
 function installTokenHero(){
  const address='0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8';
  const heading=[...document.querySelectorAll('h1')].find(h=>/your assets|你的资产/i.test(h.textContent.replace(/\s+/g,' ')));
- if(!heading||$('#tera-token-hero'))return;
+ const zh=locale()==='zh';
+ const existing=$('#tera-token-hero');
+ if(existing){
+  const label=$('[data-token-label]',existing),burn=$('[data-token-burn]',existing);
+  if(label)label.textContent=zh?'合约地址':'CONTRACT ADDRESS';
+  if(burn)burn.textContent=zh?'已销毁 2 亿枚 $TERA':'200M $TERA BURNED';
+  return;
+ }
+ if(!heading)return;
  const card=document.createElement('div');card.id='tera-token-hero';card.className='tera-token-hero';
- card.innerHTML=`<span class="tera-token-label">CONTRACT ADDRESS</span><code>${address}</code><button type="button" aria-label="Copy contract address">Copy</button><a href="https://dexscreener.com/search?q=${address}" target="_blank" rel="noopener noreferrer">Dexscreener ↗</a>`;
+ card.innerHTML=`<span class="tera-token-label" data-token-label>${zh?'合约地址':'CONTRACT ADDRESS'}</span><code>${address}</code><span class="tera-token-burn" data-token-burn>${zh?'已销毁 2 亿枚 $TERA':'200M $TERA BURNED'}</span><button type="button" aria-label="Copy contract address">Copy</button><a href="https://dexscreener.com/search?q=${address}" target="_blank" rel="noopener noreferrer">Dexscreener ↗</a>`;
  (heading.parentElement||heading).append(card);
  const copy=$('button',card);copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(address);copy.textContent='Copied';setTimeout(()=>{copy.textContent='Copy'},1600)}catch{copy.textContent='Copy unavailable';setTimeout(()=>{copy.textContent='Copy'},1600)}});
 }
