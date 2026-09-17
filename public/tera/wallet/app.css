@@ -970,3 +970,20 @@ h1:focus {
   white-space: normal;
   vertical-align: top;
 }
+
+.panel-duress {
+  border-color: #b5977b;
+}
+.panel-duress h2 {
+  color: #8a5430;
+}
+.wipe-limits {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: #6c7763;
+}
+.wipe-limits li {
+  margin-bottom: 6px;
+}

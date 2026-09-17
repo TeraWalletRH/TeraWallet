@@ -3,6 +3,7 @@ import {
   Alert,
   AppState,
   KeyboardAvoidingView,
+  Image,
   Linking,
   Modal,
   Platform,
@@ -24,6 +25,7 @@ import { check, positive, transferTx, verifyBridge, verifyTransfer } from "./src
 import * as vault from "./src/storage";
 import { normalizePhrase, walletFromPhrase } from "./src/crypto";
 import { Button, Choices, colors, Field, Row, styles as s } from "./src/ui";
+import { minimise, PROPOSAL_KEEP, rehydrate, residual, type MinimiseResult } from "./src/minimise";
 
 type Review = {
   title: string;
@@ -51,7 +53,9 @@ function Wallet() {
   const [balance, setBalance] = useState<{ USDG: string; ETH: string } | null>(null);
   const [assets, setAssets] = useState<Asset[]>(sources),
     [message, setMessage] = useState(""),
-    [chat, setChat] = useState<{ role: string; text: string }[]>([]);
+    [chat, setChat] = useState<{ role: string; text: string; minimised?: boolean; sent?: string; replaced?: number }[]>([]);
+  const [minimiseEnabled, setMinimiseEnabled] = useState(true),
+    [minimisePlan, setMinimisePlan] = useState<MinimiseResult | null>(null);
   const [propose, setPropose] = useState(false),
     [sessions, setSessions] = useState<any[]>([]),
     [tokenInput, setTokenInput] = useState("");
@@ -330,32 +334,28 @@ function Wallet() {
     setPage("activity");
     await refresh();
   }
-  async function ask(guard: () => void) {
+  async function deliverAssistantMessage(guard: () => void, plan?: MinimiseResult) {
     if (!message.trim()) return;
     const text = message.trim();
+    const keep = propose ? PROPOSAL_KEEP : [];
+    const outgoing = plan?.skeleton || text;
+    if (plan) {
+      const left = residual(outgoing, keep);
+      check(!left.length, t("This message could not be minimised safely. Nothing was sent.", "This message could not be minimised safely. Nothing was sent."));
+    }
+    const minimised = !!plan?.placeholders.length;
     setMessage("");
-    setChat((c) => [...c, { role: "you", text }]);
+    setChat((c) => [...c, { role: "you", text, sent: minimised ? outgoing : undefined, minimised, replaced: plan?.placeholders.length || 0 }]);
     const result = await api(
       propose ? "/api/agent/propose" : "/api/agent/chat",
       propose
-        ? {
-            prompt: text,
-            ownerAddress: owner,
-            ...(dataRef.current.token ? { sessionToken: dataRef.current.token } : {}),
-          }
-        : { message: text },
+        ? { prompt: outgoing, ownerAddress: owner, ...(dataRef.current.token ? { sessionToken: dataRef.current.token } : {}) }
+        : { message: outgoing },
     );
     guard();
-    setChat((c) => [
-      ...c,
-      {
-        role: "tera",
-        text: result.reply || result.explanation || t("Proposal prepared.", "提案已准备好。"),
-      },
-    ]);
+    const reply = result.reply || result.explanation || t("Proposal prepared.", "Proposal prepared.");
+    setChat((c) => [...c, { role: "tera", text: minimised ? rehydrate(reply, plan!.placeholders) : reply }]);
     if (propose && result.intent) {
-      // Structured intent is reviewed locally before final preparation. Free
-      // text necessarily reaches the assistant service first.
       const checked = await policyFor(result.intent);
       guard();
       const prepared = await api("/api/intent/prepare", checked);
@@ -363,6 +363,16 @@ function Wallet() {
       const p = { ...prepared, intent: checked, createdAt: Date.now() };
       await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, p] });
     }
+  }
+  function startAssistantMessage() {
+    const text = message.trim();
+    if (!text) return;
+    const plan = minimise(text, { owner, keep: propose ? PROPOSAL_KEEP : [] });
+    if (minimiseEnabled && plan.placeholders.length) {
+      setMinimisePlan(plan);
+      return;
+    }
+    void run((guard) => deliverAssistantMessage(guard, minimiseEnabled ? plan : undefined));
   }
   function authenticate(title: string, action: () => Promise<void>) {
     setAuthPassword("");
@@ -634,25 +644,33 @@ function Wallet() {
     if (page === "home")
       return (
         <>
-          {title("Your wallet.", "你的钱包。", "Robinhood Chain")}
-          <View style={{ paddingVertical: 16 }}>
-            <Text style={s.eyebrow}>{t("USDG BALANCE", "USDG 余额")}</Text>
-            <Text style={[s.title, { fontSize: 54, lineHeight: 64 }]}>
-              {balance ? formatUnits(BigInt(balance.USDG), 6) : "—"}
-            </Text>
-            <Text style={s.small}>USDG · {t("Global Dollar", "全球美元")}</Text>
+          <View style={{ backgroundColor: colors.dark, borderRadius: 28, padding: 22, gap: 18, overflow: "hidden" }}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <View style={{ width: 8, height: 8, borderRadius: 8, backgroundColor: colors.lime }} />
+                <Text style={[s.eyebrow, { color: "#b9c9bd" }]}>{t("ROBINHOOD CHAIN", "ROBINHOOD CHAIN")}</Text>
+              </View>
+              <Text style={{ color: colors.lime, fontSize: 12, fontWeight: "700" }}>{t("Live", "Live")}</Text>
+            </View>
+            <View>
+              <Text style={[s.small, { color: "#b9c9bd" }]}>{t("Total balance", "Total balance")}</Text>
+              <Text style={{ color: "#ffffff", fontSize: 43, lineHeight: 50, fontWeight: "700", letterSpacing: -1.8 }}>$
+                {balance ? formatUnits(BigInt(balance.USDG), 6) : "0.00"}
+              </Text>
+              <Text style={[s.small, { color: "#b9c9bd" }]}>USDG / {t("Global Dollar", "Global Dollar")}</Text>
+            </View>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", borderTopWidth: 1, borderColor: "#31503e", paddingTop: 14 }}>
+              <Text style={[s.small, { color: "#b9c9bd" }]}>{t("Gas", "Gas")}</Text>
+              <Text style={{ color: "#ffffff", fontWeight: "700" }}>{balance ? `${formatUnits(BigInt(balance.ETH), 18)} ETH` : "�"}</Text>
+            </View>
           </View>
-          <Row
-            label={t("Gas balance", "手续费余额")}
-            value={balance ? `${formatUnits(BigInt(balance.ETH), 18)} ETH` : "—"}
-          />
           <View style={s.quickActions}>
             {[
-              ["Send", "发送", "send"],
-              ["Receive", "收款", "receive"],
-              ["Swap", "兑换", "swap"],
-              ["Bridge", "跨链", "bridge"],
-            ].map(([en, zh, p]) => (
+              ["S", "Send", "Send", "send"],
+              ["R", "Receive", "Receive", "receive"],
+              ["X", "Swap", "Swap", "swap"],
+              ["B", "Bridge", "Bridge", "bridge"],
+            ].map(([icon, en, zh, p]) => (
               <Pressable
                 key={p}
                 accessibilityRole="button"
@@ -664,23 +682,21 @@ function Wallet() {
                   setPage(p);
                 }}
               >
+                <Text style={{ color: colors.green, fontSize: 22, fontWeight: "600", marginBottom: 4 }}>{icon}</Text>
                 <Text style={s.buttonText}>{t(en, zh)}</Text>
               </Pressable>
             ))}
           </View>
-          <View style={s.panel}>
-            <Text style={s.eyebrow}>{t("OWNER SUPERVISED", "由所有者监督")}</Text>
-            <Text style={s.text}>
-              {t(
-                "The assistant proposes. You review. Your phone signs.",
-                "助手提出建议，你负责审核，由手机签名。",
-              )}
-            </Text>
+          <View style={[s.panel, { backgroundColor: "#e5f2df" }]}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <Text style={[s.eyebrow, { color: colors.green }]}>{t("Your approval", "Your approval")}</Text>
+              <Text style={{ color: colors.green, fontSize: 16 }}>OK</Text>
+            </View>
+            <Text style={s.text}>{t("Tera can prepare an action. Only this wallet can sign it.", "Tera can prepare an action. Only this wallet can sign it.")}</Text>
           </View>
-          {action("Refresh balances", "刷新余额", async () => refresh(), false)}
-          <Text selectable style={s.mono}>
-            {owner}
-          </Text>
+          <Pressable onPress={() => void refresh()} style={{ alignItems: "center", paddingVertical: 7 }}>
+            <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>{t("Refresh balance", "Refresh balance")}</Text>
+          </Pressable>
         </>
       );
     if (page === "receive")
@@ -792,6 +808,20 @@ function Wallet() {
             value={propose ? t("Prepare a proposal", "准备提案") : t("Ask a question", "提问")}
             select={(v) => setPropose(v === t("Prepare a proposal", "准备提案"))}
           />
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityState={{ checked: minimiseEnabled }}
+            onPress={() => setMinimiseEnabled((enabled) => !enabled)}
+            style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", padding: 15, borderRadius: 18, backgroundColor: minimiseEnabled ? "#e5f2df" : "#edf0ed" }}
+          >
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={[s.eyebrow, { color: colors.green }]}>{t("PROMPT PRIVACY", "PROMPT PRIVACY")}</Text>
+              <Text style={s.small}>{minimiseEnabled ? t("Review what leaves this phone before sending.", "Review what leaves this phone before sending.") : t("Messages are sent as typed.", "Messages are sent as typed.")}</Text>
+            </View>
+            <View style={{ width: 38, height: 22, borderRadius: 20, padding: 3, justifyContent: "center", backgroundColor: minimiseEnabled ? colors.green : "#aab5ad" }}>
+              <View style={{ width: 16, height: 16, borderRadius: 12, backgroundColor: "#ffffff", alignSelf: minimiseEnabled ? "flex-end" : "flex-start" }} />
+            </View>
+          </Pressable>
           {data.token && (
             <Text style={s.eyebrow}>{t("Scoped session connected", "已连接限定权限的会话")}</Text>
           )}
@@ -810,7 +840,7 @@ function Wallet() {
             maxLength={1200}
             multiline
           />
-          {action("Send message ↑", "发送消息 ↑", ask)}
+          <Button primary disabled={busy} onPress={startAssistantMessage}>{t("Review and send", "Review and send")}</Button>
           <Text style={s.eyebrow}>{t("PROPOSALS", "提案")}</Text>
           {data.drafts.map((d) => (
             <View style={s.panel} key={d.createdAt}>
@@ -1120,10 +1150,16 @@ function Wallet() {
     >
       <StatusBar style="dark" />
       <View style={s.header}>
-        <Pressable onPress={() => (owner ? setPage("home") : setSetup("start"))}>
-          <Text style={[s.eyebrow, { color: colors.ink }]}>TERA WALLET</Text>
+        <Pressable onPress={() => (owner ? setPage("home") : setSetup("start"))} style={{ flexDirection: "row", alignItems: "center", gap: 9 }}>
+          <View style={{ width: 32, height: 32, borderRadius: 16, overflow: "hidden", backgroundColor: colors.dark }}>
+            <Image source={require("./assets/icon.png")} style={{ width: 32, height: 32 }} resizeMode="cover" />
+          </View>
+          <View>
+            <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 14 }}>Tera Wallet</Text>
+            {owner && <Text style={[s.eyebrow, { fontSize: 8 }]}>Self-custody</Text>}
+          </View>
         </Pressable>
-        {languageControl}
+        <View style={{ borderWidth: 1, borderColor: colors.line, borderRadius: 14, paddingHorizontal: 10, paddingVertical: 7 }}>{languageControl}</View>
       </View>
       <KeyboardAvoidingView
         style={{ flex: 1 }}
@@ -1154,7 +1190,7 @@ function Wallet() {
             <Pressable
               accessibilityRole="tab"
               accessibilityState={{ selected: page === p }}
-              style={s.tab}
+              style={[s.tab, page === p && { backgroundColor: "#2b4235" }]}
               key={p}
               disabled={busy}
               onPress={() => {
@@ -1162,14 +1198,34 @@ function Wallet() {
                 setPage(p);
               }}
             >
-              <Text style={[s.eyebrow, page === p && { color: colors.ink }]}>{n}</Text>
-              <Text style={[s.small, page === p && { color: colors.ink, fontWeight: "700" }]}>
+              <Text style={[s.eyebrow, { color: page === p ? colors.lime : "#9baea2" }]}>{n}</Text>
+              <Text style={[s.small, { color: page === p ? "#ffffff" : "#c1cec5", fontWeight: page === p ? "700" : "500" }]}>
                 {t(en, zh)}
               </Text>
             </Pressable>
           ))}
         </View>
       )}
+      <Modal
+        visible={!!minimisePlan && !!owner}
+        animationType="slide"
+        onRequestClose={() => !busy && setMinimisePlan(null)}
+      >
+        <SafeAreaView style={s.page}>
+          <ScrollView contentContainerStyle={s.content}>
+            {title("Review private prompt", "Review private prompt", t("Your message is processed on this phone first. Placeholder values are restored only in the reply shown here.", "Your message is processed on this phone first. Placeholder values are restored only in the reply shown here."))}
+            <Text style={s.eyebrow}>{t("WHAT YOU TYPED", "WHAT YOU TYPED")}</Text>
+            <View style={[s.panel, { backgroundColor: "#ffffff" }]}><Text selectable style={s.text}>{minimisePlan?.text}</Text></View>
+            <Text style={s.eyebrow}>{t("WHAT LEAVES THIS PHONE", "WHAT LEAVES THIS PHONE")}</Text>
+            <View style={[s.panel, { backgroundColor: colors.dark }]}><Text selectable style={[s.text, { color: "#ffffff" }]}>{minimisePlan?.skeleton}</Text></View>
+            <Text style={s.small}>{t(`${minimisePlan?.placeholders.length || 0} values are replaced locally. This removes literal values from the message; it does not make you anonymous.`, `${minimisePlan?.placeholders.length || 0} values are replaced locally. This removes literal values from the message; it does not make you anonymous.`)}</Text>
+            {!!minimisePlan?.kept.length && <Text style={s.small}>{t("A transaction proposal keeps its recipient and amount so it can be prepared. They are shown above.", "A transaction proposal keeps its recipient and amount so it can be prepared. They are shown above.")}</Text>}
+            <Button primary disabled={busy} onPress={() => { const plan = minimisePlan; setMinimisePlan(null); if (plan) void run((guard) => deliverAssistantMessage(guard, plan)); }}>{t("Send minimised", "Send minimised")}</Button>
+            <Button disabled={busy} onPress={() => { setMinimisePlan(null); void run((guard) => deliverAssistantMessage(guard)); }}>{t("Send as typed", "Send as typed")}</Button>
+            <Button disabled={busy} onPress={() => setMinimisePlan(null)}>{t("Cancel", "Cancel")}</Button>
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
       <Modal
         visible={!!review && !!owner}
         animationType="slide"
