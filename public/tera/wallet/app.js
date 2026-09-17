@@ -52,11 +52,14 @@ import {
 import { GUIDE, guideStep, createDemoState, demoApi, DEMO_OWNER } from "./demo.js";
 import { redactProposal, toText, leaks, formatExact } from "./redact.js";
 import {
-  normaliseEndpoint,
-  describeEndpoint,
   createRpc,
   probeEndpoint,
   balanceReader,
+  createPool,
+  poolUrls,
+  assignEndpoint,
+  poolSummary,
+  POOL_LIMITS,
   EndpointError,
 } from "./endpoint.js";
 import { parties, egressStatus, egressSummary, exportableEgress, REACH } from "./egress.js";
@@ -219,12 +222,16 @@ const state = {
   vaultRetentionDays: 30,
   minimise: true,
   minimiseReview: true,
-  // The owner's endpoint for balance reads. Held in the encrypted vault because
-  // the URL can carry their API key.
-  rpcEndpoint: "",
+  // The owner's endpoints for balance reads, held in the encrypted vault because
+  // the URLs can carry their API keys. More than one means each account is read
+  // by a different operator, so no single one sees the whole portfolio.
+  rpcEndpoints: [],
   rpcChecked: null,
   rpcError: "",
-  rpcReads: 0,
+  // Counted per operator, in this page session only. A persisted tally of which
+  // operator answered for which account would be a record of the owner's
+  // accounts, which is the thing this feature exists to avoid creating.
+  rpcReads: {},
   integrity: null,
   keyInfo: null,
   vaultKeyEpoch: 1,
@@ -290,7 +297,7 @@ function vaultPayload() {
     versions: state.versions,
     agentSessionToken: state.agentSessionToken,
     presets: state.presets,
-    rpcEndpoint: state.rpcEndpoint,
+    rpcEndpoints: state.rpcEndpoints,
   };
 }
 async function persist() {
@@ -311,10 +318,14 @@ function loadRecords() {
   state.versions = {};
   state.presets = [];
   state.simulation = null;
-  state.rpcEndpoint = "";
+  state.rpcEndpoints = [];
   state.rpcChecked = null;
   state.rpcError = "";
-  state.rpcReads = 0;
+  // The read tally deliberately survives an account switch. It counts what each
+  // operator has been asked in this page session, and switching account does not
+  // make an operator forget the account it answered for a moment ago. Resetting
+  // it here would show a smaller number than the operator actually holds, which
+  // is the one direction this panel is not allowed to be wrong in.
   state.keyInfo = null;
   state.vaultKeyEpoch = 1;
   state.recovery = null;
@@ -355,13 +366,20 @@ async function unlockEncryptedStorage(passphrase = "") {
   state.presets = Array.isArray(vault?.presets) ? vault.presets.map(createPreset) : [];
   // A stored endpoint is re-validated on unlock rather than trusted, so an old
   // or edited vault cannot point balance reads somewhere this wallet refuses.
-  state.rpcEndpoint = "";
-  if (typeof vault?.rpcEndpoint === "string" && vault.rpcEndpoint) {
+  // A vault written before read isolation held one endpoint under `rpcEndpoint`.
+  // It is read as a pool of one so an existing setup keeps working untouched.
+  state.rpcEndpoints = [];
+  const savedEndpoints = Array.isArray(vault?.rpcEndpoints)
+    ? vault.rpcEndpoints
+    : typeof vault?.rpcEndpoint === "string" && vault.rpcEndpoint
+      ? [vault.rpcEndpoint]
+      : [];
+  if (savedEndpoints.length) {
     try {
-      state.rpcEndpoint = normaliseEndpoint(vault.rpcEndpoint);
+      state.rpcEndpoints = poolUrls(createPool(savedEndpoints));
     } catch {
       state.notice =
-        "The saved balance endpoint is no longer acceptable and was not restored. Balance reads are going through your wallet.";
+        "The saved balance endpoints are no longer acceptable and were not restored. Balance reads are going through your wallet.";
     }
   }
   state.recovery = readRecoveryBlob();
@@ -381,7 +399,7 @@ function clearEncryptedStorage() {
   state.bridges = [];
   state.drafts = [];
   state.agentSessionToken = "";
-  state.rpcEndpoint = "";
+  state.rpcEndpoints = [];
   state.rpcChecked = null;
 }
 /**
@@ -956,7 +974,10 @@ function egressRows() {
       explorerUrl: config.explorerUrl,
       chainId,
       siteHost: location.host,
-      balanceEndpointHost: ownEndpointActive() ? describeEndpoint(state.rpcEndpoint).host : "",
+      // One entry per operator, so the panel can say which of them saw what.
+      balanceEndpoints: ownEndpointActive()
+        ? endpointPool().map(({ party, host, local }) => ({ party, host, local }))
+        : [],
       ohttpRelayHost: oblivious?.host || "",
       ohttpPaths: oblivious ? obliviousPaths : [],
     }),
@@ -1201,11 +1222,16 @@ function applyVaultPayload(payload) {
   if (Array.isArray(payload.presets)) state.presets = payload.presets.map(createPreset);
   if (typeof payload.agentSessionToken === "string")
     state.agentSessionToken = payload.agentSessionToken;
-  if (typeof payload.rpcEndpoint === "string" && payload.rpcEndpoint) {
+  const importedEndpoints = Array.isArray(payload.rpcEndpoints)
+    ? payload.rpcEndpoints
+    : typeof payload.rpcEndpoint === "string" && payload.rpcEndpoint
+      ? [payload.rpcEndpoint]
+      : [];
+  if (importedEndpoints.length) {
     try {
-      state.rpcEndpoint = normaliseEndpoint(payload.rpcEndpoint);
+      state.rpcEndpoints = poolUrls(createPool(importedEndpoints));
     } catch {
-      state.notice = "The balance endpoint in that file was not acceptable and was not restored.";
+      state.notice = "The balance endpoints in that file were not acceptable and were not restored.";
     }
   }
 }
@@ -1394,10 +1420,10 @@ function forgetEverything() {
   state.vaultKeyEpoch = 1;
   state.recovery = null;
   state.agentSessionToken = "";
-  state.rpcEndpoint = "";
+  state.rpcEndpoints = [];
   state.rpcChecked = null;
   state.rpcError = "";
-  state.rpcReads = 0;
+  state.rpcReads = {};
   state.query = "";
   state.category = "all";
   recoveryState.shares = [];
@@ -1410,37 +1436,68 @@ function forgetEverything() {
 }
 
 function balanceReadsPanel() {
-  const own = Boolean(state.rpcEndpoint);
-  const described = own ? describeEndpoint(state.rpcEndpoint) : null;
-  const where = own
-    ? `${esc(described.host)}${described.local ? " · on this machine" : ""}`
-    : "Your wallet extension's own provider";
-  return `<p>Every balance in this wallet is read from somewhere. By default that is your wallet extension's provider, which learns each address you look at — including ones you only look at. Point these reads at your own node instead.</p>
-    ${pair("Balances read from", where)}
+  const pool = endpointPool();
+  const summary = poolSummary(pool);
+  const assigned = state.owner ? assignEndpoint(pool, state.owner) : null;
+  const where = assigned
+    ? `${esc(assigned.host)}${assigned.local ? " · on this machine" : ""}`
+    : summary.parties
+      ? "Connect a wallet to see which operator reads for it"
+      : "Your wallet extension's own provider";
+  const totalReads = Object.values(state.rpcReads).reduce((sum, count) => sum + count, 0);
+  return `<p>Every balance in this wallet is read from somewhere. By default that is your wallet extension's provider, which learns each address you look at — including ones you only look at. Point these reads at your own node, or at more than one operator so no single one sees every account you hold.</p>
+    ${pair("This account is read by", where)}
+    ${summary.parties ? pair("Operators in the pool", `${summary.parties} · ${summary.endpoints} endpoint${summary.endpoints === 1 ? "" : "s"}`) : ""}
     ${state.rpcChecked ? pair("Checked", `Network ${state.rpcChecked.chainId} · ${new Date(state.rpcChecked.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`) : ""}
-    ${own ? pair("Reads this session", String(state.rpcReads)) : ""}
-    <div class="field"><label for="rpc-endpoint">Your JSON-RPC endpoint</label><input id="rpc-endpoint" name="endpoint" autocomplete="off" spellcheck="false" placeholder="https://… or http://localhost:8545" value="${esc(state.rpcEndpoint)}" ${!state.vaultKey ? "disabled" : ""}></div>
+    ${summary.parties ? pair("Reads this session", String(totalReads)) : ""}
+    ${
+      summary.parties
+        ? `<div class="note"><strong>${summary.isolating ? "Accounts are split across operators" : "One operator reads everything"}</strong>${
+            summary.isolating
+              ? `Each account is assigned to one of the ${summary.parties} operators below and is always read by that one. No single operator sees the set of accounts you switch between.`
+              : "A pool of one is not isolation. Add an endpoint run by a different company and each account will be assigned to one of them."
+          }<ul class="micro">${POOL_LIMITS.map((limit) => `<li>${esc(limit)}</li>`).join("")}</ul></div>`
+        : ""
+    }
+    ${
+      summary.parties
+        ? `<div class="table-scroll"><table><thead><tr><th>Operator</th><th>Reads this session</th></tr></thead><tbody>${pool
+            .map(
+              (entry) =>
+                `<tr><td>${esc(entry.host)}${entry.extras.length ? ` <span class="micro">+${entry.extras.length} more URL${entry.extras.length === 1 ? "" : "s"} at the same company, which answer for nothing</span>` : ""}${assigned && assigned.party === entry.party ? " " + chip("reads this account") : ""}</td><td>${state.rpcReads[entry.party] || 0}</td></tr>`,
+            )
+            .join("")}</tbody></table></div>`
+        : ""
+    }
+    <div class="field"><label for="rpc-endpoint">Your JSON-RPC endpoints, one per line</label><textarea id="rpc-endpoint" name="endpoint" rows="3" autocomplete="off" spellcheck="false" placeholder="https://… or http://localhost:8545" ${!state.vaultKey ? "disabled" : ""}>${esc(state.rpcEndpoints.join(NEWLINE))}</textarea></div>
     ${state.rpcError ? `<p class="live-form-error" role="alert">${esc(state.rpcError)}</p>` : ""}
-    <div class="actions">${button(own ? "Check and save again" : "Check and use", "rpc-save", !state.vaultKey || state.busy ? "disabled" : "")}${own ? button("Remove", "rpc-clear") : ""}</div>
-    <p class="micro">${state.vaultKey ? "The endpoint is kept in the encrypted local vault, because the URL can carry your API key. It is never sent to Tera and never appears in the request log or its export — only its host is shown." : "Unlock encrypted local storage above to set an endpoint. The URL can carry an API key, so it is only kept encrypted."}</p>
+    <div class="actions">${button(summary.parties ? "Check and save again" : "Check and use", "rpc-save", !state.vaultKey || state.busy ? "disabled" : "")}${summary.parties ? button("Remove all", "rpc-clear") : ""}</div>
+    <p class="micro">${state.vaultKey ? "The endpoints are kept in the encrypted local vault, because a URL can carry your API key. They are never sent to Tera and never appear in the request log or its export — only their hosts are shown." : "Unlock encrypted local storage above to set endpoints. A URL can carry an API key, so they are only kept encrypted."}</p>
     <p class="micro">Only balance reads move. Signing, simulation, gas estimation and receipt checks stay with your wallet, because what your wallet signs has to be what your wallet saw. This wallet will not send any other method to your endpoint.</p>
     <p class="micro">If your endpoint fails, balances are not quietly read somewhere else — you are told, and nothing is sent to the provider you moved away from.</p>`;
 }
+
 async function saveBalanceEndpoint() {
   if (!state.vaultKey)
     throw new Error("Unlock encrypted local storage before setting a balance endpoint.");
   const input = document.getElementById("rpc-endpoint");
   state.rpcError = "";
   try {
-    const url = normaliseEndpoint(input?.value);
-    // Checked before it is saved: an endpoint on the wrong network would report
-    // balances that look real and are not.
-    const id = await probeEndpoint(createRpc(url), chainId);
-    state.rpcEndpoint = url;
+    const pool = createPool(input?.value);
+    if (!pool.length) throw new EndpointError("Enter the address of your node or endpoint.");
+    // Every operator is checked before any of them is saved: one on the wrong
+    // network would report balances that look real and are not, and it would
+    // only do so for the accounts assigned to it, which is harder to notice.
+    let id = 0;
+    for (const entry of pool) id = await probeEndpoint(createRpc(entry.url), chainId);
+    state.rpcEndpoints = poolUrls(pool);
     state.rpcChecked = { chainId: id, at: Date.now() };
-    state.rpcReads = 0;
+    state.rpcReads = {};
     await persist();
-    state.notice = `Balance reads now go to ${describeEndpoint(url).host}. Your wallet extension's provider no longer sees which addresses you look at.`;
+    const summary = poolSummary(pool);
+    state.notice = summary.isolating
+      ? `Balance reads now go to ${summary.parties} operators. Each account is read by one of them, so no single one sees the accounts you switch between.`
+      : `Balance reads now go to ${pool[0].host}. Your wallet extension's provider no longer sees which addresses you look at.`;
   } catch (error) {
     if (!(error instanceof EndpointError)) throw error;
     state.rpcError = error.message;
@@ -1504,18 +1561,31 @@ async function refreshAccount() {
   render();
   await loadBalances(version);
 }
-// The owner's endpoint is used only when one is configured and this is not the
-// guided demo, which answers everything locally.
+// The owner's endpoints are used only when at least one is configured and this
+// is not the guided demo, which answers everything locally.
+// The endpoint list is edited as one line per endpoint, so the separator is a
+// named constant: a literal escape inside the template that renders the textarea
+// is easy to mangle and hard to spot once it is.
+const NEWLINE = String.fromCharCode(10);
+const endpointPool = () => createPool(state.rpcEndpoints);
 function ownEndpointActive() {
-  return Boolean(state.rpcEndpoint) && !state.demo;
+  return state.rpcEndpoints.length > 0 && !state.demo;
+}
+// Which operator reads for the connected account. Fixed for that account, so it
+// is the same on every refresh and after a reload: picking a fresh one per read
+// would walk every account across the whole pool and isolate nothing.
+function readerFor(owner) {
+  return assignEndpoint(endpointPool(), owner);
 }
 async function loadBalances(version = generation) {
   if (!state.provider || state.chain !== chainId) return;
   const provider = state.provider,
     owner = state.owner;
   const own = ownEndpointActive();
-  const read = own
-    ? balanceReader(createRpc(state.rpcEndpoint), ZERO_ADDRESS)
+  // One operator answers for this account and never sees the others.
+  const assigned = own ? readerFor(owner) : null;
+  const read = assigned
+    ? balanceReader(createRpc(assigned.url), ZERO_ADDRESS)
     : ({ assetAddress }) =>
         assetAddress === ZERO_ADDRESS
           ? provider.request({ method: "eth_getBalance", params: [owner, "latest"] })
@@ -1534,7 +1604,11 @@ async function loadBalances(version = generation) {
     ]),
   );
   if (version !== generation) return;
-  if (own) state.rpcReads += valid.length;
+  if (assigned)
+    state.rpcReads = {
+      ...state.rpcReads,
+      [assigned.party]: (state.rpcReads[assigned.party] || 0) + valid.length,
+    };
   state.balances = Object.fromEntries(
     results.filter((r) => r.status === "fulfilled").map((r) => r.value),
   );
@@ -1544,7 +1618,7 @@ async function loadBalances(version = generation) {
     // Doing so would send the owner's addresses to the party they moved away
     // from, while the panel still said otherwise.
     state.errors.balances =
-      own && failure?.reason instanceof EndpointError
+      assigned && failure?.reason instanceof EndpointError
         ? `${errorMessage(failure.reason)} Balances were not read anywhere else. Fix the endpoint or remove it in Settings.`
         : "Some balances are unavailable because a contract address or network read could not be verified.";
   } else delete state.errors.balances;
@@ -2466,10 +2540,10 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "rpc-save") await saveBalanceEndpoint();
     if (action === "rpc-clear") {
-      state.rpcEndpoint = "";
+      state.rpcEndpoints = [];
       state.rpcChecked = null;
       state.rpcError = "";
-      state.rpcReads = 0;
+      state.rpcReads = {};
       await persist();
       state.notice =
         "Balance reads are going through your wallet extension's provider again. It sees each address you look at.";

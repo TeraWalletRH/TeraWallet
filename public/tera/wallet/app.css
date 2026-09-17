@@ -1002,3 +1002,13 @@ h1:focus {
 .wipe-limits li {
   margin-bottom: 6px;
 }
+
+/* The endpoint list is one URL per line. Monospace so a long key-bearing URL can
+   be scanned for a typo, and a fixed resize axis so the panel cannot be dragged
+   sideways out of its column. */
+.field textarea#rpc-endpoint {
+  font-family: "IBM Plex Mono", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.7;
+  resize: vertical;
+}

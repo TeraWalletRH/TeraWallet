@@ -69,9 +69,6 @@ export function parties(config = {}) {
     config.explorerUrl || DEFAULT_EXPLORER,
     "robinhoodchain.blockscout.com",
   );
-  // When the owner points balance reads at their own endpoint, that knowledge
-  // moves: it does not disappear. The panel gains a row and the wallet's own
-  // provider loses the line about every address the owner looks at.
   // An Oblivious HTTP relay splits what one party used to hold. It is listed as
   // a party in its own right, because it is one: it gains the network address
   // this browser connects from. What it cannot do is read anything it forwards.
@@ -100,30 +97,49 @@ export function parties(config = {}) {
         },
       ]
     : [];
-  const balanceHost = config.balanceEndpointHost || "";
-  const ownEndpoint = balanceHost
-    ? [
-        {
-          id: "owner-endpoint",
-          name: "Your own endpoint, for balance reads",
-          host: balanceHost,
-          reach: "direct",
-          learns: [
-            "The network address you are on, unless it is running on this machine",
-            "Every address whose balance you view, including ones you only look at",
-          ],
-          withheld: [
-            "Anything you sign",
-            "Assistant messages",
-            "Private keys",
-            "Your private policy presets",
-          ],
-          control:
-            "You chose this one, and you can change or remove it in Settings. A node on your own machine tells nobody anything.",
-          owned: true,
-        },
-      ]
-    : [];
+  // When the owner points balance reads at their own endpoints, that knowledge
+  // moves: it does not disappear. The panel gains a row per operator and the
+  // wallet's own provider loses the line about every address the owner looks at.
+  //
+  // Each operator is its own row because each one learns a different, smaller
+  // thing. A pool is listed as a pool; a single
+  // endpoint keeps the sentence it always had, since one operator that answers
+  // for every account is exactly what it was before.
+  const balanceHosts = Array.isArray(config.balanceEndpoints)
+    ? config.balanceEndpoints
+    : config.balanceEndpointHost
+      ? [{ party: config.balanceEndpointHost, host: config.balanceEndpointHost, local: false }]
+      : [];
+  const movedBalanceReads = balanceHosts.length > 0;
+  const isolating = balanceHosts.length > 1;
+  const ownEndpoint = balanceHosts.map((entry, index) => ({
+    id: index === 0 ? "owner-endpoint" : `owner-endpoint-${entry.party}`,
+    party: entry.party,
+    name: isolating
+      ? `Your endpoint ${index + 1} of ${balanceHosts.length}, for balance reads`
+      : "Your own endpoint, for balance reads",
+    host: entry.host,
+    reach: "direct",
+    learns: [
+      entry.local
+        ? "Nothing it can tell anyone: it is running on this machine"
+        : "The network address you are on",
+      isolating
+        ? "Every address whose balance you view on the accounts assigned to it, and no others"
+        : "Every address whose balance you view, including ones you only look at",
+    ],
+    withheld: [
+      ...(isolating ? ["The accounts assigned to the other endpoints in your pool"] : []),
+      "Anything you sign",
+      "Assistant messages",
+      "Private keys",
+      "Your private policy presets",
+    ],
+    control: isolating
+      ? "You chose these, and you can change or remove them in Settings. Each account is read by one of them, so no single one sees the set. Operators who compare notes can still rejoin them, because every read leaves from the same network address."
+      : "You chose this one, and you can change or remove it in Settings. A node on your own machine tells nobody anything. Adding a second operator would stop this one seeing every account you switch between.",
+    owned: true,
+  }));
   return [
     {
       id: "page-host",
@@ -171,7 +187,7 @@ export function parties(config = {}) {
       name: "Your wallet's own network provider",
       host: "Chosen by your wallet extension · not visible to this page",
       reach: "wallet",
-      learns: balanceHost
+      learns: movedBalanceReads
         ? [
             "The network address you are on",
             "Every transaction you submit, before the network sees it",
@@ -182,7 +198,7 @@ export function parties(config = {}) {
             "Every address whose balance you view, including ones you only look at",
             "Every transaction you submit, before the network sees it",
           ],
-      withheld: balanceHost
+      withheld: movedBalanceReads
         ? [
             "The balances you read, which now go to your own endpoint",
             "Assistant messages",
@@ -190,7 +206,7 @@ export function parties(config = {}) {
             "Local records",
           ]
         : ["Assistant messages", "Your private policy presets", "Local records"],
-      control: balanceHost
+      control: movedBalanceReads
         ? "Balance reads already go to your endpoint. What remains here is the signing path, which stays with your wallet on purpose: what it signs must be what it saw."
         : "Point balance reads at your own node in Settings, or set a different RPC endpoint in your wallet extension. Most wallets default to their vendor's provider.",
       unobservable: true,
@@ -289,8 +305,9 @@ export function egressStatus(rows, context = {}) {
   };
   return rows.map((row) => {
     const requests = counts[row.id];
-    if (row.id === "owner-endpoint") {
-      const reads = context.balanceReads || 0;
+    if (row.owned) {
+      const byParty = context.balanceReads;
+      const reads = typeof byParty === "number" ? byParty : Number(byParty?.[row.party] || 0);
       return {
         ...row,
         requests: reads,

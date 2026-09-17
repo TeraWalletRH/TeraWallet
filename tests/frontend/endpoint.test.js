@@ -8,6 +8,12 @@ import {
   balanceReader,
   EndpointError,
   READ_METHODS,
+  partyOf,
+  createPool,
+  assignEndpoint,
+  poolSummary,
+  POOL_LIMITS,
+  LOCAL_PARTY,
 } from "../../public/tera/wallet/endpoint.js";
 
 const ZERO = `0x${"0".repeat(40)}`;
@@ -165,4 +171,108 @@ test("balance reads ask for exactly what the wallet's own provider is asked", as
     { to: token, data: `0x70a08231${owner.slice(2).padStart(64, "0")}` },
     "latest",
   ]);
+});
+
+// ---------------------------------------------------------------------------
+// Per-account read isolation.
+// ---------------------------------------------------------------------------
+
+const A = `0x${"a".repeat(40)}`;
+const B = `0x${"b".repeat(40)}`;
+const C = `0x${"c".repeat(40)}`;
+
+test("an operator is identified by its registrable domain, not its host", () => {
+  assert.equal(partyOf("https://eth.example.test/v1"), "example.test");
+  assert.equal(partyOf("https://rpc-2.eu.example.test/v1"), "example.test");
+  assert.equal(partyOf("https://other.test"), "other.test");
+  assert.equal(partyOf("http://localhost:8545"), LOCAL_PARTY);
+  assert.equal(partyOf("http://127.0.0.1:8545"), LOCAL_PARTY);
+  assert.equal(partyOf("not a url"), "");
+});
+
+test("two endpoints at one company are one party, never two", () => {
+  // The whole feature is worthless if a pool of one operator reports as two.
+  const pool = createPool(["https://a.example.test/1", "https://b.example.test/2"]);
+  assert.equal(pool.length, 1);
+  assert.equal(pool[0].party, "example.test");
+  assert.deepEqual(pool[0].extras, ["https://b.example.test/2"]);
+  const summary = poolSummary(pool);
+  assert.equal(summary.parties, 1);
+  assert.equal(summary.endpoints, 2);
+  assert.equal(summary.isolating, false, "one operator is not isolation");
+});
+
+test("a pool accepts a list, a newline block or a comma list", () => {
+  const expected = ["https://one.test/", "https://two.test/"];
+  for (const input of [
+    ["https://one.test", "https://two.test"],
+    "https://one.test\nhttps://two.test",
+    "https://one.test, https://two.test",
+    "  https://one.test  \n\n  https://two.test  \n",
+  ]) {
+    assert.deepEqual(
+      createPool(input).map((entry) => entry.url),
+      expected,
+    );
+  }
+});
+
+test("a pool refuses what a single endpoint refuses", () => {
+  assert.throws(() => createPool(["https://ok.test", "ws://bad.test"]), EndpointError);
+  assert.throws(() => createPool(["http://insecure.test"]), EndpointError);
+  assert.throws(() => createPool(["https://user:pass@keyed.test"]), EndpointError);
+  assert.deepEqual(createPool(""), []);
+  assert.deepEqual(createPool([]), []);
+});
+
+test("an account is assigned to one operator, and to the same one every time", () => {
+  const pool = createPool(["https://one.test", "https://two.test", "https://three.test"]);
+  for (const owner of [A, B, C]) {
+    const first = assignEndpoint(pool, owner);
+    for (let i = 0; i < 25; i += 1) assert.equal(assignEndpoint(pool, owner).url, first.url);
+  }
+});
+
+test("assignment does not depend on how the address was cased", () => {
+  const pool = createPool(["https://one.test", "https://two.test", "https://three.test"]);
+  assert.equal(assignEndpoint(pool, A.toUpperCase()).url, assignEndpoint(pool, A).url);
+});
+
+test("accounts are spread across the pool rather than piling onto one operator", () => {
+  const pool = createPool(["https://one.test", "https://two.test", "https://three.test"]);
+  const owners = Array.from({ length: 90 }, (_, i) => `0x${i.toString(16).padStart(40, "0")}`);
+  const used = new Map();
+  for (const owner of owners) {
+    const party = assignEndpoint(pool, owner).party;
+    used.set(party, (used.get(party) || 0) + 1);
+  }
+  assert.equal(used.size, 3, "every operator should be used");
+  for (const count of used.values())
+    assert.ok(count > 90 / 6, `an operator took only ${count} of 90 accounts`);
+});
+
+test("an empty pool assigns nothing, so the caller must fall back deliberately", () => {
+  assert.equal(assignEndpoint([], A), null);
+  assert.equal(assignEndpoint(null, A), null);
+});
+
+test("a pool of one answers for every account, and says it is not isolating", () => {
+  const pool = createPool(["https://only.test"]);
+  assert.equal(assignEndpoint(pool, A).url, assignEndpoint(pool, B).url);
+  assert.equal(poolSummary(pool).isolating, false);
+});
+
+test("a pool of local endpoints is reported as being entirely the owner's own", () => {
+  assert.equal(poolSummary(createPool(["http://localhost:8545"])).localOnly, true);
+  assert.equal(poolSummary(createPool(["https://remote.test"])).localOnly, false);
+  // Two local URLs are still one machine, so still one party.
+  assert.equal(createPool(["http://localhost:8545", "http://127.0.0.1:8546"]).length, 1);
+});
+
+test("the limits of a pool are stated, including the ones that undercut it", () => {
+  assert.ok(POOL_LIMITS.length >= 4);
+  const text = POOL_LIMITS.join(" ").toLowerCase();
+  assert.ok(text.includes("network address"), "must say every read shares one address");
+  assert.ok(text.includes("does not forget"), "must say reassignment does not undo what was seen");
+  assert.ok(text.includes("signing"), "must say the signing path is unaffected");
 });
