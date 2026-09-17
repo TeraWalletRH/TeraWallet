@@ -7,6 +7,7 @@ import { env } from "../env";
 import { logger } from "../logging";
 import { advanceEpoch, changeStake, type StakingEpoch, type StakingPosition } from "../staking";
 import { payoutAuthorizationMessage, payoutTotal } from "../staking-outbox";
+import { broadcastPayout, confirmPayout } from "../staking-executor";
 
 const router = Router();
 
@@ -313,42 +314,24 @@ router.post("/api/staking/payouts", async (req, res) => {
 });
 
 router.post("/api/admin/staking/payouts/:id/broadcast", requireAdmin, async (req, res) => {
-  if (!pool || !configured()) { res.status(503).json({ success:false, error:"Staking is unavailable." }); return; }
-  const db = await pool.connect();
   try {
-    await db.query("BEGIN");
-    const found = await db.query("SELECT * FROM staking_payouts WHERE id=$1 FOR UPDATE", [req.params.id]);
-    const payout = found.rows[0]; if (!payout) throw new Error("Payout not found.");
-    let raw = payout.serialized_tx as Hex | null;
-    if (payout.status === 'requested' || payout.status === 'failed') {
-      const account = privateKeyToAccount(env.teraStakingPoolPrivateKey as Hex);
-      const total = BigInt(payout.principal_amount) + BigInt(payout.reward_amount);
-      const data = encodeFunctionData({ abi: erc20Abi, functionName:'transfer', args:[getAddress(payout.wallet_address), total] });
-      const [nonce, gasPrice] = await Promise.all([client.getTransactionCount({ address: account.address, blockTag:'pending' }), client.getGasPrice()]);
-      raw = await account.signTransaction({ to:getAddress(env.teraTokenAddress), data, nonce, gas:100000n, gasPrice, chainId:env.rhcChainId });
-      await db.query("UPDATE staking_payouts SET status='signed',serialized_tx=$2,tx_hash=$3,updated_at=NOW(),failure_reason=NULL WHERE id=$1", [payout.id, raw, keccak256(raw)]);
-    }
-    await db.query("COMMIT");
-    const txHash = await client.sendRawTransaction({ serializedTransaction: raw! });
-    await pool.query("UPDATE staking_payouts SET status='broadcast',tx_hash=$2,updated_at=NOW() WHERE id=$1 AND status='signed'", [payout.id, txHash]);
-    res.json({ success:true, payoutId:payout.id, txHash, status:'broadcast' });
-  } catch (error) { await db.query("ROLLBACK").catch(()=>{}); logger.warn(req,'staking.payout_broadcast_failed',error); res.status(422).json({success:false,error:error instanceof Error?error.message:'Unable to broadcast payout.'}); }
-  finally { db.release(); }
+    const payout = await broadcastPayout(String(req.params.id));
+    res.json({ success: true, payoutId: payout.id, txHash: payout.tx_hash, status: payout.status });
+  } catch (error) {
+    logger.warn(req, "staking.payout_broadcast_failed", error);
+    res.status(422).json({ success: false, error: error instanceof Error ? error.message : "Unable to broadcast payout." });
+  }
 });
 
-/** Receipt confirmation is independent of broadcast success reporting. */
 router.post("/api/admin/staking/payouts/:id/confirm", requireAdmin, async (req, res) => {
-  if (!pool) { res.status(503).json({success:false,error:'Staking ledger unavailable.'}); return; }
   try {
-    const found = await pool.query("SELECT * FROM staking_payouts WHERE id=$1", [req.params.id]); const payout=found.rows[0];
-    if (!payout?.tx_hash) throw new Error('Payout has not been signed.');
-    const expected=BigInt(payout.principal_amount)+BigInt(payout.reward_amount);
-    await confirmedTransfer(payout.tx_hash as Hex, poolAddress()!, getAddress(payout.wallet_address), expected);
-    const result=await pool.query("UPDATE staking_payouts SET status='confirmed',confirmed_at=NOW(),updated_at=NOW() WHERE id=$1 AND status IN ('signed','broadcast') RETURNING *",[payout.id]);
-    if (!result.rowCount) throw new Error('Payout is already final.');
-    await pool.query("INSERT INTO staking_events (epoch_id,wallet_address,kind,amount,metadata) VALUES ($1,$2,'payout_confirmed',$3,$4)",[payout.epoch_id,payout.wallet_address,expected.toString(),JSON.stringify({payoutId:payout.id,txHash:payout.tx_hash})]);
-    res.json({success:true,payout:result.rows[0]});
-  } catch(error) { logger.warn(req,'staking.payout_confirmation_failed',error); res.status(422).json({success:false,error:error instanceof Error?error.message:'Unable to confirm payout.'}); }
+    const payout = await confirmPayout(String(req.params.id));
+    if (!payout) { res.status(202).json({ success: true, status: "awaiting_confirmations" }); return; }
+    res.json({ success: true, payout });
+  } catch (error) {
+    logger.warn(req, "staking.payout_confirmation_failed", error);
+    res.status(422).json({ success: false, error: error instanceof Error ? error.message : "Unable to confirm payout." });
+  }
 });
 
 export default router;
