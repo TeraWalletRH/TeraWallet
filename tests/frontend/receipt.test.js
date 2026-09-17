@@ -13,6 +13,7 @@ import {
   UNVERIFIABLE,
   SKIPPED,
   EXPORT_WARNING,
+  exportNotice,
   create,
   bundle,
   verify,
@@ -370,4 +371,41 @@ test("the signing prompt keeps the line that says it does nothing separate", asy
   assert.equal(lines[0], DOMAIN);
   assert.equal(lines[3], "", "a blank line must separate the preamble from the fields");
   assert.match(lines[4], /^Answered by:/);
+});
+
+test("the export notice says the text has never left, only when that is true", async () => {
+  // The file is identical either way. What differs is whether saving it is the
+  // moment the text leaves the device, and that is the whole decision.
+  const local = exportNotice(await made({ answeredBy: DEVICE }));
+  assert.equal(local.firstSend, true);
+  assert.match(local.headline, /never left your browser/i);
+  assert.match(local.detail, /first time/i);
+
+  const remote = exportNotice(await made({ answeredBy: SERVICE, sent: true }));
+  assert.equal(remote.firstSend, false);
+  assert.doesNotMatch(remote.headline, /never left/i);
+  assert.match(remote.detail, /nowhere new/i);
+});
+
+test("the export notice always states what the reader of the file can see", async () => {
+  for (const receipt of [
+    await made({ answeredBy: CODE }),
+    await made({ answeredBy: SERVICE, sent: true }),
+  ]) {
+    const notice = exportNotice(receipt);
+    assert.match(notice.consequence, /read both in full/i);
+    const labels = notice.contents.map((part) => part.label);
+    assert.ok(labels.includes("Your message"));
+    assert.ok(labels.includes("The reply"));
+  }
+});
+
+test("the export notice lists a signature only when the receipt carries one", async () => {
+  const unsigned = exportNotice(await made());
+  assert.ok(!unsigned.contents.some((part) => /signature/i.test(part.label)));
+
+  const wallet = stubSigner();
+  const signed = await sign(await made(), { signer: wallet.address, sign: wallet.sign });
+  const notice = exportNotice(signed);
+  assert.ok(notice.contents.some((part) => /signature/i.test(part.label)));
 });
