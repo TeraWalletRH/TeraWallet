@@ -1,11 +1,12 @@
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Router, type NextFunction, type Request, type Response } from "express";
-import { createPublicClient, decodeEventLog, getAddress, http, isAddress, parseAbiItem, type Address, type Hex } from "viem";
+import { createPublicClient, decodeEventLog, encodeFunctionData, erc20Abi, getAddress, http, isAddress, keccak256, parseAbiItem, verifyMessage, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import pool from "../db";
 import { env } from "../env";
 import { logger } from "../logging";
 import { advanceEpoch, changeStake, type StakingEpoch, type StakingPosition } from "../staking";
+import { payoutAuthorizationMessage, payoutTotal } from "../staking-outbox";
 
 const router = Router();
 
@@ -234,6 +235,82 @@ router.get("/api/staking/position/:walletAddress", async (req: Request, res: Res
     logger.error(req, "staking.position_read_failed", error);
     res.status(503).json({ success: false, error: "Staking ledger is unavailable." });
   }
+});
+
+/** Broadcast only the bytes recorded for this payout. A retry never signs again. */
+router.post("/api/staking/payouts", async (req, res) => {
+  if (!pool || !configured()) { res.status(503).json({success:false,error:'Staking is unavailable.'}); return; }
+  try {
+    const kind=req.body?.kind as 'claim'|'unstake', epochId=String(req.body?.epochId??''), key=String(req.body?.idempotencyKey??'');
+    const wallet=typeof req.body?.walletAddress==='string'&&isAddress(req.body.walletAddress)?getAddress(req.body.walletAddress):null;
+    const amount=kind==='unstake'?base(req.body?.amount,'amount'):0n;
+    const signature=typeof req.body?.signature==='string'?req.body.signature as Hex:null;
+    if (!wallet || !epochId || !key || !signature || !['claim','unstake'].includes(kind) || key.length>128) throw new Error('Valid signed payout request is required.');
+    const signed=await verifyMessage({address:wallet,message:payoutAuthorizationMessage(kind,wallet,epochId,amount.toString(),key),signature});
+    if (!signed) throw new Error('Payout signature does not belong to the wallet.');
+    const chainNow=Number((await client.getBlock()).timestamp), db=await pool.connect();
+    try {
+      await db.query('BEGIN'); await db.query("SELECT pg_advisory_xact_lock(hashtext('tera_staking_pool'))");
+      const er=await db.query('SELECT * FROM staking_epochs WHERE id=$1 FOR UPDATE',[epochId]), row=er.rows[0];
+      if (!row || !['active','ended'].includes(row.status)) throw new Error('Epoch cannot settle payouts.');
+      const epoch:StakingEpoch={startsAt:Math.floor(new Date(row.starts_at).getTime()/1000),endsAt:Math.floor(new Date(row.ends_at).getTime()/1000),lastUpdatedAt:Math.floor(new Date(row.last_updated_at).getTime()/1000),rewardRatePerSecond:BigInt(row.reward_rate_per_second),totalActiveStake:BigInt(row.total_active_stake),rewardPerToken:BigInt(row.reward_per_token),distributedRewards:BigInt(row.distributed_rewards)};
+      const advanced=advanceEpoch(epoch,chainNow);
+      const pr=await db.query('SELECT * FROM staking_positions WHERE epoch_id=$1 AND LOWER(wallet_address)=LOWER($2) FOR UPDATE',[epochId,wallet]), prior=pr.rows[0];
+      if (!prior) throw new Error('No active staking position.');
+      const settled=changeStake({activeStake:BigInt(prior.active_stake),accruedRewards:BigInt(prior.accrued_rewards),rewardDebt:BigInt(prior.reward_debt)},advanced.rewardPerToken,0n);
+      const principal=kind==='unstake'?amount:0n; if(principal>settled.activeStake) throw new Error('Unstake amount exceeds active stake.');
+      const reward=settled.accruedRewards; const total=payoutTotal(principal,reward);
+      const next={...settled,activeStake:settled.activeStake-principal,accruedRewards:0n};
+      await db.query('UPDATE staking_epochs SET reward_per_token=$2,distributed_rewards=$3,total_active_stake=$4,last_updated_at=to_timestamp($5),updated_at=NOW() WHERE id=$1',[epochId,advanced.rewardPerToken.toString(),advanced.distributedRewards.toString(),(advanced.totalActiveStake-principal).toString(),advanced.lastUpdatedAt]);
+      await db.query('UPDATE staking_positions SET active_stake=$3,accrued_rewards=0,reward_debt=$4,updated_at=NOW() WHERE epoch_id=$1 AND LOWER(wallet_address)=LOWER($2)',[epochId,wallet,next.activeStake.toString(),next.rewardDebt.toString()]);
+      const out=await db.query("INSERT INTO staking_payouts (epoch_id,wallet_address,kind,principal_amount,reward_amount,idempotency_key) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (idempotency_key) DO NOTHING RETURNING *",[epochId,wallet,kind,principal.toString(),reward.toString(),key]);
+      if(!out.rowCount) throw new Error('This payout request already exists.');
+      const bal=await client.readContract({address:getAddress(env.teraTokenAddress),abi:erc20Abi,functionName:'balanceOf',args:[poolAddress()!]});
+      const liabilities=await db.query("SELECT COALESCE(SUM(active_stake+accrued_rewards),0) AS owners FROM staking_positions UNION ALL SELECT COALESCE(SUM(principal_amount+reward_amount),0) FROM staking_payouts WHERE status IN ('requested','signed','broadcast')");
+      const required=liabilities.rows.reduce((n,r)=>n+BigInt(r.owners),0n); if(bal<required) throw new Error('Pool reserve is insufficient; payout was not created.');
+      await db.query("INSERT INTO staking_events (epoch_id,wallet_address,kind,amount,metadata) VALUES ($1,$2,$3,$4,$5)",[epochId,wallet,kind==='claim'?'claim_requested':'unstake_requested',total.toString(),JSON.stringify({payoutId:out.rows[0].id})]);
+      await db.query('COMMIT'); res.status(201).json({success:true,payout:out.rows[0]});
+    } catch(e){await db.query('ROLLBACK');throw e;} finally{db.release();}
+  } catch(e){logger.warn(req,'staking.payout_request_rejected',e);res.status(422).json({success:false,error:e instanceof Error?e.message:'Unable to create payout.'});}
+});
+
+router.post("/api/admin/staking/payouts/:id/broadcast", requireAdmin, async (req, res) => {
+  if (!pool || !configured()) { res.status(503).json({ success:false, error:"Staking is unavailable." }); return; }
+  const db = await pool.connect();
+  try {
+    await db.query("BEGIN");
+    const found = await db.query("SELECT * FROM staking_payouts WHERE id=$1 FOR UPDATE", [req.params.id]);
+    const payout = found.rows[0]; if (!payout) throw new Error("Payout not found.");
+    let raw = payout.serialized_tx as Hex | null;
+    if (payout.status === 'requested' || payout.status === 'failed') {
+      const account = privateKeyToAccount(env.teraStakingPoolPrivateKey as Hex);
+      const total = BigInt(payout.principal_amount) + BigInt(payout.reward_amount);
+      const data = encodeFunctionData({ abi: erc20Abi, functionName:'transfer', args:[getAddress(payout.wallet_address), total] });
+      const [nonce, gasPrice] = await Promise.all([client.getTransactionCount({ address: account.address, blockTag:'pending' }), client.getGasPrice()]);
+      raw = await account.signTransaction({ to:getAddress(env.teraTokenAddress), data, nonce, gas:100000n, gasPrice, chainId:env.rhcChainId });
+      await db.query("UPDATE staking_payouts SET status='signed',serialized_tx=$2,tx_hash=$3,updated_at=NOW(),failure_reason=NULL WHERE id=$1", [payout.id, raw, keccak256(raw)]);
+    }
+    await db.query("COMMIT");
+    const txHash = await client.sendRawTransaction({ serializedTransaction: raw! });
+    await pool.query("UPDATE staking_payouts SET status='broadcast',tx_hash=$2,updated_at=NOW() WHERE id=$1 AND status='signed'", [payout.id, txHash]);
+    res.json({ success:true, payoutId:payout.id, txHash, status:'broadcast' });
+  } catch (error) { await db.query("ROLLBACK").catch(()=>{}); logger.warn(req,'staking.payout_broadcast_failed',error); res.status(422).json({success:false,error:error instanceof Error?error.message:'Unable to broadcast payout.'}); }
+  finally { db.release(); }
+});
+
+/** Receipt confirmation is independent of broadcast success reporting. */
+router.post("/api/admin/staking/payouts/:id/confirm", requireAdmin, async (req, res) => {
+  if (!pool) { res.status(503).json({success:false,error:'Staking ledger unavailable.'}); return; }
+  try {
+    const found = await pool.query("SELECT * FROM staking_payouts WHERE id=$1", [req.params.id]); const payout=found.rows[0];
+    if (!payout?.tx_hash) throw new Error('Payout has not been signed.');
+    const expected=BigInt(payout.principal_amount)+BigInt(payout.reward_amount);
+    await confirmedTransfer(payout.tx_hash as Hex, poolAddress()!, getAddress(payout.wallet_address), expected);
+    const result=await pool.query("UPDATE staking_payouts SET status='confirmed',confirmed_at=NOW(),updated_at=NOW() WHERE id=$1 AND status IN ('signed','broadcast') RETURNING *",[payout.id]);
+    if (!result.rowCount) throw new Error('Payout is already final.');
+    await pool.query("INSERT INTO staking_events (epoch_id,wallet_address,kind,amount,metadata) VALUES ($1,$2,'payout_confirmed',$3,$4)",[payout.epoch_id,payout.wallet_address,expected.toString(),JSON.stringify({payoutId:payout.id,txHash:payout.tx_hash})]);
+    res.json({success:true,payout:result.rows[0]});
+  } catch(error) { logger.warn(req,'staking.payout_confirmation_failed',error); res.status(422).json({success:false,error:error instanceof Error?error.message:'Unable to confirm payout.'}); }
 });
 
 export default router;
