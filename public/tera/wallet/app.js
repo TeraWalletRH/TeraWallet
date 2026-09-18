@@ -148,7 +148,9 @@ import {
   tally as receiptTally,
   sign as signReceipt,
   DOMAIN,
+  FROM_PAGE,
 } from "../core/receipt.js";
+import { parseRegistry, LIMITS as REGISTRY_LIMITS } from "../core/registry.js";
 import {
   ACTIONS,
   createPreset,
@@ -868,13 +870,40 @@ function receiptChip(message) {
  * on screen is the result of running the checks now — including against a
  * transcript the page could in principle have altered since.
  */
+// The approved-build registry, fetched once per page session. A failure is not
+// reported as an error: without it the release check says exactly what it said
+// before this existed, which is the correct outcome rather than a degraded one.
+let registryCache;
+async function loadRegistry() {
+  if (registryCache !== undefined) return registryCache;
+  try {
+    const response = await fetch("/tera/registry.json", {
+      cache: "no-store",
+      signal: AbortSignal.timeout(8000),
+    });
+    registryCache = response.ok ? parseRegistry(await response.json()) : null;
+  } catch {
+    registryCache = null;
+  }
+  return registryCache;
+}
+
 async function openReceipt(index) {
   const message = state.chat[Number(index)];
   const receipt = message?.receipt;
   if (!receipt) return;
   const source = ANSWERED_BY[receipt.answeredBy];
+  // The registry is fetched from this origin, which is why it is passed with
+  // FROM_PAGE. The release check will say so rather than presenting the lookup
+  // as a second opinion: this page fetched both the receipt and the list it is
+  // being checked against, so a page willing to misreport one would misreport
+  // the other. It is offered here because it points at the verifier that does
+  // settle it, not because it settles anything.
   const result = await verifyReceipt(receiptBundle(receipt, message.transcript || {}), {
     recover: recoverReceiptSigner,
+    registry: await loadRegistry(),
+    registryOrigin: FROM_PAGE,
+    registryAuthentic: false,
   });
   const counts = receiptTally(result.checks);
   const mark = { pass: "PASS", fail: "FAILED", unverifiable: "UNPROVEN", skipped: "N/A" };
@@ -890,6 +919,7 @@ async function openReceipt(index) {
        )
        .join("")}</tbody></table></div>
      <div class="note"><strong>What this receipt does not establish</strong><ul class="micro">${RECEIPT_CLAIMS.cannot.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div>
+     <div class="note"><strong>Checking the build elsewhere</strong>The release above can be compared against the approved-build registry this site publishes — but not usefully from here, because this page fetched both. Run <code>node scripts/verify-receipt.mjs receipt.json --registry registry.json</code>, or open <a href="/tera/verify.html">the offline verifier ↗</a> with a registry you fetched yourself.<ul class="micro">${REGISTRY_LIMITS.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div>
      <p class="micro">${esc(EXPORT_WARNING)}</p>
      <div class="actions">${receipt.signature ? "" : button("Sign this receipt", "receipt-sign", `data-index="${Number(index)}" ${state.owner ? "" : "disabled"}`)}${button("Export receipt", "receipt-export", `data-index="${Number(index)}"`)}${button("Close", "close")}</div>
      ${receipt.signature ? "" : `<p class="micro">Signing asks your wallet for a signature over a short piece of readable text. It moves nothing and cannot authorise a transaction — the first line of what you will be shown is <code>${esc(DOMAIN)}</code>, which is what keeps it from being usable as anything else this wallet asks you to sign.</p>`}`,

@@ -19,6 +19,8 @@ import {
   verify,
   shortRef,
   tally,
+  FROM_PAGE,
+  INDEPENDENT,
 } from "../../public/tera/core/receipt.js";
 
 globalThis.crypto ??= webcrypto;
@@ -97,7 +99,7 @@ test("the release and the model are reported, never verified", async () => {
   assert.equal(statusOf(result.checks, "model"), UNVERIFIABLE);
   assert.match(
     result.checks.find((entry) => entry.id === "release").detail,
-    /modified page reports whatever it likes/i,
+    /No approved-build registry was available/i,
   );
 });
 
@@ -408,4 +410,41 @@ test("the export notice lists a signature only when the receipt carries one", as
   const signed = await sign(await made(), { signer: wallet.address, sign: wallet.sign });
   const notice = exportNotice(signed);
   assert.ok(notice.contents.some((part) => /signature/i.test(part.label)));
+});
+
+test("a registry can settle the release check, and only from outside the page", async () => {
+  // Build 8. The release name used to be unprovable in every reading. Given a
+  // signed list the reader fetched themselves, a match is a pass and a miss is
+  // evidence — but the same list fetched by the page proves nothing.
+  const signed = await made({ release: "r-ffd0e45a1b2c" });
+  const registry = {
+    registry: "Tera approved builds",
+    version: 1,
+    algorithm: "sha256",
+    builds: [{ release: "r-ffd0e45a1b2c", filesHash: "sha256-AAAA", publishedAt: "2026-09-18" }],
+  };
+  const read = async (options) =>
+    (await verify(bundle(signed, TURN), options)).checks.find((entry) => entry.id === "release");
+
+  assert.equal(
+    (await read({ registry, registryOrigin: INDEPENDENT, registryAuthentic: true })).status,
+    PASS,
+  );
+  assert.equal(
+    (await read({ registry, registryOrigin: FROM_PAGE, registryAuthentic: true })).status,
+    UNVERIFIABLE,
+  );
+  assert.equal((await read({ registry, registryOrigin: INDEPENDENT })).status, UNVERIFIABLE);
+  assert.equal((await read({})).status, UNVERIFIABLE);
+
+  // A release that was never published is a failure, not an absence.
+  const forged = await made({ release: "r-000000000000" });
+  const miss = (
+    await verify(bundle(forged, TURN), {
+      registry,
+      registryOrigin: INDEPENDENT,
+      registryAuthentic: true,
+    })
+  ).checks.find((entry) => entry.id === "release");
+  assert.equal(miss.status, FAIL);
 });

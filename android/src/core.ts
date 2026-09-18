@@ -27,3 +27,17 @@ export {
   blockers,
   blockingReason,
 } from "../../public/tera/core/verdict.js";
+
+// The approved-build registry. The phone is in the same position as the browser
+// here — it fetches its own copy, so a match is not a second opinion — but the
+// module is shared so both say the same thing about that rather than one of
+// them quietly claiming more.
+export {
+  parseRegistry,
+  verifyRegistry,
+  releaseCheck,
+  lookup,
+  FROM_PAGE,
+  INDEPENDENT,
+  LIMITS as REGISTRY_LIMITS,
+} from "../../public/tera/core/registry.js";

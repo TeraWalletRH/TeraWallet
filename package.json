@@ -19,7 +19,8 @@
     "build:verifier": "node scripts/build-verifier.mjs",
     "verify:receipt": "node scripts/verify-receipt.mjs",
     "build:model": "node scripts/build-model.mjs",
-    "build:wordlist": "node scripts/build-wordlist.mjs"
+    "build:wordlist": "node scripts/build-wordlist.mjs",
+    "build:registry": "node scripts/build-registry.mjs"
   },
   "overrides": {
     "rolldown": "1.2.1"

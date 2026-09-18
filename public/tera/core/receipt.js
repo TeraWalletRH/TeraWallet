@@ -30,7 +30,11 @@
 //   does not say Tera agreed to anything — the owner's own key is what signs.
 //   An unsigned receipt says these hashes were computed in some browser.
 
+import { releaseCheck, FROM_PAGE, INDEPENDENT } from "./registry.js";
+
 export const FORMAT = "tera-receipt/1";
+
+export { FROM_PAGE, INDEPENDENT };
 
 /** Who answered. The distinction the whole receipt exists to record. */
 export const CODE = "code";
@@ -304,7 +308,10 @@ const check = (id, label, status, detail) => ({ id, label, status, detail });
  * cannot be settled is reported as unverifiable rather than left out, because a
  * list of passes with the hard parts missing reads as a clean bill of health.
  */
-export async function verify(input, { recover } = {}) {
+export async function verify(
+  input,
+  { recover, registry = null, registryOrigin = FROM_PAGE, registryAuthentic = false } = {},
+) {
   const data = typeof input === "string" ? safeParse(input) : input;
   if (!data || typeof data !== "object")
     return {
@@ -366,14 +373,11 @@ export async function verify(input, { recover } = {}) {
         ? "The receipt records that this turn was sent to Tera's service. Nothing in the file establishes it either way."
         : "The receipt records that nothing was sent. No page can prove that about itself: read the published source, or your browser's network panel.",
     ),
-    check(
-      "release",
-      "Build release",
-      UNVERIFIABLE,
-      data.release
-        ? `Reported as ${data.release}. Check it against the published build manifest; a modified page reports whatever it likes.`
-        : "No release was recorded.",
-    ),
+    // The release check moved into registry.js, because what a release name is
+    // worth depends on whether the reader could compare it against a published
+    // list and on who fetched that list. Passing no registry reproduces exactly
+    // what this check used to say.
+    releaseCheck(data, registry, { origin: registryOrigin, authentic: registryAuthentic }),
   );
   if (data.answeredBy === DEVICE)
     checks.push(

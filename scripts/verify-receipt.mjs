@@ -19,15 +19,20 @@
 import { readFile } from "node:fs/promises";
 import { webcrypto } from "node:crypto";
 import { argv, exit, stdout, stderr } from "node:process";
-import { verify } from "../public/tera/core/receipt.js";
+import { verify, INDEPENDENT } from "../public/tera/core/receipt.js";
+import { parseRegistry, verifyRegistry } from "../public/tera/core/registry.js";
 import { text, exitCode } from "../public/tera/core/report.js";
 
 globalThis.crypto ??= webcrypto;
 
 const USAGE = `Check a Tera receipt file.
 
-  node scripts/verify-receipt.mjs <receipt.json> [--json] [--no-recover]
+  node scripts/verify-receipt.mjs <receipt.json> [--registry <file>] [--json] [--no-recover]
 
+  --registry     An approved-build registry you fetched yourself, to check the
+                 receipt's release against. Fetched by you and read here, this
+                 is the one place a match means something — the wallet fetching
+                 its own copy proves nothing about the page that wrote it.
   --json         Print the raw result instead of a report.
   --no-recover   Skip signature recovery. The signature check then reports as
                  unproven, which is what it should say when nothing is able to
@@ -55,7 +60,10 @@ async function loadRecover() {
 async function main() {
   const args = argv.slice(2);
   const flags = new Set(args.filter((arg) => arg.startsWith("--")));
-  const [path] = args.filter((arg) => !arg.startsWith("--"));
+  const positional = args.filter((arg) => !arg.startsWith("--"));
+  const registryAt = args.indexOf("--registry");
+  const registryPath = registryAt >= 0 ? args[registryAt + 1] : "";
+  const [path] = positional.filter((arg) => arg !== registryPath);
 
   if (!path || flags.has("--help") || flags.has("-h")) {
     stdout.write(USAGE);
@@ -85,7 +93,39 @@ async function main() {
         "Run `bun install` in the repository, or pass --no-recover to say so explicitly.\n\n",
     );
 
-  const result = await verify(raw, recover ? { recover } : {});
+  // The registry is read here, from a file the reader chose, which is what
+  // makes the release check worth anything. A registry the page fetched for
+  // itself is not a second opinion, and `registry.js` refuses to treat one as
+  // though it were.
+  let registry = null;
+  let registryAuthentic = false;
+  if (registryPath) {
+    try {
+      registry = parseRegistry(await readFile(registryPath, "utf8"));
+    } catch (error) {
+      stderr.write(`Could not read the registry at ${registryPath}: ${error.message}\n`);
+      exit(3);
+    }
+    const signer = process.env.TERA_MANIFEST_SIGNER_ADDRESS;
+    if (recover && signer) {
+      const checked = await verifyRegistry(registry, { recover, expectedSigner: signer });
+      registryAuthentic = checked.ok;
+      if (!checked.ok)
+        stderr.write(`The registry's signature did not check out: ${checked.reason}\n\n`);
+    } else {
+      stderr.write(
+        "The registry was read but not authenticated: set TERA_MANIFEST_SIGNER_ADDRESS to the\n" +
+          "expected signer. Until then the release check reports as unproven.\n\n",
+      );
+    }
+  }
+
+  const result = await verify(raw, {
+    ...(recover ? { recover } : {}),
+    registry,
+    registryOrigin: INDEPENDENT,
+    registryAuthentic,
+  });
 
   if (flags.has("--json")) stdout.write(`${JSON.stringify(result, null, 2)}\n`);
   else stdout.write(`${text(result, receipt)}\n`);
