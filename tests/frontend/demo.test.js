@@ -10,8 +10,17 @@ import {
   demoReply,
   createDemoProvider,
   createDemoState,
+  UNPROVEN_LINEAGE,
   DemoSignatureBlocked,
 } from "../../public/tera/wallet/demo.js";
+import {
+  gateVerdicts,
+  summarise,
+  PASS,
+  FAIL,
+  UNVERIFIABLE,
+} from "../../public/tera/core/verdict.js";
+import { snapshot, diffVersions } from "../../public/tera/wallet/history.js";
 import {
   isAddress,
   isHash,
@@ -127,7 +136,7 @@ test("demo state is self-contained and repeatable", () => {
   assert.equal(first.owner, DEMO_OWNER);
   assert.equal(first.assetsLoaded, true);
   assert.equal(first.chain, chainId);
-  assert.equal(first.drafts.length, 2);
+  assert.equal(first.drafts.length, 3);
   assert.equal(first.account.stats.intents.confirmed_intents, 1);
   assert.equal(executionIssue(first.drafts[0], DEMO_OWNER, chainId), null);
   const second = createDemoState(chainId);
@@ -153,4 +162,42 @@ test("demo replies stay generic and carry no sample values", () => {
     assert.ok(reply.length > 0);
     assert.equal(reply.includes(DEMO_OWNER), false);
   }
+});
+
+test("the demo can reach all three shapes a set of checks can take", () => {
+  // Without this the fourth state was unreachable in the product's own sample:
+  // the wallet was rebuilt around a distinction its demo could not show.
+  const state = createDemoState(chainId);
+  const verdicts = state.drafts.map((draft) => summarise(gateVerdicts(draft.gates, GATES)).status);
+  assert.ok(verdicts.includes(PASS), "a clean proposal");
+  assert.ok(verdicts.includes(UNVERIFIABLE), "one the service could not establish");
+  assert.ok(verdicts.includes(FAIL), "one a check blocked");
+});
+
+test("the unproven sample is a reported pass, not a failure", () => {
+  const proposal = demoProposal(chainId, {}, "unproven");
+  const eligibility = proposal.gates.find((gate) => gate.gate === "eligibility_preflight");
+  assert.equal(eligibility.passed, true, "the service does report it as passing");
+  assert.equal(eligibility.details.rpcFallback, true, "and says it could not establish it");
+  assert.equal(gateVerdicts(proposal.gates, GATES)[1].status, UNVERIFIABLE);
+  // The older boolean argument still selects the blocked shape.
+  assert.equal(
+    gateVerdicts(demoProposal(chainId, {}, true).gates, GATES).some((v) => v.status === FAIL),
+    true,
+  );
+});
+
+test("the unproven draft carries a trail showing what changed", () => {
+  // Nothing about the action changed and no check started failing. The trail
+  // exists to show the one thing that did: eligibility stopped being established.
+  const state = createDemoState(chainId);
+  const draft = state.drafts.find((entry) => entry.lineage === UNPROVEN_LINEAGE);
+  assert.ok(draft, "the demo seeds an unproven draft");
+  const previous = state.versions[UNPROVEN_LINEAGE];
+  assert.equal(previous.length, 1);
+  const row = diffVersions(previous[0], snapshot(draft, DEMO_ASSETS[0])).find(
+    (entry) => entry.field === "gate:eligibility_preflight",
+  );
+  assert.equal(row.from, "PASS");
+  assert.equal(row.to, "UNPROVEN");
 });
