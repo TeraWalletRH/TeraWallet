@@ -13,6 +13,14 @@ export const env = {
   policySignerAddress: process.env.POLICY_SIGNER_ADDRESS ?? "",
   policyBundleUrl: process.env.POLICY_BUNDLE_URL ?? "",
   policyBundleMaxAgeSeconds: Number(process.env.POLICY_BUNDLE_MAX_AGE_SECONDS ?? 86400),
+  // TERA staking is deliberately disabled unless every required backend-only
+  // input is present. The pool key is never returned by a route.
+  teraTokenAddress: process.env.TERA_TOKEN_ADDRESS ?? "",
+  teraStakingPoolPrivateKey: process.env.TERA_STAKING_POOL_PRIVATE_KEY ?? "",
+  masterAdminKey: process.env.MASTER_ADMIN_KEY ?? "",
+  teraStakingConfirmations: Number(process.env.TERA_STAKING_CONFIRMATIONS ?? 3),
+  teraStakingAdminSessionHours: Number(process.env.TERA_STAKING_ADMIN_SESSION_HOURS ?? 8),
+  teraStakingEnabled: process.env.TERA_STAKING_ENABLED === "true",
   // Oblivious HTTP gateway. Unset means off: see backend/src/routes/ohttp.ts for
   // why an unconfigured gateway must not invent a key at boot.
   //
