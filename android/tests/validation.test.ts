@@ -105,3 +105,48 @@ describe("signing boundary", () => {
     expect(() => verifyProposal(p, owner)).toThrow();
   });
 });
+
+describe("service check verdicts", () => {
+  const proposal = (gates: any[]) => ({
+    intent: {
+      ownerAddress: owner,
+      assetAddress: USDG,
+      actionType: "TRANSFER",
+      recipient,
+      amount: "100",
+    },
+    gates,
+    preparedTransaction: transferTx(USDG, recipient, "100"),
+  });
+  const five = (overrides: Record<string, any> = {}) =>
+    [
+      "asset_registry",
+      "eligibility_preflight",
+      "policy_vault",
+      "risk_engine",
+      "approval_controller",
+    ].map((gate) => ({ gate, passed: true, ...(overrides[gate] || {}) }));
+
+  it("accepts a proposal where every check actually passed", () => {
+    expect(verifyProposal(proposal(five()), owner)).toHaveLength(1);
+  });
+
+  it("refuses a pass the service could not establish", () => {
+    // The eligibility check falls back to the registry entry when the chain is
+    // unreachable. It reports passed:true, and before this that was enough.
+    const gates = five({ eligibility_preflight: { details: { rpcFallback: true } } });
+    expect(() => verifyProposal(proposal(gates), owner)).toThrow(/could not be established/i);
+  });
+
+  it("refuses when the risk figures are static defaults rather than a quote", () => {
+    const gates = five({ risk_engine: { details: { staticDefaults: true } } });
+    expect(() => verifyProposal(proposal(gates), owner)).toThrow(/could not be established/i);
+  });
+
+  it("still refuses a blocked check and a missing one, naming which", () => {
+    const blocked = five({ policy_vault: { passed: false } });
+    expect(() => verifyProposal(proposal(blocked), owner)).toThrow(/blocked it/i);
+    const missing = five().filter((g) => g.gate !== "approval_controller");
+    expect(() => verifyProposal(proposal(missing), owner)).toThrow(/did not run/i);
+  });
+});

@@ -19,7 +19,7 @@ import {
   verify,
   shortRef,
   tally,
-} from "../../public/tera/wallet/receipt.js";
+} from "../../public/tera/core/receipt.js";
 
 globalThis.crypto ??= webcrypto;
 globalThis.btoa ??= (binary) => Buffer.from(binary, "binary").toString("base64");
@@ -222,7 +222,7 @@ import {
   digestOf,
   signingMessage,
   sign,
-} from "../../public/tera/wallet/receipt.js";
+} from "../../public/tera/core/receipt.js";
 import { unlockMessage } from "../../public/tera/wallet/vault.js";
 
 // A stub signer: records what it was asked to sign and returns a fixed value.

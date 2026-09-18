@@ -9,10 +9,10 @@ import {
   DESTINATIONS,
   parse,
   respond,
-} from "../../public/tera/wallet/parse.js";
+} from "../../public/tera/core/parse.js";
 import { GATE_LABELS, GATE_EXPLANATIONS } from "../../public/tera/wallet/checks.js";
 import { STAGES, SIDE_NOTES, OWNER } from "../../public/tera/wallet/boundary.js";
-import { KIND_LABELS, PROPOSE_KEEP } from "../../public/tera/wallet/minimise.js";
+import { KIND_LABELS, PROPOSE_KEEP } from "../../public/tera/core/minimise.js";
 import { LIMITS as OHTTP_LIMITS } from "../../public/tera/wallet/ohttp.js";
 import { LIMITS as ENGINE_LIMITS } from "../../public/tera/wallet/engine.js";
 import { LIMITS as WIPE_LIMITS } from "../../public/tera/wallet/wipe.js";

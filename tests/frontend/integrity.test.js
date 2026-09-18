@@ -207,10 +207,27 @@ test("the manifest committed to this repo matches the files in this repo", async
   assert.equal(result.status, "verified");
   assert.ok(result.checked >= 15, `only ${result.checked} files are covered`);
   // Every module the wallet ships must be in it, not just the ones that existed
-  // when the manifest was last written.
-  for (const name of ["app.js", "minimise.js", "egress.js", "endpoint.js", "integrity.js"])
+  // when the manifest was last written. Both directories are covered: the
+  // shared core the Android app also imports, and the browser-only half.
+  for (const name of [
+    "wallet/app.js",
+    "wallet/egress.js",
+    "wallet/endpoint.js",
+    "wallet/integrity.js",
+    "core/minimise.js",
+    "core/parse.js",
+    "core/ingress.js",
+    "core/receipt.js",
+    "core/wordlist.js",
+  ])
     assert.ok(
       manifest.files.some((file) => file.path === name),
       `${name} is missing from the manifest`,
     );
+  // A core module served without a hash would be logic running on two surfaces
+  // with nothing published to check either against.
+  assert.ok(
+    manifest.files.filter((file) => file.path.startsWith("core/")).length >= 5,
+    "the shared core must be covered, not just the browser half",
+  );
 });

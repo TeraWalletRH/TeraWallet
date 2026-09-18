@@ -1,3 +1,4 @@
+import { blockingReason, gateVerdicts, summarise } from "./core";
 import {
   decodeFunctionData,
   encodeFunctionData,
@@ -121,17 +122,32 @@ export function verifyBridge(quote: any, input: any, now = Date.now()): Tx[] {
   }
   return quote.steps;
 }
+export const GATES = [
+  "asset_registry",
+  "eligibility_preflight",
+  "policy_vault",
+  "risk_engine",
+  "approval_controller",
+];
+
+/**
+ * Read the five service checks.
+ *
+ * This used to be `.every(g => g.passed)` — one boolean, and a review sheet
+ * that said "Five service checks passed" whatever had happened. The service
+ * can report a pass it did not establish: an eligibility check that fell back
+ * to the registry entry because the chain was unreachable sets `passed: true`
+ * and `details.rpcFallback`, and the old test read that as a clean pass.
+ *
+ * A blocked check still stops the proposal here. An unproven one does not —
+ * the service did say pass — but it is carried out so the owner reads it
+ * before approving, which is the whole reason for the distinction.
+ */
 export function checkGates(proposal: any, owner: string) {
   const i = proposal.intent || proposal.preparedTransaction?.intent;
   check(i && same(i.ownerAddress, owner) && same(i.accountAddress || owner, owner));
-  check(
-    [
-      "asset_registry",
-      "eligibility_preflight",
-      "policy_vault",
-      "risk_engine",
-      "approval_controller",
-    ].every((name) => proposal.gates?.some((g: any) => g.gate === name && g.passed)),
-  );
-  return i;
+  const verdicts = gateVerdicts(proposal.gates, GATES);
+  const stopped = blockingReason(verdicts);
+  check(!stopped, stopped ? `${stopped} / 服务检查未通过，未准备任何交易。` : "");
+  return { intent: i, verdicts, summary: summarise(verdicts) };
 }

@@ -24,7 +24,7 @@ const permitAbi = parseAbi([
 ]);
 import { decodeFunctionData } from "viem";
 export function verifyProposal(proposal: any, owner: string, now = Date.now()): Tx[] {
-  const intent = checkGates(proposal, owner);
+  const { intent } = checkGates(proposal, owner);
   const tx = proposal.preparedTransaction;
   txCheck(tx);
   if (intent.actionType === "TRANSFER") {
@@ -194,4 +194,16 @@ export function verifyProposal(proposal: any, owner: string, now = Date.now()): 
     }
   }
   return [...tx.approvals, tx];
+}
+
+/**
+ * The five checks as verdicts, for the review sheet.
+ *
+ * Separate from `verifyProposal` so the sheet can say what actually happened
+ * without that function changing shape. It is pure and cheap, so running the
+ * read twice costs nothing and keeps the signing path untouched.
+ */
+export function proposalVerdicts(proposal: any, owner: string) {
+  const { verdicts, summary } = checkGates(proposal, owner);
+  return { verdicts, summary };
 }

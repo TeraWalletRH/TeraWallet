@@ -82,7 +82,7 @@ import {
   keptKinds,
   KIND_LABELS,
   PROPOSE_KEEP,
-} from "./minimise.js";
+} from "../core/minimise.js";
 import {
   GATE_LABELS,
   GATE_EXPLANATIONS,
@@ -90,6 +90,12 @@ import {
   localChecks,
   localSummary,
 } from "./checks.js";
+import {
+  PASS as VERDICT_PASS,
+  UNVERIFIABLE as VERDICT_UNVERIFIABLE,
+  gateVerdicts,
+  summarise as summariseVerdicts,
+} from "../core/verdict.js";
 import { snapshot, appendVersion, versionTrail, pruneVersions, formatAmount } from "./history.js";
 import {
   STAGES,
@@ -122,12 +128,12 @@ import {
   COMPOSE,
   parse as parseMessage,
   respond as respondLocally,
-} from "./parse.js";
+} from "../core/parse.js";
 import {
   inspect as inspectIngress,
   LIMITS as INGRESS_LIMITS,
   KINDS as INGRESS_KINDS,
-} from "./ingress.js";
+} from "../core/ingress.js";
 import {
   CODE as RECEIPT_CODE,
   DEVICE as RECEIPT_DEVICE,
@@ -142,7 +148,7 @@ import {
   tally as receiptTally,
   sign as signReceipt,
   DOMAIN,
-} from "./receipt.js";
+} from "../core/receipt.js";
 import {
   ACTIONS,
   createPreset,
@@ -987,6 +993,26 @@ function minimiseSegments(segments) {
     )
     .join("");
 }
+// The one line above the five checks. It replaces nothing on the web — there
+// was no summary here at all, only five rows an owner had to read and add up
+// themselves, which meant a single unproven check looked like four passes and
+// something slightly odd.
+function gateSummaryBlock(proposal) {
+  const verdicts = gateVerdicts(proposal?.gates, GATES);
+  const summary = summariseVerdicts(verdicts);
+  const unproven = verdicts.filter((entry) => entry.status === VERDICT_UNVERIFIABLE);
+  return `<div class="note note-${esc(summary.status)}"><strong>${esc(summary.status === VERDICT_PASS ? "Checks" : "Read this first")}</strong>${esc(summary.line)}${
+    unproven.length
+      ? `<ul class="micro">${unproven
+          .map(
+            (entry) =>
+              `<li><b>${esc(GATE_LABELS[entry.gate] || entry.gate)}</b> — ${esc(entry.detail)}</li>`,
+          )
+          .join("")}</ul>`
+      : ""
+  }</div>`;
+}
+
 function chatBubble(message) {
   if (message.role !== "user") {
     // A deterministic answer is labelled as the wallet's own text, not as an
@@ -1205,11 +1231,13 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
     /* Raw amount remains visible. */
   }
   return `<article class="proposal"><div class="proposal-top"><span class="eyebrow">${esc(intent?.actionType || "Proposal")}</span>${chip(submitted ? "Submitted" : issue ? "Needs attention" : "Awaiting owner", !submitted && !!issue)}</div><h2>${esc(asset?.name || "Action review")}</h2>${p.explanation ? `<p class="lead">${esc(p.explanation)}</p>` : ""}
+    ${gateSummaryBlock(p)}
     <ul class="status-list">${GATES.map((name, i) => {
       const g = p.gates?.find((g) => g.gate === name);
       const detail = explainGate(name, g);
-      const status = i === 4 && g?.passed ? "AWAITING SIGNATURE" : detail.result;
-      return `<li class="${g?.passed === false ? "blocked" : ""}"><details class="gate-detail"><summary><span class="audit-num">0${i + 1}</span><span class="gate-name">${esc(detail.label)}${g?.reason ? `<small>${esc(g.reason)}</small>` : ""}</span><b>${status}</b></summary>
+      const status =
+        i === 4 && detail.status === VERDICT_PASS ? "AWAITING SIGNATURE" : detail.result;
+      return `<li class="gate-${esc(detail.status)}${g?.passed === false ? " blocked" : ""}"><details class="gate-detail"><summary><span class="audit-num">0${i + 1}</span><span class="gate-name">${esc(detail.label)}${g?.reason ? `<small>${esc(g.reason)}</small>` : ""}</span><b>${status}</b></summary>
         <div class="gate-body">
           ${pair("Rule evaluated", detail.rule)}${pair("Evaluated by", detail.evaluatedBy)}${pair("Inputs it received", detail.inputs.join(" · "))}${pair("Withheld from the assistant", detail.withheld.join(" · "))}
           ${detail.nuance ? `<p class="micro gate-nuance">${esc(detail.nuance)}</p>` : ""}

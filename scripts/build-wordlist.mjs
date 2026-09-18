@@ -23,7 +23,7 @@ import { fileURLToPath } from "node:url";
 import { wordlist } from "@scure/bip39/wordlists/english";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
-const output = join(root, "public", "tera", "wallet", "wordlist.js");
+const output = join(root, "public", "tera", "core", "wordlist.js");
 
 const WIDTH = 4;
 

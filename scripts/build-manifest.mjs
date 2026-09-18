@@ -21,9 +21,13 @@ import { join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = fileURLToPath(new URL("..", import.meta.url));
+// Two directories, one manifest. `core` holds the feature logic the Android app
+// imports as well; `wallet` holds what only a browser runs. A reader checking a
+// hash needs both, and splitting the manifest would let one drift unnoticed.
 const directory = join(root, "public", "tera", "wallet");
+const core = join(root, "public", "tera", "core");
 const output = join(directory, "manifest.json");
-const base = "/tera/wallet/";
+const base = "/tera/";
 // The manifest cannot contain its own hash.
 const EXCLUDED = new Set(["manifest.json"]);
 const INCLUDED = /\.(?:js|css)$/;
@@ -31,17 +35,21 @@ const INCLUDED = /\.(?:js|css)$/;
 const sri = (bytes) => `sha256-${createHash("sha256").update(bytes).digest("base64")}`;
 
 async function collect() {
-  const names = (await readdir(directory)).filter(
-    (name) => INCLUDED.test(name) && !EXCLUDED.has(name),
-  );
-  names.sort();
-  if (!names.length) throw new Error(`No wallet modules found in ${relative(root, directory)}`);
-  return Promise.all(
-    names.map(async (name) => {
-      const bytes = await readFile(join(directory, name));
-      return { path: name, hash: sri(bytes), bytes: bytes.length };
-    }),
-  );
+  const found = [];
+  for (const [prefix, dir] of [
+    ["core/", core],
+    ["wallet/", directory],
+  ]) {
+    const names = (await readdir(dir)).filter((name) => INCLUDED.test(name) && !EXCLUDED.has(name));
+    for (const name of names) {
+      const bytes = await readFile(join(dir, name));
+      found.push({ path: `${prefix}${name}`, hash: sri(bytes), bytes: bytes.length });
+    }
+  }
+  if (!found.length)
+    throw new Error(`No modules found under ${relative(root, join(root, "public", "tera"))}`);
+  found.sort((a, b) => a.path.localeCompare(b.path));
+  return found;
 }
 
 function listHash(files) {
@@ -80,7 +88,7 @@ const manifest = await sign({
   builtAt: new Date().toISOString(),
   algorithm: "sha256",
   base,
-  note: "Hashes of the wallet modules this site serves. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
+  note: "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
   files,
   filesHash: hash.sri,
 });

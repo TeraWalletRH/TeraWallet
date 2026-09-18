@@ -8,7 +8,8 @@ import {
   keptKinds,
   PROPOSE_KEEP,
   KIND_LABELS,
-} from "../../public/tera/wallet/minimise.js";
+} from "../../public/tera/core/minimise.js";
+import * as exported from "../../public/tera/core/minimise.js";
 
 const owner = `0x${"1".repeat(40)}`;
 const recipient = `0x${"2".repeat(40)}`;
@@ -138,4 +139,29 @@ test("an empty message produces an empty skeleton and nothing to restore", () =>
   assert.equal(result.skeleton, "");
   assert.deepEqual(result.placeholders, []);
   assert.equal(rehydrate("", []), "");
+});
+
+test("call data is redacted, which the mobile copy used to miss entirely", () => {
+  // This is the drift that justified one shared core. The web wallet replaced
+  // calldata with [DATA_n]; android/src/minimise.ts had no payload rule, so the
+  // same message left a phone in full and a browser redacted, while both
+  // surfaces told the owner the same thing about what had been removed.
+  const calldata =
+    "0xa9059cbb0000000000000000000000008ba1f109551bd432803012645ac136ddd64dba720000000000000000000000000000000000000000000000000000000000000001";
+  const result = minimise(`call ${calldata} on it`, { owner: "" });
+  assert.deepEqual(
+    result.placeholders.map((entry) => entry.kind),
+    ["payload"],
+  );
+  assert.equal(result.skeleton, "call [DATA_1] on it");
+  assert.ok(!result.skeleton.includes("a9059cbb"), "no part of the payload may survive");
+});
+
+test("the names the mobile adapter re-exports all exist", () => {
+  // android/src/minimise.ts maps App.tsx's long-standing import names onto the
+  // core. If one of these is ever renamed here, the mobile build breaks at
+  // bundle time rather than silently losing a redaction rule.
+  for (const name of ["PROPOSE_KEEP", "KIND_LABELS", "minimise", "rehydrate", "residual"])
+    assert.ok(name in exported, `the mobile adapter re-exports ${name}`);
+  assert.deepEqual(exported.PROPOSE_KEEP, ["owner", "address", "amount"]);
 });

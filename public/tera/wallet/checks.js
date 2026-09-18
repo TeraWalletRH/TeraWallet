@@ -3,6 +3,7 @@
 // itself, independently of anything the service reports.
 
 import { GATES, ZERO_ADDRESS, sameAddress, isAddress, isHash } from "./core.js";
+import { gateVerdict, labelFor } from "../core/verdict.js";
 
 export const GATE_LABELS = {
   asset_registry: "Asset registry",
@@ -70,12 +71,20 @@ export function gateNuance(gate) {
 
 export function explainGate(name, gate) {
   const explanation = GATE_EXPLANATIONS[name];
+  // The verdict is the source of truth for the outcome. `result` used to be
+  // computed here from `gate.passed` alone, which is what let a pass the
+  // service could not establish render as PASS with the caveat in a different
+  // field. It is kept only so nothing reading the old key breaks, and it is
+  // derived from the verdict rather than computed a second way.
+  const verdict = gateVerdict(gate);
   return {
     gate: name,
     label: GATE_LABELS[name] || name,
-    result: gate ? (gate.passed ? "PASS" : "BLOCKED") : "NOT RUN",
+    status: verdict.status,
+    result: labelFor(verdict.status, "gate").toUpperCase(),
+    hollow: verdict.hollow,
     reason: gate?.reason || "",
-    nuance: gateNuance(gate),
+    nuance: verdict.hollow ? verdict.detail : gateNuance(gate),
     ...explanation,
   };
 }
