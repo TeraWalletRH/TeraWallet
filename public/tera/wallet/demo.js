@@ -6,6 +6,7 @@ import { snapshot } from "./history.js";
 
 export const DEMO_OWNER = "0xde300000000000000000000000000000000000a1";
 export const DEMO_LINEAGE = "tera-demo-lineage";
+export const UNPROVEN_LINEAGE = "tera-demo-lineage-unproven";
 const DEMO_USDG = "0xde300000000000000000000000000000000000b2";
 const DEMO_SPCX = "0xde300000000000000000000000000000000000c3";
 const DEMO_RECIPIENT = "0xde300000000000000000000000000000000000d4";
@@ -80,6 +81,27 @@ const DEMO_GATES = [
   { gate: "approval_controller", passed: true, reason: "Waiting for the owner signature." },
 ];
 
+// A pass the service reported but could not establish.
+//
+// The demo had two shapes, all-passing and blocked, so the fourth state was
+// unreachable in the product's own sample — which meant the one state the
+// wallet was rebuilt around could not be seen without hand-editing data. This
+// is the shape a real eligibility check takes when the chain is unreachable:
+// `passed` is true, and the same object says the check that would have
+// established it did not run.
+const UNPROVEN_GATES = [
+  DEMO_GATES[0],
+  {
+    gate: "eligibility_preflight",
+    passed: true,
+    reason: "Sample registry entry read. The on-chain contract call did not answer.",
+    details: { rpcFallback: true },
+  },
+  DEMO_GATES[2],
+  DEMO_GATES[3],
+  DEMO_GATES[4],
+];
+
 const BLOCKED_GATES = [
   DEMO_GATES[0],
   DEMO_GATES[1],
@@ -113,11 +135,15 @@ function transferCalldata(intent) {
     .padStart(64, "0")}`;
 }
 
-// A proposal that passes every check, so the demo can reach the approval
-// boundary and stop there.
-export function demoProposal(chainId, intentOverrides = {}, blocked = false) {
+// A sample proposal in one of the three shapes the checks can take.
+//
+// `mode` is "passing", "blocked", or "unproven". `true` is still accepted for
+// blocked, because that is how this was called before there was a third shape
+// and changing every call site to prove a point is not worth a broken demo.
+export function demoProposal(chainId, intentOverrides = {}, mode = false) {
   const intent = demoIntent(intentOverrides);
-  const gates = blocked ? BLOCKED_GATES : DEMO_GATES;
+  const blocked = mode === true || mode === "blocked";
+  const gates = blocked ? BLOCKED_GATES : mode === "unproven" ? UNPROVEN_GATES : DEMO_GATES;
   if (blocked)
     return {
       success: false,
@@ -308,6 +334,7 @@ export function createDemoState(chainId) {
     balances: {},
     drafts: [
       { ...demoProposal(chainId), lineage: DEMO_LINEAGE },
+      { ...demoProposal(chainId, { amount: "400000000" }, "unproven"), lineage: UNPROVEN_LINEAGE },
       demoProposal(chainId, { amount: "2500000000" }, true),
     ],
     // The sample action was prepared once above the policy limit, then again
@@ -318,6 +345,17 @@ export function createDemoState(chainId) {
           demoProposal(chainId, { amount: "2500000000" }, true),
           DEMO_ASSETS[0],
           Date.now() - 9 * 60000,
+        ),
+      ],
+      // Prepared once while the chain was answering, then again when it was
+      // not. Nothing about the action changed and no check started failing —
+      // the trail exists to show the one thing that did change, which is that
+      // eligibility stopped being established.
+      [UNPROVEN_LINEAGE]: [
+        snapshot(
+          demoProposal(chainId, { amount: "400000000" }),
+          DEMO_ASSETS[0],
+          Date.now() - 4 * 60000,
         ),
       ],
     },
