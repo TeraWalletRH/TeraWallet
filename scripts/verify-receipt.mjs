@@ -33,6 +33,10 @@ const USAGE = `Check a Tera receipt file.
                  receipt's release against. Fetched by you and read here, this
                  is the one place a match means something — the wallet fetching
                  its own copy proves nothing about the page that wrote it.
+                 A registry older than the receipt cannot say whether a release
+                 was published, so absence from a stale copy reports as unproven
+                 rather than as a forgery. Fetch a current one before reading
+                 absence as evidence.
   --json         Print the raw result instead of a report.
   --no-recover   Skip signature recovery. The signature check then reports as
                  unproven, which is what it should say when nothing is able to
@@ -119,6 +123,16 @@ async function main() {
       );
     }
   }
+
+  // A registry older than the receipt is the common case for anyone who fetched
+  // their copy once, and it is worth saying out loud rather than leaving the
+  // reader to work out why a real build reports as unproven.
+  if (registry && receipt?.at && Date.parse(receipt.at) > Date.parse(registry.publishedAt))
+    stderr.write(
+      `This registry was published ${registry.publishedAt}, before the receipt was written ` +
+        `(${receipt.at}). A list older than the receipt cannot say whether its release was\n` +
+        "published. Fetch a current registry for a conclusive answer.\n\n",
+    );
 
   const result = await verify(raw, {
     ...(recover ? { recover } : {}),

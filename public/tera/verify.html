@@ -127,6 +127,7 @@ function h(e) {
 	if (!t || typeof t != "object") throw new p("This is not a readable registry.");
 	if (t.registry !== "Tera approved builds") throw new p("This is not a Tera build registry.");
 	if (t.algorithm !== "sha256") throw new p("Unsupported digest algorithm in the registry.");
+	if (!Number.isFinite(Date.parse(t.publishedAt || ""))) throw new p("The registry has no publication date, so its age cannot be judged.");
 	let n = Array.isArray(t.builds) ? t.builds : [];
 	if (!n.length) throw new p("The registry lists no builds.");
 	for (let e of n) {
@@ -192,7 +193,29 @@ function b(e, t, { origin: n = d, authentic: o = !1 } = {}) {
 		detail: `Reported as ${s}. No approved-build registry was available to check it against.`
 	};
 	let c = y(t, s);
-	return c ? o ? n === "independent" ? {
+	if (!c) {
+		let n = Date.parse(e?.at || ""), r = Date.parse(t.publishedAt || "");
+		return !Number.isFinite(n) || !Number.isFinite(r) ? {
+			id: "release",
+			label: "Build release",
+			status: a,
+			stale: !0,
+			detail: `${s} is not in this registry, and the two dates needed to tell a stale list from a forged release could not be read. Absence alone does not establish either.`
+		} : n > r ? {
+			id: "release",
+			label: "Build release",
+			status: a,
+			stale: !0,
+			detail: `${s} is not in this registry, but the registry was published ${t.publishedAt} and this receipt was written afterwards, on ${e.at}. A list older than the receipt cannot say whether the build was published. Fetch a current registry and check again.`
+		} : {
+			id: "release",
+			label: "Build release",
+			status: i,
+			stale: !1,
+			detail: `This receipt names ${s}, which is not in the approved-build registry — and the registry was published ${t.publishedAt}, after this receipt was written. The build it names was never published.`
+		};
+	}
+	return o ? n === "independent" ? {
 		id: "release",
 		label: "Build release",
 		status: r,
@@ -207,11 +230,6 @@ function b(e, t, { origin: n = d, authentic: o = !1 } = {}) {
 		label: "Build release",
 		status: a,
 		detail: `${s} appears in a registry, but the registry's signature could not be established. An unsigned list is a list anybody could have written.`
-	} : {
-		id: "release",
-		label: "Build release",
-		status: i,
-		detail: `This receipt names ${s}, which is not in the approved-build registry. Either it was produced by a build Tera never published, or the registry is not the one that covers it.`
 	};
 }
 function x(e) {

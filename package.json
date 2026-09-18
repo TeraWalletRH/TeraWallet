@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "bun run build:wallet && bun run build:manifest && vite dev",
-    "build": "bun run build:wallet && bun run build:verifier && bun run build:manifest && vite build",
+    "build": "bun run build:wallet && bun run build:verifier && bun run build:manifest && bun run build:registry && vite build",
     "build:dev": "bun run build:wallet && bun run build:manifest && vite build --mode development",
     "preview": "vite preview",
     "lint": "eslint .",
