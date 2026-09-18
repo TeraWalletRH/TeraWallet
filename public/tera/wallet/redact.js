@@ -4,6 +4,7 @@
 
 import { GATES, formatUnits } from "./core.js";
 import { GATE_LABELS } from "./checks.js";
+import { gateVerdicts, labelFor, UNVERIFIABLE } from "../core/verdict.js";
 
 export { GATE_LABELS };
 
@@ -53,22 +54,39 @@ export function redactText(text) {
   );
 }
 
+// The checks, in the same four states the wallet reads them in.
+//
+// This used to be `row.passed ? "PASS" : "BLOCKED"` — the raw boolean, printed
+// flat. After the four-state build the wallet distinguished a pass it had
+// established from one it had not, and this module did not, so the same
+// proposal produced a screen saying "4 checks passed, 1 could not be
+// established" and a document saying all five PASS.
+//
+// Of the two, the document is the one that travels. It is detached from the
+// wallet that made it, read by someone who cannot click through to a caveat,
+// and kept as the record of what was known at the time. It is the last place
+// that should be the most confident.
 function checkRows(proposal) {
-  const rows = Array.isArray(proposal?.gates) ? proposal.gates : [];
-  return GATES.map((gate) => {
-    const row = rows.find((candidate) => candidate.gate === gate);
-    return {
-      check: GATE_LABELS[gate] || gate,
-      result: row ? (row.passed ? "PASS" : "BLOCKED") : "NOT RUN",
-      reason: redactText(row?.reason || ""),
-    };
-  });
+  return gateVerdicts(proposal?.gates, GATES).map((verdict) => ({
+    check: GATE_LABELS[verdict.gate] || verdict.gate,
+    result: labelFor(verdict.status, "gate").toUpperCase(),
+    reason: redactText(verdict.status === UNVERIFIABLE ? verdict.detail : verdict.detail || ""),
+  }));
 }
 
+// The one line a hurried reader takes away, which is why it may not round up.
+//
+// "Awaiting the owner signature" is now reserved for a clean sweep of passes.
+// A proposal carrying an unproven check is not waiting on a signature; it is
+// waiting on something nobody could establish, and saying so is the difference
+// between a document that reports and one that reassures.
 function decisionFor(proposal, checks) {
   if (proposal?.txHash) return "Approved by the owner and submitted";
   const blocked = checks.find((row) => row.result === "BLOCKED");
   if (blocked) return `Blocked at: ${blocked.check}`;
+  const unproven = checks.filter((row) => row.result === "UNPROVEN");
+  if (unproven.length)
+    return `Not ready: ${unproven.map((row) => row.check).join(", ")} could not be established`;
   if (checks.every((row) => row.result === "PASS")) return "Awaiting the owner signature";
   return "Checks incomplete";
 }
@@ -109,7 +127,7 @@ export function redactProposal(proposal, asset, options = {}) {
       "Transaction hash",
       options.includeReference ? null : "Action reference",
     ].filter(Boolean),
-    note: "Shared by the owner. Amounts are shown as a range and every address is removed. The checks and their results are unchanged.",
+    note: "Shared by the owner. Amounts are shown as a range and every address is removed. The checks and their results are the same four states the wallet showed: PASS, BLOCKED, UNPROVEN, or NOT RUN. UNPROVEN means the service reported a pass it could not establish — it is not a weaker pass.",
   };
   // The action reference links this document to the exact intent held by the
   // service, so it is opt-in rather than shared by default.

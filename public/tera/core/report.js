@@ -24,16 +24,33 @@ const plural = (count, one, many) => `${count} ${count === 1 ? one : many}`;
  * on something already done — and the unproven case means something different
  * here, so the sentence is written for it rather than borrowed.
  */
+// The checks that establish the file describes its own turn. A failure among
+// these means the text and the hashes disagree; a failure anywhere else does
+// not, and must not borrow the sentence that says it does.
+const COMMITMENT = new Set(["format", "input_hash", "output_hash", "short_ref", "digest"]);
+
 export function headline(checks = []) {
   const counts = tally(checks);
   const total = checks.length;
   if (!total) return { status: SKIPPED, line: "Nothing was checked." };
 
-  if (counts[FAIL])
+  if (counts[FAIL]) {
+    const failed = checks.filter((check) => check?.status === FAIL);
+    // A receipt naming a build nobody published still describes its own turn
+    // accurately. Saying otherwise would overstate the finding, which is the
+    // failure mode this whole vocabulary exists to avoid — in the direction
+    // that sounds appropriately severe, which is the easy direction to miss.
+    if (failed.some((check) => COMMITMENT.has(check?.id)))
+      return {
+        status: FAIL,
+        line: `${plural(counts[FAIL], "check failed", "checks failed")}. This receipt does not describe the turn it claims to.`,
+      };
+    const names = failed.map((check) => String(check?.label || check?.id).toLowerCase()).join(", ");
     return {
       status: FAIL,
-      line: `${plural(counts[FAIL], "check failed", "checks failed")}. This receipt does not describe the turn it claims to.`,
+      line: `${plural(counts[FAIL], "check failed", "checks failed")}: ${names}. The text matches the hashes recorded for it — what failed is something else this file claims.`,
     };
+  }
   if (counts[UNVERIFIABLE])
     return {
       status: UNVERIFIABLE,

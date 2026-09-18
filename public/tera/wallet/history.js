@@ -5,18 +5,29 @@
 
 import { GATES, formatUnits, sameAddress } from "./core.js";
 import { GATE_LABELS } from "./checks.js";
+import { gateVerdict, gateVerdicts, labelFor, PASS, FAIL, UNVERIFIABLE } from "../core/verdict.js";
 
 export const MAX_VERSIONS = 20;
 
-const resultOf = (gate) => (gate ? (gate.passed ? "PASS" : "BLOCKED") : "NOT RUN");
+// A version diff is only useful if it notices the changes that matter.
+//
+// This was `gate.passed ? "PASS" : "BLOCKED"`, which returned the same string
+// for a check that was established and one that was not. A gate quietly
+// degrading between versions — the chain going unreachable, so eligibility now
+// passes on the registry entry alone — produced identical values on both sides
+// and was recorded as no change at all. The one moment the evidence got weaker
+// was the one moment the history stayed silent.
+const resultOf = (gate) => labelFor(gateVerdict(gate).status, "gate").toUpperCase();
 
 export function decisionOf(proposal) {
   if (proposal?.txHash) return "Submitted";
-  const rows = Array.isArray(proposal?.gates) ? proposal.gates : [];
-  const blocked = GATES.find((name) => rows.find((row) => row.gate === name && !row.passed));
-  if (blocked) return `Blocked at ${GATE_LABELS[blocked] || blocked}`;
-  if (rows.length && GATES.every((name) => rows.some((row) => row.gate === name && row.passed)))
-    return "Awaiting owner approval";
+  const verdicts = gateVerdicts(proposal?.gates, GATES);
+  const blocked = verdicts.find((entry) => entry.status === FAIL);
+  if (blocked) return `Blocked at ${GATE_LABELS[blocked.gate] || blocked.gate}`;
+  const unproven = verdicts.filter((entry) => entry.status === UNVERIFIABLE);
+  if (unproven.length)
+    return `Not established at ${unproven.map((entry) => GATE_LABELS[entry.gate] || entry.gate).join(", ")}`;
+  if (verdicts.every((entry) => entry.status === PASS)) return "Awaiting owner approval";
   return "Checks incomplete";
 }
 
@@ -111,7 +122,15 @@ export function diffVersions(previous, next) {
         GATE_LABELS[gate] || gate,
         before,
         after,
-        after === "PASS" ? "Now passing" : after === "BLOCKED" ? "Now blocking" : "",
+        after === "PASS"
+          ? "Now passing"
+          : after === "BLOCKED"
+            ? "Now blocking"
+            : after === "UNPROVEN"
+              ? // The change most worth surfacing and the easiest to miss: the
+                // service still reports a pass, but can no longer establish it.
+                "Still reported as passing, but no longer established"
+              : "",
       );
   }
   if (previous.decision !== next.decision)

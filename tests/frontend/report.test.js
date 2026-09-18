@@ -34,7 +34,7 @@ const made = (overrides = {}) =>
 const check = (status, id = status) => ({ id, label: id, status, detail: `${id} detail` });
 
 test("a failure is the headline, however many checks passed", () => {
-  const summary = headline([check(PASS, "a"), check(PASS, "b"), check(FAIL, "c")]);
+  const summary = headline([check(PASS, "a"), check(PASS, "b"), check(FAIL, "output_hash")]);
   assert.equal(summary.status, FAIL);
   assert.match(summary.line, /does not describe the turn it claims to/i);
   assert.doesNotMatch(summary.line, /passed/i, "a failed set must not lead with a count of passes");
@@ -106,4 +106,24 @@ test("a real tampered receipt reads as failed from end to end", async () => {
   const summary = headline(result.checks);
   assert.equal(summary.status, FAIL);
   assert.equal(rows(result.checks)[0].status, FAIL, "the failure has to be the first row read");
+});
+
+test("a failure outside the commitments does not claim the text was altered", async () => {
+  // A receipt naming a build nobody published still describes its own turn.
+  // Borrowing the tampering sentence here would overstate the finding, in the
+  // direction that happens to sound appropriately severe.
+  const summary = headline([
+    check(PASS, "input_hash"),
+    check(PASS, "output_hash"),
+    { id: "release", label: "Build release", status: FAIL, detail: "Not in the registry." },
+  ]);
+  assert.equal(summary.status, FAIL);
+  assert.match(summary.line, /build release/i, "the failing check has to be named");
+  assert.match(summary.line, /text matches the hashes/i);
+  assert.doesNotMatch(summary.line, /does not describe the turn/i);
+});
+
+test("an altered transcript still gets the sentence that says so", () => {
+  const summary = headline([check(FAIL, "output_hash"), check(PASS, "input_hash")]);
+  assert.match(summary.line, /does not describe the turn it claims to/i);
 });
