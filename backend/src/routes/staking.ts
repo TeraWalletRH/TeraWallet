@@ -56,7 +56,14 @@ async function requireAdmin(req: Request, res: Response, next: NextFunction) {
 
 type ConfirmedTransfer = { amount: bigint; blockTimestamp: number; txHash: Hex };
 async function confirmedTransfer(txHash: Hex, expectedFrom: Address | null, expectedTo: Address, expectedAmount: bigint | null): Promise<ConfirmedTransfer> {
-  const receipt = await client.getTransactionReceipt({ hash: txHash });
+  let receipt;
+  try { receipt = await client.getTransactionReceipt({ hash: txHash }); }
+  catch (error) {
+    if (/could not be found|not found/i.test(error instanceof Error ? error.message : String(error))) {
+      throw new Error("Transfer is awaiting a chain receipt.");
+    }
+    throw error;
+  }
   if (receipt.status !== "success") throw new Error("Transfer transaction did not succeed.");
   const head = await client.getBlockNumber();
   if (head - receipt.blockNumber + 1n < BigInt(env.teraStakingConfirmations)) throw new Error("Transfer is awaiting required chain confirmations.");
@@ -225,6 +232,15 @@ router.post("/api/staking/deposits", async (req: Request, res: Response) => {
     const db = await pool.connect();
     try {
       await db.query("BEGIN");
+      // The browser may retry this transaction hash. Lock it so an exact
+      // transfer can enter the ledger at most once.
+      await db.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`tera_staking_deposit:${txHash}`]);
+      const existing = await db.query("SELECT amount FROM staking_events WHERE kind='stake' AND tx_hash=$1 LIMIT 1 FOR UPDATE", [txHash]);
+      if (existing.rowCount) {
+        await db.query("COMMIT");
+        res.status(200).json({ success: true, status: "credited", alreadyCredited: true, creditedAmount: existing.rows[0].amount });
+        return;
+      }
       const epochResult = await db.query("SELECT * FROM staking_epochs WHERE id = $1 FOR UPDATE", [epochId]);
       const row = epochResult.rows[0];
       if (!row || row.status !== "active") throw new Error("Epoch is not active.");
@@ -245,6 +261,10 @@ router.post("/api/staking/deposits", async (req: Request, res: Response) => {
   } catch (error) {
     logger.warn(req, "staking.deposit_rejected", error);
     const message = error instanceof Error ? error.message : "Unable to credit deposit.";
+    if (/awaiting a chain receipt|awaiting required chain confirmations/i.test(message)) {
+      res.status(202).json({ success: true, status: "awaiting_confirmations" });
+      return;
+    }
     res.status(message.includes("already exists") ? 409 : 422).json({ success: false, error: message });
   }
 });
