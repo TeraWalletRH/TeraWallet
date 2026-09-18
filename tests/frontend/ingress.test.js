@@ -7,8 +7,8 @@ import {
   inspect,
   longestRun,
   notice,
-} from "../../public/tera/wallet/ingress.js";
-import { indexOf, isWord, COUNT } from "../../public/tera/wallet/wordlist.js";
+} from "../../public/tera/core/ingress.js";
+import { indexOf, isWord, COUNT } from "../../public/tera/core/wordlist.js";
 
 // A real BIP-39 phrase. It is the standard test vector, published in the spec
 // and in every wallet's test suite, and controls nothing.

@@ -40,39 +40,63 @@ beforeEach(() => {
   files.clear();
 });
 
-it("persists only ciphertext and restores the same wallet after locking", async () => {
-  const address = await vault.createWallet(phrase, password);
-  await vault.saveData({ ...vault.emptyData(), token: "secret-test-token" });
-  expect([...secure.values()].join("")).not.toContain(phrase);
-  expect([...files.values()].join("")).not.toContain("secret-test-token");
-  vault.lock();
-  expect(() => vault.currentAccount()).toThrow();
-  expect(await vault.unlock(password)).toBe(address);
-  expect((await vault.loadData()).token).toBe("secret-test-token");
-  await expect(vault.createWallet(phrase, password)).rejects.toThrow();
-});
+// Password-derived encryption is deliberately slow: PASSWORD_ITERATIONS is
+// 100,000 rounds of PBKDF2-SHA256, and the legacy path re-derives at 210,000.
+// Each derivation costs seconds rather than milliseconds on a modest machine,
+// and these tests perform several apiece, so they run well past bun's 5s
+// default.
+//
+// The timeout is raised rather than the iteration count lowered. The iteration
+// count is a security parameter — the thing standing between a stolen phone and
+// a seed phrase — and shrinking it so a test finishes sooner would weaken the
+// product to flatter the harness.
+const DERIVES_A_KEY = 60_000;
 
-it("a lock during password derivation prevents a late unlock", async () => {
-  await vault.createWallet(phrase, password);
-  vault.lock();
-  const attempt = vault.unlock(password);
-  vault.lock();
-  await expect(attempt).rejects.toThrow();
-  expect(vault.isUnlocked()).toBe(false);
-});
+it(
+  "persists only ciphertext and restores the same wallet after locking",
+  async () => {
+    const address = await vault.createWallet(phrase, password);
+    await vault.saveData({ ...vault.emptyData(), token: "secret-test-token" });
+    expect([...secure.values()].join("")).not.toContain(phrase);
+    expect([...files.values()].join("")).not.toContain("secret-test-token");
+    vault.lock();
+    expect(() => vault.currentAccount()).toThrow();
+    expect(await vault.unlock(password)).toBe(address);
+    expect((await vault.loadData()).token).toBe("secret-test-token");
+    await expect(vault.createWallet(phrase, password)).rejects.toThrow();
+  },
+  DERIVES_A_KEY,
+);
 
-it("wrong passwords fail and erasure removes wallet, biometrics and history", async () => {
-  await vault.createWallet(phrase, password);
-  await vault.enableBiometrics(password);
-  await vault.saveData(vault.emptyData());
-  vault.lock();
-  await expect(vault.unlock("000000")).rejects.toThrow();
-  expect(vault.isUnlocked()).toBe(false);
-  await vault.eraseWallet();
-  expect(await vault.hasWallet()).toBe(false);
-  expect(secure.size).toBe(0);
-  expect(files.size).toBe(0);
-});
+it(
+  "a lock during password derivation prevents a late unlock",
+  async () => {
+    await vault.createWallet(phrase, password);
+    vault.lock();
+    const attempt = vault.unlock(password);
+    vault.lock();
+    await expect(attempt).rejects.toThrow();
+    expect(vault.isUnlocked()).toBe(false);
+  },
+  DERIVES_A_KEY,
+);
+
+it(
+  "wrong passwords fail and erasure removes wallet, biometrics and history",
+  async () => {
+    await vault.createWallet(phrase, password);
+    await vault.enableBiometrics(password);
+    await vault.saveData(vault.emptyData());
+    vault.lock();
+    await expect(vault.unlock("000000")).rejects.toThrow();
+    expect(vault.isUnlocked()).toBe(false);
+    await vault.eraseWallet();
+    expect(await vault.hasWallet()).toBe(false);
+    expect(secure.size).toBe(0);
+    expect(files.size).toBe(0);
+  },
+  DERIVES_A_KEY,
+);
 
 it("retention prunes old drafts and completed history, preserving pending hashes", async () => {
   await vault.createWallet(phrase, password);

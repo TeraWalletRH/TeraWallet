@@ -1,5 +1,19 @@
-// Prompt minimisation for the native assistant. Values in this mapping never
-// leave the device: only the placeholder skeleton is sent to the service.
+// Prompt minimisation, as this app sees it.
+//
+// This file used to be a hand-written parallel of the web wallet's
+// minimise.js. The two drifted, in the way two copies always do, and the drift
+// was not cosmetic: the web version redacts call-data payloads as [DATA_n] and
+// this one had no rule for them at all, so a message mentioning calldata went
+// to the assistant service from a phone in full and from a browser redacted.
+// Both surfaces claimed the same thing about what leaves the device, and on one
+// of them the claim was false.
+//
+// So there is no implementation here any more. The rules live once, in
+// public/tera/core/minimise.js, and this is the adapter that keeps App.tsx's
+// existing imports working.
+
+import * as core from "../../public/tera/core/minimise.js";
+
 export type Placeholder = { token: string; kind: string; value: string };
 export type MinimiseResult = {
   text: string;
@@ -8,68 +22,22 @@ export type MinimiseResult = {
   kept: { kind: string; value: string }[];
 };
 
-export const PROPOSAL_KEEP = ["owner", "address", "amount"];
+/** Named PROPOSAL_KEEP here since App.tsx has always called it that; it is the
+ * core's PROPOSE_KEEP and must never be redefined. */
+export const PROPOSAL_KEEP: string[] = core.PROPOSE_KEEP;
 
-const names: Record<string, string> = {
-  owner: "YOUR_ADDRESS",
-  address: "ADDRESS",
-  reference: "REFERENCE",
-  email: "EMAIL",
-  phone: "PHONE",
-  name: "NAME",
-  amount: "AMOUNT",
-};
+/** Human labels per kind, which this app did not have before. */
+export const KIND_LABELS: Record<string, string> = core.KIND_LABELS;
 
-const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-const isFigure = (value: string) => {
-  const digits = value.replace(/\D/g, "");
-  return !!digits && (/[$.,]/.test(value) || /[km]$/i.test(value.trim()) || digits.length >= 3);
-};
+export const minimise = core.minimise as (
+  text: string,
+  options?: { owner?: string; keep?: string[]; labels?: string[] },
+) => MinimiseResult;
 
-type Match = { index: number; value: string; kind: string };
-function matches(text: string, owner: string): Match[] {
-  const pattern = /(?<token>\[[A-Z][A-Z_]*(?:_\d+)?\])|(?<standard>\b(?:ERC|EIP|BIP|SEP)-\d+\b)|(?<reference>0x[\da-f]{64}\b)|(?<address>0x[\da-f]{40}\b)|(?<email>[\w.+-]+@[\w-]+(?:\.[\w-]+)+)|(?<name>\b[a-z\d][a-z\d-]*\.(?:eth|xyz|crypto|sol|com|org|io|net|app|co|finance)\b)|(?<phone>\+\d[\d\s().-]{7,}\d)|(?<amount>\$\s?\d[\d,]*(?:\.\d+)?(?:\s?[km])?\b|\b\d[\d,]*(?:\.\d+)?(?:\s?[km])?\b)/gi;
-  const found: Match[] = [];
-  for (const item of text.matchAll(pattern)) {
-    const groups = item.groups || {};
-    const kind = Object.keys(groups).find((key) => groups[key] !== undefined);
-    if (!kind || kind === "token" || kind === "standard" || (kind === "amount" && !isFigure(item[0]))) continue;
-    found.push({ index: item.index || 0, value: item[0], kind: kind === "address" && owner && item[0].toLowerCase() === owner.toLowerCase() ? "owner" : kind });
-  }
-  return found;
-}
+export const rehydrate = core.rehydrate as (text: string, placeholders: Placeholder[]) => string;
 
-export function minimise(text: string, options: { owner?: string; keep?: string[] } = {}): MinimiseResult {
-  const source = String(text || "");
-  const keep = new Set(options.keep || []);
-  const placeholders: Placeholder[] = [];
-  const kept: { kind: string; value: string }[] = [];
-  const seen = new Map<string, Placeholder>();
-  const counts: Record<string, number> = {};
-  let skeleton = "";
-  let last = 0;
-  for (const item of matches(source, options.owner || "")) {
-    skeleton += source.slice(last, item.index);
-    last = item.index + item.value.length;
-    if (keep.has(item.kind)) { kept.push(item); skeleton += item.value; continue; }
-    const key = `${item.kind}:${item.value.toLowerCase()}`;
-    let entry = seen.get(key);
-    if (!entry) {
-      counts[item.kind] = (counts[item.kind] || 0) + 1;
-      entry = { token: item.kind === "owner" ? "[YOUR_ADDRESS]" : `[${names[item.kind]}_${counts[item.kind]}]`, kind: item.kind, value: item.value };
-      seen.set(key, entry);
-      placeholders.push(entry);
-    }
-    skeleton += entry.token;
-  }
-  return { text: source, skeleton: skeleton + source.slice(last), placeholders, kept };
-}
+export const residual = core.residual as (text: string, keep?: string[]) => string[];
 
-export function rehydrate(text: string, placeholders: Placeholder[]) {
-  return placeholders.reduce((value, entry) => value.replace(new RegExp(escapeRegExp(entry.token), "gi"), () => entry.value), String(text || ""));
-}
+export const keptKinds = core.keptKinds as (result: MinimiseResult) => string[];
 
-export function residual(text: string, keep: string[] = []) {
-  const allowed = new Set(keep);
-  return [...new Set(matches(text, "").map((item) => item.kind).filter((kind) => !allowed.has(kind)))];
-}
+export const summary = core.summary as (result: MinimiseResult) => string[];

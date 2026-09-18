@@ -1,157 +1,162 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-3ad2f4ec460c",
-  "builtAt": "2026-09-18T03:07:34.058Z",
+  "release": "r-fa9d19082a0f",
+  "builtAt": "2026-09-18T03:52:37.257Z",
   "algorithm": "sha256",
-  "base": "/tera/wallet/",
-  "note": "Hashes of the wallet modules this site serves. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
+  "base": "/tera/",
+  "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
   "files": [
     {
-      "path": "app.css",
-      "hash": "sha256-kg3X5GTOBl2xLOxU3OCADoX8gkLZiTxSEdUZzr2unOg=",
-      "bytes": 20054
-    },
-    {
-      "path": "app.js",
-      "hash": "sha256-5jPmH+MzH6yW4qsY0jB4KDWmvHW4QMKBwZI9lCRAtnk=",
-      "bytes": 182076
-    },
-    {
-      "path": "boundary.js",
-      "hash": "sha256-fjYGPM1iDMvYHZ61kYNHzrp2xrNJaplHvYG+MeFOH4A=",
-      "bytes": 5441
-    },
-    {
-      "path": "bridge.js",
-      "hash": "sha256-T/fOc/uyvb3smzpZxgppX0RzEstpG8ecO3Yh14PQFaM=",
-      "bytes": 7612
-    },
-    {
-      "path": "checks.js",
-      "hash": "sha256-6ryUTm54oVaf6igLWrjmOYr5YbvoOF/ayLbvW3nOttc=",
-      "bytes": 7864
-    },
-    {
-      "path": "core.js",
-      "hash": "sha256-ZL2mhDLqwEdwKo6GjC8siehEbNuKNiTE9KUqom/lx4Y=",
-      "bytes": 12613
-    },
-    {
-      "path": "demo.js",
-      "hash": "sha256-3Q6eNiHekfZ7Uv9poZ3tAAN4OtuNK8dF8QfuG9vJT40=",
-      "bytes": 12285
-    },
-    {
-      "path": "egress.js",
-      "hash": "sha256-lSm+TGqkrrUQDBnKbBmGyVxPpRAmoQwz2hp8hOSqlO4=",
-      "bytes": 17852
-    },
-    {
-      "path": "endpoint.js",
-      "hash": "sha256-a6P4VJm+wGvcKNrC8UdQzqu6ynJ8PHC018mJ0h9USjE=",
-      "bytes": 10526
-    },
-    {
-      "path": "engine.js",
-      "hash": "sha256-HnzpGyFeUDxrHixnDbll3FFhNNrnkSusIqmJ9Zvynh0=",
-      "bytes": 15186
-    },
-    {
-      "path": "engine.worker.js",
-      "hash": "sha256-98BWuJH+MSIvY70T2jZXIOZ0wU6OStpyOtbozSOjNI0=",
-      "bytes": 5099
-    },
-    {
-      "path": "history.js",
-      "hash": "sha256-sZFnsH6IlTw3sWxxQ5+MhdU8IGyEoXoOlzAZ4KMjQ/U=",
-      "bytes": 5858
-    },
-    {
-      "path": "ingress.js",
+      "path": "core/ingress.js",
       "hash": "sha256-dSyimOuvviIdzrDfHEYNMWZI8Fx6xzzfMm+FGlHUR9w=",
       "bytes": 8034
     },
     {
-      "path": "integrity.js",
-      "hash": "sha256-8J9Y5PZc1ZyMyoLICf1XUBrcgkZYLQ2sST6SshQXevY=",
-      "bytes": 7590
-    },
-    {
-      "path": "markdown.js",
-      "hash": "sha256-zr4SveNRfPx6KhO9z+p3DKAMHKPan4pNrmssVye4b+c=",
-      "bytes": 2658
-    },
-    {
-      "path": "minimise.js",
+      "path": "core/minimise.js",
       "hash": "sha256-h1qLfIKzhS8yHYYVOoUDfxeuLX8ZHck1JftvHMQDL+E=",
       "bytes": 7671
     },
     {
-      "path": "ohttp.js",
-      "hash": "sha256-/rU/qntG7ekyg0C4DOFDCAhNUHySHWcd3xV1gXXugL4=",
-      "bytes": 21361
-    },
-    {
-      "path": "parse.js",
+      "path": "core/parse.js",
       "hash": "sha256-bK17GbP/cJZHL6GAl8cnbFxUFabyYFFk4N/YhHJCVYI=",
       "bytes": 15465
     },
     {
-      "path": "preview.js",
-      "hash": "sha256-sdnM8Sz2VhIfkr0j9kHxhGmGCImqHHOVeZEoPaO1xVc=",
-      "bytes": 7753
-    },
-    {
-      "path": "privacy.js",
-      "hash": "sha256-Q5cSMunAQTScEfahZaskOJd0c2tUQbd09AxZHOpc9tI=",
-      "bytes": 16368
-    },
-    {
-      "path": "receipt.js",
+      "path": "core/receipt.js",
       "hash": "sha256-wV1OiOhzfK2Iy7xlBBd8lC+oOf+1279TISe5rSifUTw=",
       "bytes": 20096
     },
     {
-      "path": "recovery.js",
+      "path": "core/verdict.js",
+      "hash": "sha256-dHmyJcpSSSS1UCT5HAq2ekAqgKQMcx3OyiV38PW/1QA=",
+      "bytes": 9404
+    },
+    {
+      "path": "core/wordlist.js",
+      "hash": "sha256-Y2Bu3Orw8FDzpgEet9AMwU4EaCBC4cjcbfO5kxozwxQ=",
+      "bytes": 10529
+    },
+    {
+      "path": "wallet/app.css",
+      "hash": "sha256-PayI44qAhD6KizHLqfe8jJpjvAN2+KhjZt6mp+mXmIs=",
+      "bytes": 20555
+    },
+    {
+      "path": "wallet/app.js",
+      "hash": "sha256-L2ZBB2wwesxURysw3qsI2WHIWIQ81NEly3dj+qWLAO4=",
+      "bytes": 183259
+    },
+    {
+      "path": "wallet/boundary.js",
+      "hash": "sha256-fjYGPM1iDMvYHZ61kYNHzrp2xrNJaplHvYG+MeFOH4A=",
+      "bytes": 5441
+    },
+    {
+      "path": "wallet/bridge.js",
+      "hash": "sha256-T/fOc/uyvb3smzpZxgppX0RzEstpG8ecO3Yh14PQFaM=",
+      "bytes": 7612
+    },
+    {
+      "path": "wallet/checks.js",
+      "hash": "sha256-a+33TWBYCzU/ASNr3pAlkMGATN7R0ClkI8sHYSJudLY=",
+      "bytes": 8416
+    },
+    {
+      "path": "wallet/core.js",
+      "hash": "sha256-ZL2mhDLqwEdwKo6GjC8siehEbNuKNiTE9KUqom/lx4Y=",
+      "bytes": 12613
+    },
+    {
+      "path": "wallet/demo.js",
+      "hash": "sha256-3Q6eNiHekfZ7Uv9poZ3tAAN4OtuNK8dF8QfuG9vJT40=",
+      "bytes": 12285
+    },
+    {
+      "path": "wallet/egress.js",
+      "hash": "sha256-lSm+TGqkrrUQDBnKbBmGyVxPpRAmoQwz2hp8hOSqlO4=",
+      "bytes": 17852
+    },
+    {
+      "path": "wallet/endpoint.js",
+      "hash": "sha256-a6P4VJm+wGvcKNrC8UdQzqu6ynJ8PHC018mJ0h9USjE=",
+      "bytes": 10526
+    },
+    {
+      "path": "wallet/engine.js",
+      "hash": "sha256-HnzpGyFeUDxrHixnDbll3FFhNNrnkSusIqmJ9Zvynh0=",
+      "bytes": 15186
+    },
+    {
+      "path": "wallet/engine.worker.js",
+      "hash": "sha256-98BWuJH+MSIvY70T2jZXIOZ0wU6OStpyOtbozSOjNI0=",
+      "bytes": 5099
+    },
+    {
+      "path": "wallet/history.js",
+      "hash": "sha256-sZFnsH6IlTw3sWxxQ5+MhdU8IGyEoXoOlzAZ4KMjQ/U=",
+      "bytes": 5858
+    },
+    {
+      "path": "wallet/integrity.js",
+      "hash": "sha256-8J9Y5PZc1ZyMyoLICf1XUBrcgkZYLQ2sST6SshQXevY=",
+      "bytes": 7590
+    },
+    {
+      "path": "wallet/markdown.js",
+      "hash": "sha256-zr4SveNRfPx6KhO9z+p3DKAMHKPan4pNrmssVye4b+c=",
+      "bytes": 2658
+    },
+    {
+      "path": "wallet/ohttp.js",
+      "hash": "sha256-/rU/qntG7ekyg0C4DOFDCAhNUHySHWcd3xV1gXXugL4=",
+      "bytes": 21361
+    },
+    {
+      "path": "wallet/preview.js",
+      "hash": "sha256-sdnM8Sz2VhIfkr0j9kHxhGmGCImqHHOVeZEoPaO1xVc=",
+      "bytes": 7753
+    },
+    {
+      "path": "wallet/privacy.js",
+      "hash": "sha256-Q5cSMunAQTScEfahZaskOJd0c2tUQbd09AxZHOpc9tI=",
+      "bytes": 16368
+    },
+    {
+      "path": "wallet/recovery.js",
       "hash": "sha256-Lu0acq3ODp24IePsNSOcx8txi5nW8eD8kLtdHo4+9M0=",
       "bytes": 8345
     },
     {
-      "path": "redact.js",
+      "path": "wallet/redact.js",
       "hash": "sha256-FAX48LP1JSVIAOldjOkgiOFiEI1/V1PlZX8197IyiXM=",
       "bytes": 6576
     },
     {
-      "path": "shamir.js",
+      "path": "wallet/shamir.js",
       "hash": "sha256-vpaHACwpveGKfdb248eSu4GAjdYjhJIiVrB0Lt/4FjI=",
       "bytes": 4530
     },
     {
-      "path": "simulator.js",
+      "path": "wallet/simulator.js",
       "hash": "sha256-Hdw3UEOcxs+3122inPCOl6JQkxo52yx4M1JNKKRTNtc=",
       "bytes": 7225
     },
     {
-      "path": "submission.js",
+      "path": "wallet/submission.js",
       "hash": "sha256-XWXdDT/N1dZISGzvqN39Ywn7VriRISxdcAB91ab/XBw=",
       "bytes": 8282
     },
     {
-      "path": "vault.js",
+      "path": "wallet/vault.js",
       "hash": "sha256-7hFV+o7jn+PkNbbBcP4MvY/52EnuYItD2J5P+i/hjPc=",
       "bytes": 5802
     },
     {
-      "path": "wipe.js",
+      "path": "wallet/wipe.js",
       "hash": "sha256-tAKOMu76OlT6juzYIDyMIJl7TdcortQAC812ZHVAmjo=",
       "bytes": 6930
-    },
-    {
-      "path": "wordlist.js",
-      "hash": "sha256-Y2Bu3Orw8FDzpgEet9AMwU4EaCBC4cjcbfO5kxozwxQ=",
-      "bytes": 10529
     }
   ],
-  "filesHash": "sha256-OtL07EYMouU01HVrnh6i+dDb/rExpsuIIZxPvMw36hM="
+  "filesHash": "sha256-+p0ZCCoPi+LD0fLcXX5lYGjkle5llFIX+9PmOtYlWX0="
 }

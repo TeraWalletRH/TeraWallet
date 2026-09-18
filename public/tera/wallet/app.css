@@ -1086,3 +1086,21 @@ h1:focus {
 .receipt-skipped {
   opacity: 0.5;
 }
+
+/* The four states of a check. "Unproven" is deliberately neither green nor red:
+   it is the absence of knowledge, and colouring it as either would make the
+   decision for the owner. */
+.note-unverifiable {
+  border-left: 2px solid #b5977b;
+  padding-left: 12px;
+}
+.note-fail {
+  border-left: 2px solid #945f3d;
+  padding-left: 12px;
+}
+.status-list li.gate-unverifiable > .gate-detail > summary > b {
+  color: #b5977b;
+}
+.status-list li.gate-fail > .gate-detail > summary > b {
+  color: #945f3d;
+}

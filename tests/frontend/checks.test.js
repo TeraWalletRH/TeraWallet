@@ -182,3 +182,27 @@ test("a proposal with no prepared transaction yields nothing to verify", () => {
   assert.deepEqual(localChecks(undefined, owner, chainId), []);
   assert.equal(localSummary([]).passed, false);
 });
+
+test("a pass the service could not establish is not reported as a pass", () => {
+  // The service sets passed:true and, in the same object, that the check it
+  // needed was unavailable. Before this, explainGate read the boolean and put
+  // the caveat in a separate field that the row rendered in smaller type.
+  const hollow = explainGate("eligibility_preflight", {
+    gate: "eligibility_preflight",
+    passed: true,
+    details: { rpcFallback: true },
+  });
+  assert.equal(hollow.result, "UNPROVEN");
+  assert.equal(hollow.status, "unverifiable");
+  assert.equal(hollow.hollow, "rpcFallback");
+  assert.match(hollow.nuance, /unverified/i);
+
+  // An ordinary pass is untouched.
+  const plain = explainGate("eligibility_preflight", {
+    gate: "eligibility_preflight",
+    passed: true,
+    details: { verifiedOnChain: true },
+  });
+  assert.equal(plain.result, "PASS");
+  assert.equal(plain.hollow, "");
+});

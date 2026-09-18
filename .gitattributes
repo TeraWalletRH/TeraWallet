@@ -1,8 +1,13 @@
-# The wallet modules are published with SHA-256 hashes in
+# The published modules are listed with SHA-256 hashes in
 # public/tera/wallet/manifest.json, and the page checks itself against them.
 # A checkout that rewrites their line endings changes their bytes and so their
 # hashes, which would report a healthy build as modified. Pin them to LF so the
 # published hashes are reproducible from a checkout on any platform.
+#
+# Both directories the manifest covers have to be listed here. core/ holds the
+# feature logic Android imports too; leaving it out would mean a Windows clone
+# fails its own integrity check for six files that are perfectly intact.
+public/tera/core/*.js text eol=lf
 public/tera/wallet/*.js text eol=lf
 public/tera/wallet/*.css text eol=lf
 public/tera/wallet/manifest.json text eol=lf
