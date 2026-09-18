@@ -58,6 +58,8 @@ export function parseRegistry(input) {
   if (doc.registry !== KIND) throw new RegistryError("This is not a Tera build registry.");
   if (doc.algorithm !== "sha256")
     throw new RegistryError("Unsupported digest algorithm in the registry.");
+  if (!Number.isFinite(Date.parse(doc.publishedAt || "")))
+    throw new RegistryError("The registry has no publication date, so its age cannot be judged.");
   const builds = Array.isArray(doc.builds) ? doc.builds : [];
   if (!builds.length) throw new RegistryError("The registry lists no builds.");
   for (const build of builds) {
@@ -153,13 +155,44 @@ export function releaseCheck(receipt, registry, { origin = FROM_PAGE, authentic 
 
   const entry = lookup(registry, release);
 
-  if (!entry)
+  if (!entry) {
+    // A release can be absent for two reasons that deserve opposite answers.
+    //
+    // It was never published, which is evidence of a forged receipt — or your
+    // copy of the list simply predates it, which is evidence of nothing except
+    // that the copy is old. The first shipped without the second, so a reader
+    // holding last week's registry got the strongest accusation this system
+    // makes, about a receipt that was fine.
+    //
+    // The registry records when it was published and the receipt records when
+    // it was written. When the receipt is the newer of the two, absence is
+    // uninformative and saying so is the whole point of having a fourth state.
+    const written = Date.parse(receipt?.at || "");
+    const listed = Date.parse(registry.publishedAt || "");
+    if (!Number.isFinite(written) || !Number.isFinite(listed))
+      return {
+        id: "release",
+        label: "Build release",
+        status: UNVERIFIABLE,
+        stale: true,
+        detail: `${release} is not in this registry, and the two dates needed to tell a stale list from a forged release could not be read. Absence alone does not establish either.`,
+      };
+    if (written > listed)
+      return {
+        id: "release",
+        label: "Build release",
+        status: UNVERIFIABLE,
+        stale: true,
+        detail: `${release} is not in this registry, but the registry was published ${registry.publishedAt} and this receipt was written afterwards, on ${receipt.at}. A list older than the receipt cannot say whether the build was published. Fetch a current registry and check again.`,
+      };
     return {
       id: "release",
       label: "Build release",
       status: FAIL,
-      detail: `This receipt names ${release}, which is not in the approved-build registry. Either it was produced by a build Tera never published, or the registry is not the one that covers it.`,
+      stale: false,
+      detail: `This receipt names ${release}, which is not in the approved-build registry — and the registry was published ${registry.publishedAt}, after this receipt was written. The build it names was never published.`,
     };
+  }
 
   if (!authentic)
     return {
@@ -189,6 +222,7 @@ export function releaseCheck(receipt, registry, { origin = FROM_PAGE, authentic 
 export const LIMITS = [
   "It lists the releases Tera published. It does not establish that the page which wrote a receipt was running one of them — only hashes checked from outside the browser do that.",
   "Checked from inside the wallet it is not a second opinion: the same page fetched both the receipt and the list. The offline verifier, run against a registry you fetched yourself, is where a match means something.",
+  "A release missing from a registry older than the receipt means the copy is stale, not that the build was forged. Fetch a current one before reading absence as evidence.",
   "It is a file Tera serves, so Tera can rewrite it. What stops that quietly is that the entries are signed and dated and people keep copies — not the file itself.",
 ];
 

@@ -41,21 +41,55 @@ const registry = (overrides = {}) => ({
   ...overrides,
 });
 
-const receipt = (release) => ({ release });
+const receipt = (release, at = "2026-09-17T00:00:00.000Z") => ({ release, at });
 
 // Recovers only when handed the exact message the registry commits to.
 const recover = async (message, signature) =>
   signature === "0xsig" && message === signingMessage(registry()) ? SIGNER : "0xdead";
 
-test("a release that was never published fails, and says which reading applies", () => {
-  // The case the old check could not distinguish from a real build at all.
-  const result = releaseCheck(receipt("r-000000000000"), registry(), {
+test("a release absent from a registry newer than the receipt was never published", () => {
+  // The registry was published after this receipt was written, so it would have
+  // listed the build had one existed. Absence here is evidence.
+  const result = releaseCheck(receipt("r-000000000000", "2026-09-17T00:00:00.000Z"), registry(), {
     origin: INDEPENDENT,
     authentic: true,
   });
   assert.equal(result.status, FAIL);
-  assert.match(result.detail, /not in the approved-build registry/i);
-  assert.match(result.detail, /or the registry is not the one that covers it/i);
+  assert.equal(result.stale, false);
+  assert.match(result.detail, /never published/i);
+});
+
+test("a release absent from a registry older than the receipt proves nothing", () => {
+  // The bug this build closes. A reader holding last week's registry got the
+  // strongest accusation this system makes, about a receipt that was fine.
+  const result = releaseCheck(receipt("r-000000000000", "2026-09-19T00:00:00.000Z"), registry(), {
+    origin: INDEPENDENT,
+    authentic: true,
+  });
+  assert.equal(result.status, UNVERIFIABLE);
+  assert.equal(result.stale, true);
+  assert.notEqual(result.status, FAIL);
+  assert.match(result.detail, /A list older than the receipt cannot say/i);
+  assert.match(result.detail, /Fetch a current registry/i);
+});
+
+test("without both dates, absence is never read as forgery", () => {
+  // A FAIL is the strongest claim here, so it is made only on evidence.
+  for (const at of ["", "not a date", undefined]) {
+    const result = releaseCheck({ release: "r-000000000000", at }, registry(), {
+      origin: INDEPENDENT,
+      authentic: true,
+    });
+    assert.equal(result.status, UNVERIFIABLE, `at=${JSON.stringify(at)}`);
+    assert.equal(result.stale, true);
+  }
+  const undated = { ...registry(), publishedAt: "2026-09-18T00:00:00.000Z" };
+  assert.equal(
+    releaseCheck(receipt("r-ffd0e45a1b2c"), undated, { origin: INDEPENDENT, authentic: true })
+      .status,
+    PASS,
+    "a release that is present is unaffected by any of this",
+  );
 });
 
 test("a match checked independently is a pass, scoped to what it establishes", () => {
@@ -107,6 +141,10 @@ test("a malformed registry is refused rather than half-read", () => {
   assert.throws(() => parseRegistry({ registry: "something else" }), RegistryError);
   assert.throws(() => parseRegistry(registry({ algorithm: "md5" })), RegistryError);
   assert.throws(() => parseRegistry(registry({ builds: [] })), RegistryError);
+  // Without a publication date the list cannot be aged, and absence cannot be
+  // read either way, so the document is refused rather than half-trusted.
+  assert.throws(() => parseRegistry(registry({ publishedAt: undefined })), RegistryError);
+  assert.throws(() => parseRegistry(registry({ publishedAt: "whenever" })), RegistryError);
   // A release id has a shape, and something that is not one is not a build.
   assert.throws(() => parseRegistry(registry({ builds: [{ release: "latest" }] })), RegistryError);
   assert.throws(
@@ -188,4 +226,50 @@ test("the limits refuse the reading the feature invites", () => {
   );
   assert.ok(text.includes("not a second opinion"));
   assert.ok(text.includes("tera can rewrite it"), "who controls the file must be admitted");
+  assert.ok(
+    text.includes("stale, not that the build was forged"),
+    "the staleness reading must be stated where the limits are",
+  );
+});
+
+test("the registry committed to this repo covers the build committed to it", async () => {
+  // The deploy gap. `build:registry` was not in the build script, so a deploy
+  // published a release the registry did not list — and every receipt written
+  // by that build then read as FAILED against the published list, which is the
+  // strongest claim this system makes and would have been false every time.
+  const { readFile } = await import("node:fs/promises");
+  const read = async (path) =>
+    JSON.parse(await readFile(new URL(`../../${path}`, import.meta.url), "utf8"));
+  const manifest = await read("public/tera/wallet/manifest.json");
+  const registry = parseRegistry(await read("public/tera/registry.json"));
+
+  const entry = lookup(registry, manifest.release);
+  assert.ok(
+    entry,
+    `the committed registry does not list ${manifest.release}. Run \`bun run build:registry\`.`,
+  );
+  assert.equal(entry.filesHash, manifest.filesHash, "the registry records a different file list");
+
+  // And the release currently on disk must check out for a reader holding this
+  // exact registry, which is the state a deploy publishes.
+  const result = releaseCheck(
+    { release: manifest.release, at: new Date().toISOString() },
+    registry,
+    { origin: INDEPENDENT, authentic: true },
+  );
+  assert.equal(result.status, PASS, result.detail);
+});
+
+test("the build script publishes the registry, not just the manifest", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const pkg = JSON.parse(await readFile(new URL("../../package.json", import.meta.url), "utf8"));
+  assert.match(
+    pkg.scripts.build,
+    /build:registry/,
+    "a deploy that skips build:registry publishes a release its own registry denies",
+  );
+  assert.ok(
+    pkg.scripts.build.indexOf("build:manifest") < pkg.scripts.build.indexOf("build:registry"),
+    "the registry is built from the manifest, so it must come after it",
+  );
 });

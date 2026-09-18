@@ -417,10 +417,14 @@ test("a registry can settle the release check, and only from outside the page", 
   // signed list the reader fetched themselves, a match is a pass and a miss is
   // evidence — but the same list fetched by the page proves nothing.
   const signed = await made({ release: "r-ffd0e45a1b2c" });
+  // Published after these receipts are written, so absence from it is evidence
+  // the build never existed rather than evidence the list is old. Build 10 made
+  // that distinction, and a fixture without a date can no longer assert a miss.
   const registry = {
     registry: "Tera approved builds",
     version: 1,
     algorithm: "sha256",
+    publishedAt: new Date(Date.now() + 60_000).toISOString(),
     builds: [{ release: "r-ffd0e45a1b2c", filesHash: "sha256-AAAA", publishedAt: "2026-09-18" }],
   };
   const read = async (options) =>
@@ -447,4 +451,28 @@ test("a registry can settle the release check, and only from outside the page", 
     })
   ).checks.find((entry) => entry.id === "release");
   assert.equal(miss.status, FAIL);
+});
+
+test("a registry older than the receipt cannot call its release a forgery", async () => {
+  // Build 10. The reader who fetched a registry last week holds a list that
+  // predates this receipt. Absence from it says nothing about the build, and
+  // reporting a failure there would be the strongest claim this system makes,
+  // made on no evidence.
+  const forged = await made({ release: "r-000000000000" });
+  const stale = {
+    registry: "Tera approved builds",
+    version: 1,
+    algorithm: "sha256",
+    publishedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+    builds: [{ release: "r-ffd0e45a1b2c", filesHash: "sha256-AAAA", publishedAt: "2026-09-10" }],
+  };
+  const check = (
+    await verify(bundle(forged, TURN), {
+      registry: stale,
+      registryOrigin: INDEPENDENT,
+      registryAuthentic: true,
+    })
+  ).checks.find((entry) => entry.id === "release");
+  assert.equal(check.status, UNVERIFIABLE);
+  assert.match(check.detail, /Fetch a current registry/i);
 });
