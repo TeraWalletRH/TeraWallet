@@ -890,6 +890,61 @@ async function openReceipt(index) {
   );
 }
 
+// Tearing the worker down first means nothing is holding the weights open when
+// the cache is cleared. The duress wipe does the same thing in the same order.
+async function unloadEngine() {
+  await engine.unload();
+  await wipeCaches(globalThis.caches);
+  try {
+    localStorage.removeItem(ENGINE_VERIFIED_KEY);
+  } catch {
+    /* Nothing to forget if storage is unavailable. */
+  }
+  state.engineVerifiedInFull = false;
+  state.notice = "The on-device model was removed from this browser.";
+  render();
+}
+
+/**
+ * A decision that cannot be taken back, asked in the wallet's own window.
+ *
+ * These were browser confirms, which is the wrong surface for them twice over:
+ * a confirm cannot show what is about to go, and it looks like the page asking
+ * rather than the wallet. The shape is fixed on purpose — what happens, what it
+ * costs, what survives it — so four unrelated decisions read the same way and an
+ * owner only has to learn where to look once.
+ *
+ * `keeps` matters as much as `goes`. Most of these read as total from the title
+ * alone, and an owner who cannot see the limit assumes the widest reading.
+ */
+function confirmDialog(
+  { title, lead, consequence, heavy = true, goes = [], keeps = [], confirmLabel, cancelLabel },
+  run,
+) {
+  const list = (items, extra = "") =>
+    `<ul class="decision-list ${extra}">${items.map((item) => `<li>${esc(item)}</li>`).join("")}</ul>`;
+  const panel = dialog(
+    title,
+    `<p>${esc(lead)}</p>
+     ${consequence ? `<div class="note ${heavy ? "note-heavy" : ""}"><p>${esc(consequence)}</p></div>` : ""}
+     ${goes.length ? `<div class="section-label">What this does</div>${list(goes)}` : ""}
+     ${keeps.length ? `<div class="section-label">What it does not touch</div>${list(keeps, "keeps")}` : ""}
+     <div class="actions"><button class="btn primary" data-confirm>${esc(confirmLabel)}</button>${button(cancelLabel || "Cancel", "close")}</div>`,
+  );
+  const go = panel.querySelector("[data-confirm]");
+  // Run outside the click dispatcher, so its error handling has to be repeated
+  // here rather than assumed.
+  go.onclick = async () => {
+    go.disabled = true;
+    try {
+      await run();
+    } catch (error) {
+      showError(error);
+    }
+  };
+  return panel;
+}
+
 // The export decision, in the wallet's own dialog. Everything shown here is
 // derived from the receipt in hand rather than written once for all receipts,
 // because the honest sentence differs: a turn answered on this device has text
@@ -902,7 +957,7 @@ function receiptExportDialog(index) {
   dialog(
     "Export this receipt?",
     `<p><b>${esc(notice.headline)}</b> ${esc(notice.detail)}</p>
-     <div class="note ${notice.firstSend ? "note-first-send" : ""}"><p>${esc(notice.consequence)}</p></div>
+     <div class="note ${notice.firstSend ? "note-heavy" : ""}"><p>${esc(notice.consequence)}</p></div>
      <div class="section-label">What the file contains</div>
      <div class="table-scroll"><table><thead><tr><th>Part</th><th>Detail</th></tr></thead><tbody>${notice.contents
        .map(
@@ -3231,19 +3286,34 @@ document.addEventListener("click", async (event) => {
           render();
         },
       );
-    if (action === "vault-passphrase-remove") {
-      if (
-        !window.confirm(
-          "Remove the passphrase? The vault will then open with your wallet signature alone.",
-        )
-      )
-        return;
-      closeDialog();
-      await rotateVaultKey({ keepPassphrase: false });
-      state.notice =
-        "The passphrase was removed. This vault now opens with your wallet signature alone.";
-      render();
-    }
+    if (action === "vault-passphrase-remove")
+      confirmDialog(
+        {
+          title: "Remove the vault passphrase?",
+          lead: "The vault key is rotated and the passphrase stops being part of it. From then on your wallet signature alone opens this vault.",
+          consequence:
+            "Anyone who can sign with this wallet can open the vault. The passphrase is what stands between a borrowed or unlocked wallet and everything stored here.",
+          goes: [
+            "The passphrase is no longer asked for, on this device or any other.",
+            "The vault key is rotated, so the old key cannot open the new contents.",
+            "Your wallet asks you to sign once, for the new epoch.",
+          ],
+          keeps: [
+            "Nothing stored in the vault is deleted or changed.",
+            "Recovery shares you have already handed out keep working.",
+            "You can set a passphrase again at any time.",
+          ],
+          confirmLabel: "Remove the passphrase",
+          cancelLabel: "Keep the passphrase",
+        },
+        async () => {
+          closeDialog();
+          await rotateVaultKey({ keepPassphrase: false });
+          state.notice =
+            "The passphrase was removed. This vault now opens with your wallet signature alone.";
+          render();
+        },
+      );
     if (action === "vault-export") exportVaultDialog();
     if (action === "vault-import") importVaultDialog();
     if (action === "vault-recovery-create") createRecoveryDialog();
@@ -3262,28 +3332,60 @@ document.addEventListener("click", async (event) => {
       state.notice = "Encrypted drafts and device-side records were cleared.";
       render();
     }
-    if (action === "assistant-local-clear") {
-      if (
-        !window.confirm(
-          "Delete assistant messages, drafts, proposal versions, presets, and local request metadata from this device?",
-        )
-      )
-        return;
-      clearLocalAssistantData();
-      await persist();
-      state.notice = "Local assistant data was deleted from this device.";
-      render();
-    }
-    if (action === "assistant-server-clear") {
-      if (
-        !window.confirm(
-          "Sign a wallet request to delete stored unconfirmed assistant proposal data? Confirmed receipts remain.",
-        )
-      )
-        return;
-      await deleteServerAssistantData();
-      render();
-    }
+    if (action === "assistant-local-clear")
+      confirmDialog(
+        {
+          title: "Delete local assistant data?",
+          lead: "Everything the assistant has left on this device is removed. No request is made and nothing is told to Tera.",
+          consequence:
+            "This cannot be undone from here. A turn answered on this device exists nowhere else, so deleting it ends it.",
+          goes: [
+            "Assistant messages and replies held in this browser.",
+            "Drafts and saved proposal versions.",
+            "Your policy simulator presets.",
+            "The local request log behind the privacy status centre.",
+          ],
+          keeps: [
+            "Records Tera already holds. Deleting those is the separate control below.",
+            "Confirmed receipts and anything already on chain.",
+            "Your vault, its passphrase, and your recovery shares.",
+          ],
+          confirmLabel: "Delete from this device",
+          cancelLabel: "Keep it",
+        },
+        async () => {
+          clearLocalAssistantData();
+          await persist();
+          closeDialog();
+          state.notice = "Local assistant data was deleted from this device.";
+          render();
+        },
+      );
+    if (action === "assistant-server-clear")
+      confirmDialog(
+        {
+          title: "Delete the data Tera holds?",
+          lead: "Your wallet is asked to sign a request telling Tera's service to delete the assistant data stored against your account.",
+          consequence:
+            "Confirmed receipts are not deleted. Tera keeps those because they record actions you approved, and a record you can delete is not a record.",
+          goes: [
+            "Unconfirmed proposal data stored by the service.",
+            "Assistant request data held against your account.",
+          ],
+          keeps: [
+            "Confirmed receipts for actions you approved.",
+            "Anything already written to the chain, which nobody can delete.",
+            "Local data on this device. That is the separate control above.",
+          ],
+          confirmLabel: "Sign and delete",
+          cancelLabel: "Cancel",
+        },
+        async () => {
+          closeDialog();
+          await deleteServerAssistantData();
+          render();
+        },
+      );
     if (action === "minimise-toggle") {
       state.minimise = target.checked;
       // Updated in place so the message being composed is not thrown away.
@@ -3301,24 +3403,34 @@ document.addEventListener("click", async (event) => {
         /* The failure is already on the panel; nothing was sent either way. */
       }
     }
-    if (action === "engine-unload") {
-      if (
-        !window.confirm(
-          "Remove the on-device model from this browser? Loading it again means downloading it again.",
-        )
-      )
-        return;
-      await engine.unload();
-      await wipeCaches(globalThis.caches);
-      try {
-        localStorage.removeItem(ENGINE_VERIFIED_KEY);
-      } catch {
-        /* Nothing to forget if storage is unavailable. */
-      }
-      state.engineVerifiedInFull = false;
-      state.notice = "The on-device model was removed from this browser.";
-      render();
-    }
+    if (action === "engine-unload")
+      confirmDialog(
+        {
+          title: "Remove the on-device model?",
+          lead: "The model is torn down and its weights are cleared from this browser's cache.",
+          // Recoverable, unlike the other three: the weights can be fetched
+          // again. The note is the plain one, and the cost is stated as a cost
+          // rather than as a warning.
+          heavy: false,
+          consequence:
+            "Using the on-device engine again means downloading the weights again, which is a large transfer on a metered or slow connection.",
+          goes: [
+            "The worker running the model in this tab.",
+            "The cached weights, freeing the space they take.",
+            "The record that this build's model was verified in full.",
+          ],
+          keeps: [
+            "Your messages, receipts and everything else stored here.",
+            "The option to load it again whenever you want it.",
+          ],
+          confirmLabel: "Remove the model",
+          cancelLabel: "Keep it loaded",
+        },
+        async () => {
+          closeDialog();
+          await unloadEngine();
+        },
+      );
     if (action === "ingress-dismiss") {
       state.ingress = null;
       render();
