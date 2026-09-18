@@ -92,6 +92,19 @@ code { background:#e2e5d5; padding:2px 5px; font-size:12px; overflow-wrap:anywhe
     <input type="file" id="file" accept="application/json,.json">
   </div>
 
+  <details class="optional">
+    <summary>Check the release against an approved-build registry (optional)</summary>
+    <p>A receipt names the build that produced it. On its own that name proves nothing &mdash; any
+    file can claim any release. Give this page a registry you fetched yourself and the name becomes
+    checkable: a release absent from the list was never published.</p>
+    <p>The wallet fetching its own copy of that list is not a second opinion, which is why this
+    belongs here and not there.</p>
+    <label>Registry file <input type="file" id="registry" accept="application/json,.json"></label>
+    <label>Signer address you expect <input type="text" id="signer" placeholder="0x&hellip;" spellcheck="false"></label>
+    <p class="micro">Without the signer address the list is read but not authenticated, and the
+    release check stays unproven &mdash; an unsigned list is one anybody could have written.</p>
+  </details>
+
   <div id="out" hidden></div>
 
   <footer>
@@ -113,10 +126,11 @@ const out = document.getElementById("out");
 const drop = document.getElementById("drop");
 const esc = (value) => String(value ?? "").replace(/[&<>]/g, (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;" })[c]);
 
-function render({ summary, rows, claims }) {
+function render({ summary, rows, claims, registryNote }) {
   out.hidden = false;
   out.innerHTML = \`
     <p class="headline"><b class="\${summary.status}">\${esc(summary.line)}</b></p>
+    \${registryNote ? \`<div class="note">\${esc(registryNote)}</div>\` : ""}
     \${summary.status === "fail" ? '<div class="note heavy"><b>Do not rely on this file.</b> A failed check means the receipt does not describe the turn it claims to.</div>' : ""}
     <p class="section">Checks</p>
     <div class="table-scroll"><table><thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead><tbody>
@@ -128,10 +142,18 @@ function render({ summary, rows, claims }) {
   out.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+// The registry and the signer are read at the moment a receipt is checked, not
+// stored, so changing either and dropping the file again re-runs everything.
+const registryText = async () => {
+  const [file] = document.getElementById("registry").files || [];
+  return file ? file.text() : "";
+};
+
 const read = (file) =>
-  file
-    .text()
-    .then(check)
+  Promise.all([file.text(), registryText()])
+    .then(([raw, registry]) =>
+      check(raw, registry, document.getElementById("signer").value.trim()),
+    )
     .then(render)
     .catch((error) => {
       out.hidden = false;
@@ -164,7 +186,12 @@ async function main() {
   // shell, and passing arguments through a shell is how paths with spaces break.
   execFileSync(
     process.execPath,
-    [join(root, "node_modules", "vite", "bin", "vite.js"), "build", "--config", "vite.verify.config.ts"],
+    [
+      join(root, "node_modules", "vite", "bin", "vite.js"),
+      "build",
+      "--config",
+      "vite.verify.config.ts",
+    ],
     { cwd: root, stdio: "inherit" },
   );
 
