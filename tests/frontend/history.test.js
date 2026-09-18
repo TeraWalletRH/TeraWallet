@@ -163,3 +163,47 @@ test("amounts render with the asset precision, or raw when it is unknown", () =>
   assert.equal(formatAmount(snapshot(proposal(), null, 1)), "2500000000");
   assert.equal(formatAmount({ amount: "" }), "—");
 });
+
+const hollowGates = GATES.map((gate) =>
+  gate === "eligibility_preflight"
+    ? { gate, passed: true, details: { rpcFallback: true } }
+    : { gate, passed: true },
+);
+
+test("a check degrading to unproven is recorded, not passed over in silence", () => {
+  // The bug this build closes. Both versions report passed:true, so the old
+  // resultOf returned "PASS" on each side and the diff was empty — the one
+  // moment the evidence got weaker was the one moment history said nothing.
+  const before = snapshot(proposal(), usdg);
+  const after = snapshot(proposal({ gates: hollowGates }), usdg);
+  const changes = diffVersions(before, after);
+  const row = changes.find((entry) => entry.field === "gate:eligibility_preflight");
+  assert.ok(row, "the degradation must appear in the diff");
+  assert.equal(row.from, "PASS");
+  assert.equal(row.to, "UNPROVEN");
+  assert.match(row.note, /no longer established/i);
+});
+
+test("recovering from unproven back to a real pass is recorded too", () => {
+  const before = snapshot(proposal({ gates: hollowGates }), usdg);
+  const after = snapshot(proposal(), usdg);
+  const row = diffVersions(before, after).find(
+    (entry) => entry.field === "gate:eligibility_preflight",
+  );
+  assert.equal(row.from, "UNPROVEN");
+  assert.equal(row.to, "PASS");
+  assert.equal(row.note, "Now passing");
+});
+
+test("an unproven check is not a proposal awaiting approval", () => {
+  assert.equal(decisionOf(proposal()), "Awaiting owner approval");
+  const decision = decisionOf(proposal({ gates: hollowGates }));
+  assert.match(decision, /^Not established at /);
+  assert.notEqual(decision, "Awaiting owner approval");
+  // A block still outranks an unproven, the same worst-first order as everywhere.
+  assert.match(decisionOf(proposal({ gates: blockedGates })), /^Blocked at /);
+});
+
+test("a submitted proposal still reports as submitted whatever the gates say", () => {
+  assert.equal(decisionOf(proposal({ gates: hollowGates, txHash: hash })), "Submitted");
+});

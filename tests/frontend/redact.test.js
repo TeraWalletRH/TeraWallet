@@ -170,3 +170,53 @@ test("demo proposals redact cleanly too", () => {
   assert.equal(JSON.stringify(document).includes(DEMO_OWNER), false);
   assert.equal(document.action.amountBand, "100 to 1,000 USDG");
 });
+
+// A check the service reported as passing but could not establish. Before the
+// vocabulary reached this module it printed as a flat PASS in the one artefact
+// that leaves the building.
+const hollowGates = GATES.map((gate) =>
+  gate === "eligibility_preflight"
+    ? { gate, passed: true, reason: "Checked.", details: { rpcFallback: true } }
+    : { gate, passed: true, reason: "Checked." },
+);
+
+test("an unproven check is not printed as a pass in the shared document", () => {
+  const document = redactProposal(proposal({ gates: hollowGates }), asset, { chainId });
+  const eligibility = document.checks.find(
+    (row) => row.check === GATE_LABELS.eligibility_preflight,
+  );
+  assert.equal(eligibility.result, "UNPROVEN");
+  assert.match(eligibility.reason, /unverified/i);
+  // The other four are untouched.
+  assert.equal(document.checks.filter((row) => row.result === "PASS").length, GATES.length - 1);
+});
+
+test("the document's decision does not round an unproven check up to ready", () => {
+  const document = redactProposal(proposal({ gates: hollowGates }), asset, { chainId });
+  assert.match(document.decision, /^Not ready:/);
+  assert.match(document.decision, /could not be established/i);
+  assert.notEqual(document.decision, "Awaiting the owner signature");
+});
+
+test("the document's note describes the four states it actually uses", () => {
+  // It used to promise "the checks and their results are unchanged" while
+  // flattening a state the wallet distinguished.
+  const document = redactProposal(proposal({ gates: hollowGates }), asset, { chainId });
+  for (const state of ["PASS", "BLOCKED", "UNPROVEN", "NOT RUN"])
+    assert.ok(document.note.includes(state), `the note does not mention ${state}`);
+  assert.match(document.note, /not a weaker pass/i);
+});
+
+test("the plain-text rendering shows the unproven state and its reason", () => {
+  const text = toText(redactProposal(proposal({ gates: hollowGates }), asset, { chainId }));
+  assert.match(text, /UNPROVEN {1}Eligibility|UNPROVEN\s+Eligibility/);
+  assert.match(text, /Decision: Not ready:/);
+});
+
+test("redacting an unproven document still leaks nothing", () => {
+  // The new detail text is service wording, so it goes through the same
+  // redaction as every other reason rather than around it.
+  const p = proposal({ gates: hollowGates });
+  const document = redactProposal(p, asset, { chainId });
+  assert.deepEqual(leaks(document, p.intent), []);
+});
