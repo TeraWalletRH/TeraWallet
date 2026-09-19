@@ -463,8 +463,8 @@ function Wallet() {
   }
   function continueBridge() {
     if (bridgeStep === 0) {
-      if (bridgeMode === "private") {
-        setAssetSymbol("ETH");
+      if (bridgeMode === "private" && assetSymbol !== "ETH" && assetSymbol !== "USDG") {
+        setAssetSymbol("USDG");
       }
       setBridgeStep(1);
       return;
@@ -710,10 +710,10 @@ function Wallet() {
   async function preparePrivateBridge(guard: () => void) {
     const source = sources.find((s) => s.symbol === assetSymbol) || sources[0];
     check(
-      source.symbol === "ETH",
+      ["ETH", "USDG"].includes(source.symbol),
       t(
-        "Private bridge currently supports native ETH. USDG will be available in Update 4.",
-        "私密跨链当前支持原生 ETH，USDG 即将在更新 4 中推出。",
+        "Private bridge currently supports ETH and USDG.",
+        "私密跨链当前支持 ETH 和 USDG。",
       ),
     );
     const destAddr = recipient.trim();
@@ -737,6 +737,8 @@ function Wallet() {
     const quote = quoteRes.quote;
     const created = await api("/api/bridge/private/jobs", {
       senderAddress: owner,
+      originCurrency: source.address,
+      assetSymbol: source.symbol,
       destinationChainId: dest.id,
       destinationCurrency: output.address,
       destinationSymbol: output.symbol,
@@ -771,7 +773,7 @@ function Wallet() {
       ],
       steps: [{ to: tx.to, data: tx.data, value: BigInt(tx.value).toString(), chainId: chain.id }],
       verify: () => {
-        transferTx(zeroAddress, created.job.vault_address, raw);
+        transferTx(source.address as Address, created.job.vault_address, raw);
       },
       recipient: created.job.vault_address,
       reference: created.job.id,
@@ -1939,7 +1941,7 @@ function Wallet() {
         t("Destination address", "目标地址"),
         t("Review bridge", "审核跨链"),
       ][bridgeStep];
-      const bridgeSourceAssets = isPrivate ? [sources[1]] : sources;
+      const bridgeSourceAssets = sources;
       const selectedSource = sources.find((s) => s.symbol === assetSymbol) || sources[0];
 
       return (
@@ -2004,7 +2006,9 @@ function Wallet() {
                 accessibilityRole="button"
                 onPress={() => {
                   setBridgeMode("private");
-                  setAssetSymbol("ETH");
+                  if (assetSymbol !== "ETH" && assetSymbol !== "USDG") {
+                    setAssetSymbol("USDG");
+                  }
                 }}
                 style={[
                   s.panel,

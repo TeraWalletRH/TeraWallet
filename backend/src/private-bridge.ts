@@ -1,15 +1,19 @@
 import {
   createPublicClient,
+  decodeEventLog,
+  encodeFunctionData,
+  erc20Abi,
   getAddress,
   http,
   keccak256,
+  maxUint256,
   type Address,
   type Hex,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import pool from "./db";
 import { env } from "./env";
-import { DEPOSITORY, NATIVE, relay } from "./bridge";
+import { DEPOSITORY, NATIVE, relay, USDG } from "./bridge";
 
 export type PrivateBridgeJob = {
   id: string;
@@ -89,6 +93,45 @@ async function confirmed(hash: Hex) {
   return head - r.blockNumber + 1n >= BigInt(env.privateBridgeConfirmations) ? r : null;
 }
 
+const transferEvent = {
+  type: "event",
+  name: "Transfer",
+  inputs: [
+    { name: "from", type: "address", indexed: true },
+    { name: "to", type: "address", indexed: true },
+    { name: "value", type: "uint256", indexed: false },
+  ],
+} as const;
+
+async function erc20Matches(
+  hash: Hex,
+  token: Address,
+  from: Address,
+  to: Address,
+  amount: bigint,
+) {
+  const r = await confirmed(hash);
+  if (!r) return false;
+  return r.logs.some((log) => {
+    if (getAddress(log.address) !== token) return false;
+    try {
+      const decoded = decodeEventLog({
+        abi: [transferEvent],
+        data: log.data,
+        topics: log.topics,
+      });
+      const args = decoded.args as { from: Address; to: Address; value: bigint };
+      return (
+        getAddress(args.from) === from &&
+        getAddress(args.to) === to &&
+        args.value === amount
+      );
+    } catch {
+      return false;
+    }
+  });
+}
+
 async function nativeMatches(hash: Hex, from: Address, to: Address, amount: bigint) {
   const r = await confirmed(hash);
   if (!r || getAddress(r.from) !== from || getAddress(r.to!) !== to) return false;
@@ -98,6 +141,15 @@ async function nativeMatches(hash: Hex, from: Address, to: Address, amount: bigi
 
 export async function depositReady(job: PrivateBridgeJob) {
   if (!job.deposit_tx_hash) return false;
+  if (job.asset_symbol === "USDG") {
+    return erc20Matches(
+      job.deposit_tx_hash,
+      getAddress(USDG),
+      getAddress(job.sender_address),
+      getAddress(job.vault_address),
+      BigInt(job.amount),
+    );
+  }
   return nativeMatches(
     job.deposit_tx_hash,
     getAddress(job.sender_address),
@@ -107,12 +159,13 @@ export async function depositReady(job: PrivateBridgeJob) {
 }
 
 export async function fetchRelayQuoteForPayout(job: PrivateBridgeJob) {
+  const originCurrency = job.asset_symbol === "USDG" ? USDG : NATIVE;
   const raw = await relay("/quote/v2", {
     user: job.payout_address,
     recipient: job.recipient_address,
     originChainId: 4663,
     destinationChainId: job.destination_chain_id,
-    originCurrency: NATIVE,
+    originCurrency,
     destinationCurrency: job.destination_currency,
     amount: job.amount,
     tradeType: "EXACT_INPUT",
@@ -129,6 +182,7 @@ async function signSweep(job: PrivateBridgeJob) {
   const signer = vaultAccount();
   const destination = getAddress(job.payout_address);
   const amount = BigInt(job.amount);
+  const isNative = job.asset_symbol === "ETH";
 
   const [nonce, rawGasPrice] = await Promise.all([
     client.getTransactionCount({ address: signer.address, blockTag: "pending" }),
@@ -137,11 +191,17 @@ async function signSweep(job: PrivateBridgeJob) {
   const gasPrice = (rawGasPrice * 130n) / 100n + 1000000n;
 
   const raw = await signer.signTransaction({
-    to: destination,
-    value: amount,
-    data: "0x" as Hex,
+    to: isNative ? destination : getAddress(USDG),
+    value: isNative ? amount : 0n,
+    data: isNative
+      ? ("0x" as Hex)
+      : encodeFunctionData({
+          abi: erc20Abi,
+          functionName: "transfer",
+          args: [destination, amount],
+        }),
     nonce,
-    gas: 21000n,
+    gas: isNative ? 21000n : 60000n,
     gasPrice,
     chainId: env.rhcChainId,
   });
@@ -178,9 +238,53 @@ async function sendSweep(job: PrivateBridgeJob) {
   );
 }
 
+export async function ensureRelayAllowance(
+  signer: ReturnType<typeof payoutAccount>,
+  amount: bigint,
+) {
+  const currentAllowance = await client.readContract({
+    address: getAddress(USDG),
+    abi: erc20Abi,
+    functionName: "allowance",
+    args: [signer.address, getAddress(DEPOSITORY)],
+  });
+  if (currentAllowance >= amount) return;
+
+  const [nonce, rawGasPrice] = await Promise.all([
+    client.getTransactionCount({ address: signer.address, blockTag: "pending" }),
+    client.getGasPrice(),
+  ]);
+  const gasPrice = (rawGasPrice * 130n) / 100n + 1000000n;
+
+  const raw = await signer.signTransaction({
+    to: getAddress(USDG),
+    value: 0n,
+    data: encodeFunctionData({
+      abi: erc20Abi,
+      functionName: "approve",
+      args: [getAddress(DEPOSITORY), maxUint256],
+    }),
+    nonce,
+    gas: 60000n,
+    gasPrice,
+    chainId: env.rhcChainId,
+  });
+  try {
+    const hash = await client.sendRawTransaction({ serializedTransaction: raw });
+    await client.waitForTransactionReceipt({ hash, confirmations: 1 });
+  } catch (e) {
+    if (!known(e)) throw e;
+  }
+}
+
 async function signRelayDeposit(job: PrivateBridgeJob) {
   if (!pool) throw Error("Private routing ledger unavailable.");
   const signer = payoutAccount();
+
+  if (job.asset_symbol === "USDG") {
+    await ensureRelayAllowance(signer, BigInt(job.amount));
+  }
+
   const quote = await fetchRelayQuoteForPayout(job);
 
   const depositStep = quote.steps?.find((s: any) => s.id === "deposit");
@@ -194,14 +298,24 @@ async function signRelayDeposit(job: PrivateBridgeJob) {
     throw Error("Relay quote depository address mismatch.");
   }
 
+  const isNative = job.asset_symbol === "ETH";
   const value = BigInt(stepItem.value);
-  if (value !== BigInt(job.amount)) {
-    throw Error("Relay quote deposit value does not match requested job amount.");
-  }
+  const calldata = String(stepItem.data).toLowerCase();
 
-  const calldata = stepItem.data as Hex;
-  if (!calldata.toLowerCase().startsWith("0x49290c1c")) {
-    throw Error("Relay quote calldata format unexpected for native ETH deposit.");
+  if (isNative) {
+    if (value !== BigInt(job.amount)) {
+      throw Error("Relay quote deposit value does not match requested job amount.");
+    }
+    if (!calldata.startsWith("0x49290c1c")) {
+      throw Error("Relay quote calldata format unexpected for native ETH deposit.");
+    }
+  } else {
+    if (value !== 0n) {
+      throw Error("Relay quote deposit value must be 0 for USDG deposit.");
+    }
+    if (!calldata.startsWith("0xe8017952")) {
+      throw Error("Relay quote calldata format unexpected for USDG deposit.");
+    }
   }
 
   const requestId = quote.requestId;
@@ -214,9 +328,9 @@ async function signRelayDeposit(job: PrivateBridgeJob) {
   const raw = await signer.signTransaction({
     to: depository,
     value,
-    data: calldata,
+    data: stepItem.data as Hex,
     nonce,
-    gas: 60000n,
+    gas: isNative ? 60000n : 200000n,
     gasPrice,
     chainId: env.rhcChainId,
   });
@@ -303,12 +417,21 @@ export async function runPrivateBridgeExecutor() {
           } else if (job.status === "sweep_signed") {
             await sendSweep(job);
           } else if (job.status === "sweep_broadcast") {
-            const ok = await nativeMatches(
-              job.sweep_tx_hash!,
-              getAddress(job.vault_address),
-              getAddress(job.payout_address),
-              BigInt(job.amount),
-            );
+            const ok =
+              job.asset_symbol === "USDG"
+                ? await erc20Matches(
+                    job.sweep_tx_hash!,
+                    getAddress(USDG),
+                    getAddress(job.vault_address),
+                    getAddress(job.payout_address),
+                    BigInt(job.amount),
+                  )
+                : await nativeMatches(
+                    job.sweep_tx_hash!,
+                    getAddress(job.vault_address),
+                    getAddress(job.payout_address),
+                    BigInt(job.amount),
+                  );
             if (ok) {
               await pool.query(
                 "UPDATE private_bridge_jobs SET status='sweep_confirmed', updated_at=NOW() WHERE id=$1",
