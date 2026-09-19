@@ -64,6 +64,32 @@ export const env = {
   privateSendConfirmations: Number(process.env.PRIVATE_SEND_CONFIRMATIONS ?? 3),
   privateSendJobIntervalMs: Number(process.env.PRIVATE_SEND_JOB_INTERVAL_MS ?? 15000),
   privateSendExpirySeconds: Number(process.env.PRIVATE_SEND_EXPIRY_SECONDS ?? 1800),
+  get privateBridgeEnabled(): boolean {
+    if (process.env.PRIVATE_BRIDGE_ENABLED !== undefined) {
+      return process.env.PRIVATE_BRIDGE_ENABLED === "true";
+    }
+    return process.env.NODE_ENV === "test";
+  },
+  get privateBridgeVaultPrivateKey(): string {
+    return (
+      process.env.PRIVATE_BRIDGE_VAULT_PRIVATE_KEY ||
+      (process.env.NODE_ENV === "test"
+        ? "0x0000000000000000000000000000000000000000000000000000000000000003"
+        : "")
+    );
+  },
+  get privateBridgePayoutPrivateKey(): string {
+    return (
+      process.env.PRIVATE_BRIDGE_PAYOUT_PRIVATE_KEY ||
+      process.env.PRIVATE_BRIDGE_VAULT_PRIVATE_KEY ||
+      (process.env.NODE_ENV === "test"
+        ? "0x0000000000000000000000000000000000000000000000000000000000000003"
+        : "")
+    );
+  },
+  privateBridgeConfirmations: Number(process.env.PRIVATE_BRIDGE_CONFIRMATIONS ?? 3),
+  privateBridgeJobIntervalMs: Number(process.env.PRIVATE_BRIDGE_JOB_INTERVAL_MS ?? 15000),
+  privateBridgeExpirySeconds: Number(process.env.PRIVATE_BRIDGE_EXPIRY_SECONDS ?? 1800),
   // Oblivious HTTP gateway. Unset means off: see backend/src/routes/ohttp.ts for
   // why an unconfigured gateway must not invent a key at boot.
   //
