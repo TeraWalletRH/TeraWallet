@@ -2,7 +2,7 @@
   "manifest": "Tera wallet build manifest",
   "version": 1,
   "release": "r-7d3a9713049d",
-  "builtAt": "2026-09-19T12:57:20.697Z",
+  "builtAt": "2026-09-19T13:18:02.868Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
