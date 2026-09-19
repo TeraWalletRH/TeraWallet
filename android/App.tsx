@@ -48,6 +48,7 @@ type Review = {
   draftId?: number;
   afterSubmitted?: (hash: string) => Promise<void>;
   simulation?: "checking" | "passed" | "needs-attention";
+  isPrivateBridge?: boolean;
 };
 const tokenImages: Record<string, any> = {
   USDG: require("./assets/RH-RWA-Assets-Media/usdg_logo.png"),
@@ -142,7 +143,8 @@ function Wallet() {
     [updateProgress, setUpdateProgress] = useState(0),
     [assetSymbol, setAssetSymbol] = useState("USDG"),
     [privateAsset, setPrivateAsset] = useState<"ETH" | "TERA">("ETH"),
-    [sendMode, setSendMode] = useState<"public" | "private">("public");
+    [sendMode, setSendMode] = useState<"public" | "private">("public"),
+    [bridgeMode, setBridgeMode] = useState<"public" | "private">("public");
   const [destination, setDestination] = useState(8453),
     [outSymbol, setOutSymbol] = useState("ETH"),
     [trade, setTrade] = useState("BUY");
@@ -617,7 +619,85 @@ function Wallet() {
       },
     });
   }
+  async function preparePrivateBridge(guard: () => void) {
+    const source = sources.find((s) => s.symbol === assetSymbol) || sources[0];
+    check(
+      source.symbol === "ETH",
+      t(
+        "Private bridge currently supports native ETH. USDG will be available in Update 4.",
+        "私密跨链当前支持原生 ETH，USDG 即将在更新 4 中推出。",
+      ),
+    );
+    const destAddr = recipient.trim();
+    check(
+      dest.id === 792703809
+        ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(destAddr)
+        : isAddress(destAddr),
+      t("Enter a valid destination wallet address.", "请输入有效目标钱包地址。"),
+    );
+    const raw = units(amount, source.decimals);
+    const quoteRes = await api("/api/bridge/private/quote", {
+      ownerAddress: owner,
+      recipient: destAddr,
+      originCurrency: source.address,
+      destinationChainId: dest.id,
+      destinationCurrency: output.address,
+      amount: raw,
+    });
+    guard();
+
+    const quote = quoteRes.quote;
+    const created = await api("/api/bridge/private/jobs", {
+      senderAddress: owner,
+      destinationChainId: dest.id,
+      destinationCurrency: output.address,
+      destinationSymbol: output.symbol,
+      recipient: destAddr,
+      amount: raw,
+      quoteRequestId: quote.requestId,
+      expectedAmountOut: quote.amountOut,
+      minAmountOut: quote.minimumAmountOut,
+    });
+    guard();
+
+    const tx = created.preparedDeposit;
+    await presentReview({
+      title: t("Review private bridge", "审核私密跨链"),
+      rows: [
+        [t("Send", "发送"), `${amount} ${source.symbol}`],
+        [t("Destination", "目标网络"), `${dest.name} · ${output.symbol}`],
+        [t("Recipient", "收款地址"), destAddr],
+        [
+          t("Routing", "路由"),
+          t("Bridge vault → Relay → recipient", "跨链金库 → Relay → 收款方"),
+        ],
+        [
+          t("Expected, after Relay fees", "扣除 Relay 费用后预计收到"),
+          `${formatUnits(BigInt(quote.amountOut), output.decimals)} ${output.symbol}`,
+        ],
+        [
+          t("Minimum received", "最低收到"),
+          `${formatUnits(BigInt(quote.minimumAmountOut), output.decimals)} ${output.symbol}`,
+        ],
+        [t("Expires", "到期时间"), new Date(quote.expiresAt).toLocaleTimeString()],
+      ],
+      steps: [{ to: tx.to, data: tx.data, value: BigInt(tx.value).toString(), chainId: chain.id }],
+      verify: () => {
+        transferTx(zeroAddress, created.job.vault_address, raw);
+      },
+      recipient: created.job.vault_address,
+      reference: created.job.id,
+      isPrivateBridge: true,
+      afterSubmitted: async (hash) => {
+        await api(`/api/bridge/private/jobs/${created.job.id}/deposit`, { txHash: hash });
+      },
+    });
+  }
   async function prepareBridge(guard: () => void) {
+    if (bridgeMode === "private") {
+      await preparePrivateBridge(guard);
+      return;
+    }
     const source = sources.find((s) => s.symbol === assetSymbol) || sources[0];
     const input = {
       ownerAddress: owner,
@@ -691,6 +771,7 @@ function Wallet() {
             reference: record.step === record.totalSteps ? r.reference : undefined,
             bridgeInput: record.step === record.totalSteps ? r.bridgeInput : undefined,
             actionHash: record.step === record.totalSteps ? r.actionHash : undefined,
+            isPrivateBridge: record.step === record.totalSteps ? r.isPrivateBridge : undefined,
           };
           await store({
             ...dataRef.current,
@@ -1790,11 +1871,27 @@ function Wallet() {
                 value={recipient}
                 onChangeText={setRecipient}
               />
+              <Text style={s.eyebrow}>{t("ROUTING", "路由模式")}</Text>
+              <Choices
+                options={[t("Direct route", "直接路由"), t("Private route", "私密路由")]}
+                value={bridgeMode === "private" ? t("Private route", "私密路由") : t("Direct route", "直接路由")}
+                select={(name) =>
+                  setBridgeMode(name === t("Private route", "私密路由") ? "private" : "public")
+                }
+              />
+              {bridgeMode === "private" && (
+                <Text style={[s.small, { marginTop: 4 }]}>
+                  {t(
+                    "Private routing severs the direct link between your Robinhood Chain address and the destination recipient. Funds route through Tera's bridge vault.",
+                    "私密路由切断你 Robinhood Chain 地址与目标链收款方之间的直接关联。资金将通过 Tera 跨链金库路由。",
+                  )}
+                </Text>
+              )}
             </>
           )}
           {action(
-            "Review live route",
-            "审核实时路线",
+            page === "bridge" && bridgeMode === "private" ? "Review private bridge" : "Review live route",
+            page === "bridge" && bridgeMode === "private" ? "审核私密跨链" : "审核实时路线",
             page === "bridge" ? prepareBridge : prepareTrade,
           )}
         </>
@@ -1991,7 +2088,9 @@ function Wallet() {
           )}
           {data.history.map((r) => {
             const isBridge = Boolean(
-              r.bridgeInput || (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)),
+              r.bridgeInput ||
+                (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) ||
+                r.isPrivateBridge,
             );
             return (
               <View key={r.hash} style={s.panel}>
@@ -2004,7 +2103,11 @@ function Wallet() {
                 </Text>
                 {r.reference && (
                   <Text selectable style={s.small}>
-                    {isBridge ? `Relay: ${r.reference}` : `Route: ${r.reference}`}
+                    {r.isPrivateBridge
+                      ? `Private Bridge: ${r.reference}`
+                      : isBridge
+                      ? `Relay: ${r.reference}`
+                      : `Route: ${r.reference}`}
                   </Text>
                 )}
                 {action(
@@ -2016,7 +2119,19 @@ function Wallet() {
                     let delivery = r.delivery;
                     let payoutHash = r.payoutHash;
                     if (r.reference && sourceStatus === "confirmed") {
-                      if (isBridge) {
+                      if (r.isPrivateBridge) {
+                        const result = await api(`/api/bridge/private/jobs/${r.reference}`);
+                        g();
+                        delivery =
+                          result.job?.status === "confirmed"
+                            ? "delivered"
+                            : result.job?.status === "refunded"
+                            ? "refunded"
+                            : (result.job?.status ?? "pending");
+                        if (result.job?.relay_deposit_tx_hash) {
+                          payoutHash = result.job.relay_deposit_tx_hash;
+                        }
+                      } else if (isBridge) {
                         const result = await api(`/api/bridge/status/${r.reference}`);
                         g();
                         delivery = result.status?.status ?? result.status;

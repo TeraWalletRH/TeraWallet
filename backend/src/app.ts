@@ -14,6 +14,7 @@ import ohttpRouter from "./routes/ohttp";
 import pricesRouter from "./routes/prices";
 import stakingRouter from "./routes/staking";
 import privateSendRouter from "./routes/private-send";
+import privateBridgeRouter from "./routes/private-bridge";
 import tagsRouter from "./routes/tags";
 
 const app = express();
@@ -44,6 +45,7 @@ app.use(express.json());
 app.use(healthRouter);
 app.use(policyRouter);
 app.use(bridgeRouter);
+app.use(privateBridgeRouter);
 app.use(retentionRouter);
 app.use(mobileRouter);
 app.use(pricesRouter);
