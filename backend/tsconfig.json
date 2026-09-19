@@ -4,10 +4,13 @@
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "types": ["bun-types"],
+    // The shared core in public/tera/core/ is plain ES modules, imported here
+    // as well as by the web wallet and the Android app.
+    "allowJs": true,
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src/**/*", "tests/**/*"]
+  "include": ["src/**/*", "tests/**/*", "../public/tera/core/*.js"]
 }

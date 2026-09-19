@@ -29,6 +29,10 @@ export async function serveSitePage(pathname: string): Promise<Response> {
       walletConnectProjectId: import.meta.env["VITE_WALLETCONNECT_PROJECT_ID"] || "",
       explorerUrl: import.meta.env["VITE_EXPLORER_URL"] || "https://robinhoodchain.blockscout.com",
       policySignerAddress: import.meta.env["VITE_POLICY_SIGNER_ADDRESS"] || "",
+      // The tag registry. Unset means this deployment has none deployed, and
+      // the wallet hides every tag control rather than offering a lookup it
+      // cannot make.
+      tagRegistryAddress: import.meta.env["VITE_TAG_REGISTRY_ADDRESS"] || "",
       policyBundleUrl: import.meta.env["VITE_POLICY_BUNDLE_URL"] || "",
       policyBundleMaxAgeSeconds: Number(
         import.meta.env["VITE_POLICY_BUNDLE_MAX_AGE_SECONDS"] || 86400,
@@ -39,7 +43,10 @@ export async function serveSitePage(pathname: string): Promise<Response> {
       // holding both the address and the request is the thing this prevents.
       ohttpRelayUrl: import.meta.env["VITE_OHTTP_RELAY_URL"] || "",
       ohttpKeyConfigUrl: import.meta.env["VITE_OHTTP_KEY_CONFIG_URL"] || "",
-      ohttpPaths: (import.meta.env["VITE_OHTTP_PATHS"] || "/api/agent/chat,/api/agent/propose")
+      ohttpPaths: (
+        import.meta.env["VITE_OHTTP_PATHS"] ||
+        "/api/agent/chat,/api/agent/propose,/api/tags/resolve"
+      )
         .split(",")
         .map((path: string) => path.trim())
         .filter(Boolean),

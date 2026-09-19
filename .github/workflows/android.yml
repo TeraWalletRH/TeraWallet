@@ -31,6 +31,12 @@ jobs:
       EXPO_PUBLIC_API_URL: https://api.terawallet.app
       EXPO_PUBLIC_RPC_URL: https://rpc.mainnet.chain.robinhood.com
       EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY: ${{ vars.EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY || '0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05' }}
+      # Unset until TagRegistry is deployed: the app hides every tag control
+      # rather than offering a lookup it cannot make.
+      EXPO_PUBLIC_TAG_REGISTRY_ADDRESS: ${{ vars.EXPO_PUBLIC_TAG_REGISTRY_ADDRESS || '' }}
+      # Unset means no JavaScript update channel, and the Update button falls
+      # back to downloading a new APK.
+      EXPO_PUBLIC_UPDATES_URL: ${{ vars.EXPO_PUBLIC_UPDATES_URL || '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -90,6 +96,34 @@ jobs:
           path: artifacts/*
           if-no-files-found: error
           retention-days: 14
+      - name: Write the version manifest
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        env:
+          # The floor below which a build stops being offered as optional and
+          # starts being told it is unsupported. Set it as a repository
+          # variable when a release must not be kept running; leaving it at 1
+          # means every published build is a suggestion, never a demand.
+          MIN_SUPPORTED: ${{ vars.ANDROID_MIN_SUPPORTED_VERSION_CODE || '1' }}
+        working-directory: .
+        run: |
+          apk="$GITHUB_WORKSPACE/artifacts/tera-android-preview.apk"
+          # Computed in the run that produced the binary. A digest taken later,
+          # from whatever a server downloaded, would establish nothing.
+          digest="$(sha256sum "$apk" | cut -d" " -f1)"
+          version_name="$(node -p "require('./android/app.json').expo.version")"
+          cat > "$GITHUB_WORKSPACE/artifacts/tera-android-preview.json" <<JSON
+          {
+            "platform": "android",
+            "versionCode": ${GITHUB_RUN_NUMBER},
+            "versionName": "${version_name}",
+            "minSupportedVersionCode": ${MIN_SUPPORTED},
+            "sha256": "${digest}",
+            "publishedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "notes": "Automated Android preview build."
+          }
+          JSON
+          node -e "JSON.parse(require('fs').readFileSync('$GITHUB_WORKSPACE/artifacts/tera-android-preview.json','utf8'))"
+          cat "$GITHUB_WORKSPACE/artifacts/tera-android-preview.json"
       - name: Publish latest preview APK
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
         env:
@@ -99,3 +133,4 @@ jobs:
           gh release view android-preview --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
             gh release create android-preview --repo "$GITHUB_REPOSITORY" --title "Tera Android Preview" --notes "Latest automated Android preview build." --prerelease --latest=false
           gh release upload android-preview "$GITHUB_WORKSPACE/artifacts/tera-android-preview.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload android-preview "$GITHUB_WORKSPACE/artifacts/tera-android-preview.json" --repo "$GITHUB_REPOSITORY" --clobber

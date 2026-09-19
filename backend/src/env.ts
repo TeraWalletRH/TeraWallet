@@ -22,6 +22,14 @@ export const env = {
   teraStakingAdminSessionHours: Number(process.env.TERA_STAKING_ADMIN_SESSION_HOURS ?? 8),
   teraStakingEnabled: process.env.TERA_STAKING_ENABLED === "true",
   privateSendEnabled: process.env.PRIVATE_SEND_ENABLED === "true",
+  // Tags. Reading needs only the deployed registry; relaying a claim on an
+  // owner's behalf additionally needs a funded key, and is off without one.
+  // The relayer cannot forge a claim — claimFor verifies the owner's
+  // signature — so the worst a leaked key costs is gas.
+  tagsEnabled: process.env.TAGS_ENABLED === "true",
+  tagRegistryAddress: process.env.TAG_REGISTRY_ADDRESS ?? "",
+  tagRelayerPrivateKey: process.env.TAG_RELAYER_PRIVATE_KEY ?? "",
+  tagIndexIntervalMs: Number(process.env.TAG_INDEX_INTERVAL_MS ?? 20000),
   privateSendVaultPrivateKey: process.env.PRIVATE_SEND_VAULT_PRIVATE_KEY ?? "",
   privateSendPayoutPrivateKey: process.env.PRIVATE_SEND_PAYOUT_PRIVATE_KEY ?? "",
   privateSendConfirmations: Number(process.env.PRIVATE_SEND_CONFIRMATIONS ?? 3),
