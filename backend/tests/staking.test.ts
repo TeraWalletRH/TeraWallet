@@ -64,4 +64,64 @@ describe("TERA staking API", () => {
     const response = await request(app).get("/api/staking/position/not-an-address");
     expect(response.status).toBe(400);
   });
+
+  it("exposes the fixed staking tiers with the incentive model", async () => {
+    const response = await request(app).get("/api/staking/tiers");
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.tiers).toHaveLength(3);
+    expect(response.body.tiers).toEqual([
+      { days: 30, apyBps: 600, label: "30 Days", apyPercent: "6.0%" },
+      { days: 45, apyBps: 900, label: "45 Days", apyPercent: "9.0%" },
+      { days: 90, apyBps: 1400, label: "90 Days", apyPercent: "14.0%" },
+    ]);
+  });
+
+  it("validates wallet addresses for fixed lock queries", async () => {
+    const response = await request(app).get("/api/staking/locks/invalid-address");
+    expect(response.status).toBe(400);
+    expect(response.body.error).toContain("valid EVM address");
+  });
 });
+
+describe("TERA fixed staking calculations", () => {
+  const { calculateFixedReward, isLockMature, FIXED_STAKING_TIERS } = require("../src/staking");
+
+  it("calculates 30-day fixed return at 6.0% APY", () => {
+    // 1,000 TERA = 1,000 * 10^18 base units
+    const principal = 1000n * 10n ** 18n;
+    const reward = calculateFixedReward(principal, FIXED_STAKING_TIERS[30].days, FIXED_STAKING_TIERS[30].apyBps);
+    // (1000 * 10^18 * 600 * 30) / 3,650,000 = 4,931,506,849,315,068,493 (~4.9315 TERA)
+    expect(reward).toBe(4931506849315068493n);
+  });
+
+  it("calculates 45-day fixed return at 9.0% APY", () => {
+    const principal = 1000n * 10n ** 18n;
+    const reward = calculateFixedReward(principal, FIXED_STAKING_TIERS[45].days, FIXED_STAKING_TIERS[45].apyBps);
+    // (1000 * 10^18 * 900 * 45) / 3,650,000 = 11,095,890,410,958,904,109 (~11.0959 TERA)
+    expect(reward).toBe(11095890410958904109n);
+  });
+
+  it("calculates 90-day fixed return at 14.0% APY", () => {
+    const principal = 1000n * 10n ** 18n;
+    const reward = calculateFixedReward(principal, FIXED_STAKING_TIERS[90].days, FIXED_STAKING_TIERS[90].apyBps);
+    // (1000 * 10^18 * 1400 * 90) / 3,650,000 = 34,520,547,945,205,479,452 (~34.5205 TERA)
+    expect(reward).toBe(34520547945205479452n);
+  });
+
+  it("returns zero reward for zero or negative principal", () => {
+    expect(calculateFixedReward(0n, 30, 600)).toBe(0n);
+    expect(calculateFixedReward(-100n, 30, 600)).toBe(0n);
+  });
+
+  it("enforces strict lock maturity check", () => {
+    const unlockTime = 1700000000;
+    // Before unlock time -> cannot unlock
+    expect(isLockMature(unlockTime, unlockTime - 1)).toBe(false);
+    expect(isLockMature(unlockTime, unlockTime - 86400)).toBe(false);
+    // At or after unlock time -> mature
+    expect(isLockMature(unlockTime, unlockTime)).toBe(true);
+    expect(isLockMature(unlockTime, unlockTime + 1)).toBe(true);
+  });
+});
+
