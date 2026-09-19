@@ -65,6 +65,14 @@ function owned(input: unknown) {
 export function config() {
   return {
     enabled: enabled(),
+    // Which of the two preconditions is missing, so "unavailable" can be
+    // diagnosed from the response instead of from the deploy logs. Both are
+    // booleans about this service's own configuration — no value, no secret,
+    // and nothing an attacker learns that the 503 did not already tell them.
+    requires: {
+      flag: env.tagsEnabled,
+      database: Boolean(pool),
+    },
     chainId: env.rhcChainId,
     // Said in the config so a surface can show it before an owner claims
     // anything, not only in the small print of a resolution.
