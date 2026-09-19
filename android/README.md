@@ -9,6 +9,22 @@ Native Expo / React Native wallet, using Tera's cream, forest-green and monospac
 - Robinhood Chain ETH and USDG balances, transfers, locally reviewed USDG/equity swaps, assistant proposals and scoped service tokens.
 - Relay bridges from RH ETH/USDG to Base ETH/USDC, Solana SOL/USDC/USDT and Arc USDC. Destination address is pasted; source transactions are signed on the phone.
 - Encrypted local drafts, pending hashes and history, configurable retention, local deletion and signed backend proposal deletion. Assistant chat is memory-only.
+- Tags: send to `@astra` instead of an address, and claim a name for this wallet. The tag is resolved against `TagRegistry` on chain — by the app, not by the API — and the resolved address is shown on the review sheet and re-read immediately before signing. Tags are not offered as bridge destinations, because a bridge sends to another chain where that address is a different account.
+- In-app updates: the app checks `/api/mobile/android/manifest` on launch and offers what is published. Set `EXPO_PUBLIC_TAG_REGISTRY_ADDRESS` and `EXPO_PUBLIC_UPDATES_URL` to turn either on; unset, the controls stay hidden.
+
+## Updating
+
+Two mechanisms, and they are not interchangeable.
+
+**JavaScript updates** (`expo-updates`) replace the bundle inside the installed app: seconds, no browser, no install screen, no permission. They carry everything written in JavaScript, which is most of this wallet, and nothing written in native code. Off unless `EXPO_PUBLIC_UPDATES_URL` points at an update channel.
+
+**A new APK** carries the rest. The app downloads it, hashes it in chunks, and compares it against the `sha256` the build workflow published in `tera-android-preview.json` beside the APK. A mismatch deletes the file and installs nothing. Android then shows its own install screen, which no app can skip, and asks once for permission to install unknown apps (`REQUEST_INSTALL_PACKAGES`).
+
+Neither reaches a build that shipped before this code existed: an installed app with no updater inside it cannot be told to update itself. Those installs need one manual download, and everything after that is in-app.
+
+The APK signature must match the installed one or Android refuses the update, so self-update works within one signing key and one application ID. Preview and production still do not upgrade into each other.
+
+`ANDROID_MIN_SUPPORTED_VERSION_CODE` (a repository variable) is the floor below which a build is told it is unsupported rather than merely out of date. Left at `1`, every published build is a suggestion.
 
 ## Public GitHub Actions builds
 

@@ -5,6 +5,7 @@ import { Script, console } from "forge-std/Script.sol";
 import { SessionManager } from "../src/session/SessionManager.sol";
 import { TerraAccountFactory } from "../src/account/TerraAccountFactory.sol";
 import { RwaAssetRegistry } from "../src/registry/RwaAssetRegistry.sol";
+import { TagRegistry } from "../src/registry/TagRegistry.sol";
 import { V4Venue } from "../src/venue/V4Venue.sol";
 import { MockERC3643 } from "../src/token/MockERC3643.sol";
 
@@ -32,6 +33,17 @@ contract DeployScript is Script {
             bytes32(0)
         );
         console.log("RwaAssetRegistry deployed at:", address(registry));
+
+        TagRegistry tags = new TagRegistry(deployer);
+        console.log("TagRegistry deployed at:", address(tags));
+
+        // Seeded from the list the wallet ships, so the two agree from block
+        // one. The app refusing a reserved name means nothing by itself:
+        // claim() can be called directly by anyone.
+        string[] memory reserved =
+            vm.parseJsonStringArray(vm.readFile("reserved-tags.json"), ".tags");
+        tags.setReserved(reserved, true);
+        console.log("Reserved tag names seeded:", reserved.length);
 
         V4Venue venue = new V4Venue();
         console.log("V4Venue deployed at:", address(venue));

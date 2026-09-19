@@ -1,6 +1,14 @@
 import { defineChain, zeroAddress } from "viem";
 export const API = process.env.EXPO_PUBLIC_API_URL || "https://api.terawallet.app";
 export const RPC = process.env.EXPO_PUBLIC_RPC_URL || "https://rpc.mainnet.chain.robinhood.com";
+// Unset means this build has no tag registry to read, and every tag control
+// stays hidden rather than offering a lookup that cannot be made.
+export const TAG_REGISTRY = /^0x[\da-fA-F]{40}$/.test(
+  process.env.EXPO_PUBLIC_TAG_REGISTRY_ADDRESS || "",
+)
+  ? (process.env.EXPO_PUBLIC_TAG_REGISTRY_ADDRESS as `0x${string}`)
+  : "";
+export const tagsAvailable = () => Boolean(TAG_REGISTRY);
 export const POLICY_SIGNER =
   process.env.EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY || "0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05";
 export const chain = defineChain({

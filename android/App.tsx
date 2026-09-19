@@ -22,7 +22,9 @@ import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { formatUnits, parseUnits, zeroAddress, isAddress, type Address } from "viem";
 import { api } from "./src/api";
-import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
+import { Asset, chain, destinations, sources, tagsAvailable, Tx, USDG } from "./src/config";
+import * as tags from "./src/tags";
+import * as upd from "./src/update";
 import { balances, client, execute, transactionStatus } from "./src/network";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
@@ -113,6 +115,29 @@ function Wallet() {
     [revealed, setRevealed] = useState("");
   const [amount, setAmount] = useState(""),
     [recipient, setRecipient] = useState(""),
+    // Which kind of destination the owner is entering. A tag and an address
+    // fail in different ways and are checked differently, so the field asks
+    // rather than guessing from what has been typed so far.
+    [recipientKind, setRecipientKind] = useState<"tag" | "address">("address"),
+    // What the registry last said. `address` is the only thing a transfer is
+    // ever built from; the tag beside it is for the owner to read.
+    [tagLookup, setTagLookup] = useState<
+      | { state: "idle" }
+      | { state: "looking"; tag: string }
+      | { state: "found"; tag: string; address: Address }
+      | { state: "error"; message: string }
+    >({ state: "idle" }),
+    [myTag, setMyTag] = useState<string | null>(null),
+    [claimInput, setClaimInput] = useState(""),
+    [claimDismissed, setClaimDismissed] = useState(false),
+    // What the published build is, if the check got an answer. Null means the
+    // check has not run or could not be made — never "you are up to date",
+    // which would be a claim this app did not verify.
+    [update, setUpdate] = useState<upd.UpdateDecision | null>(null),
+    [updateStage, setUpdateStage] = useState<
+      "idle" | "downloading" | "verifying" | "installing"
+    >("idle"),
+    [updateProgress, setUpdateProgress] = useState(0),
     [assetSymbol, setAssetSymbol] = useState("USDG"),
     [privateAsset, setPrivateAsset] = useState<"ETH" | "TERA">("ETH"),
     [sendMode, setSendMode] = useState<"public" | "private">("public");
@@ -146,6 +171,11 @@ function Wallet() {
     setTokenInput("");
     setAmount("");
     setRecipient("");
+    setRecipientKind("address");
+    setTagLookup({ state: "idle" });
+    setMyTag(null);
+    setClaimInput("");
+    setClaimDismissed(false);
     setError("");
     setPage("home");
     setFlowStep(0);
@@ -157,6 +187,11 @@ function Wallet() {
       setPinWallet(present && (await vault.usesPin()));
     });
   }
+  useEffect(() => {
+    // Asked once, on launch, and never retried in a loop: an update is not
+    // urgent enough to keep a phone talking to the network about it.
+    void upd.checkForUpdate().then(setUpdate);
+  }, []);
   useEffect(() => {
     vault
       .hasWallet()
@@ -273,6 +308,16 @@ function Wallet() {
       );
     if (result[1].status === "fulfilled") setPrices(result[1].value.prices || { USDG: 1 });
     setAssets(supported);
+    // Whether this wallet already has a name. Read from the registry, and a
+    // failure leaves it unknown rather than answering "no" — an owner who
+    // already holds a tag must not be asked to claim one over a dropped call.
+    if (tagsAvailable())
+      await tags
+        .tagOf(address)
+        .then((held) => {
+          if (version === vault.sessionVersion()) setMyTag(held);
+        })
+        .catch(() => {});
   }
   async function pullRefresh() {
     setRefreshing(true);
@@ -302,6 +347,38 @@ function Wallet() {
     const n = parseUnits(value, decimals).toString();
     positive(n);
     return n;
+  }
+  /**
+   * Check the destination before the review sheet, on the screen where it was
+   * typed. An address is checked for shape; a tag is resolved against the
+   * registry and the address it resolved to is shown, because that address is
+   * what the owner is actually agreeing to.
+   */
+  async function resolveRecipientStep() {
+    if (recipientKind === "address") {
+      setTagLookup({ state: "idle" });
+      if (isAddress(recipient.trim())) return true;
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setNotice({
+        title: t("Check the address", "请检查地址"),
+        body: t("Enter a valid recipient address.", "请输入有效收款地址。"),
+        tone: "error",
+      });
+      return false;
+    }
+    const typed = recipient.trim();
+    setTagLookup({ state: "looking", tag: typed.replace(/^@+/, "") });
+    try {
+      const found = await tags.resolveTag(typed);
+      setTagLookup({ state: "found", tag: found.tag, address: found.address });
+      return true;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : t("Lookup failed.", "查询失败。");
+      setTagLookup({ state: "error", message });
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setNotice({ title: t("Tag not found", "未找到标签"), body: message, tone: "error" });
+      return false;
+    }
   }
   function continueSend() {
     if (flowStep === 0) {
@@ -348,26 +425,25 @@ function Wallet() {
       return;
     }
     if (flowStep === 3) {
-      if (!isAddress(recipient.trim())) {
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        setNotice({
-          title: t("Invalid address", "无效地址"),
-          body: t("Enter a valid recipient EVM address.", "请输入有效的 EVM 收款地址。"),
-          tone: "error",
-        });
-        return;
-      }
-      setFlowStep(4);
+      void (async () => {
+        if (await resolveRecipientStep()) setFlowStep(4);
+      })();
       return;
     }
   }
   async function prepareTransfer(guard: () => void) {
+    // Resolved again here rather than reusing what the previous screen found.
+    // A tag can be released and re-claimed between the two, and the address
+    // that gets signed must be the one the registry holds now.
+    const destination =
+      recipientKind === "tag" ? (await tags.resolveTag(recipient)).address : recipient.trim();
+    guard();
     const input = {
       ownerAddress: owner,
       accountAddress: owner,
       assetAddress: selectedAsset.address,
       actionType: "TRANSFER",
-      recipient: recipient.trim(),
+      recipient: destination,
       amount: units(amount, selectedAsset.decimals),
     };
     transferTx(input.assetAddress as Address, input.recipient as Address, input.amount);
@@ -379,6 +455,59 @@ function Wallet() {
     await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, proposal] });
     guard();
     showProposal(proposal);
+  }
+  /**
+   * Claim a name for this wallet.
+   *
+   * Signed here with the owner's key and submitted by Tera, which pays the
+   * gas. Tera cannot alter what was signed — the registry checks the owner's
+   * signature, not the sender's — so the most it can do is decline.
+   */
+  async function claimTagNow(guard: () => void) {
+    const account = vault.currentAccount();
+    const { tag, txHash } = await tags.claimTag(account as never, claimInput);
+    guard();
+    setMyTag(tag);
+    setClaimInput("");
+    setClaimDismissed(true);
+    setNotice({
+      title: t("Tag claimed", "标签已领取"),
+      body: t(
+        `${tags.display(tag)} now points at this wallet. Transaction ${txHash.slice(0, 10)}…`,
+        `${tags.display(tag)} 现已指向此钱包。交易 ${txHash.slice(0, 10)}…`,
+      ),
+      tone: "success",
+    });
+    setPage("home");
+  }
+  /**
+   * Take whichever update is actually available.
+   *
+   * JavaScript first, because it is seconds rather than tens of megabytes and
+   * needs no install screen. If there is none waiting — which is the case for
+   * anything that changed the app's native side — the APK is downloaded here,
+   * checked against the digest the build published, and handed to Android's
+   * installer, which shows its own screen that no app can skip.
+   */
+  async function runUpdate(guard: () => void) {
+    if (!update) return;
+    if (upd.javascriptUpdatesEnabled()) {
+      // Applying restarts the app, so this never runs while something is in
+      // flight: `run` holds the pending lock for the whole call.
+      const applied = await upd.applyJavascriptUpdate();
+      guard();
+      if (applied === "applied") return;
+    }
+    setUpdateStage("downloading");
+    setUpdateProgress(0);
+    try {
+      const file = await upd.downloadApk(update.manifest, setUpdateProgress);
+      guard();
+      setUpdateStage("installing");
+      await upd.installApk(file);
+    } finally {
+      setUpdateStage("idle");
+    }
   }
   function showProposal(p: any) {
     const steps = verifyProposal(p, owner);
@@ -444,12 +573,19 @@ function Wallet() {
     const asset = selectedAsset.symbol;
     const decimals = selectedAsset.decimals;
     const raw = units(amount, decimals);
-    check(isAddress(recipient.trim()), t("Enter a valid recipient address.", "请输入有效收款地址。"));
+    // Resolved here for the same reason a direct transfer resolves again: the
+    // recipient screen may have been left on a tag, and a tag can change hands
+    // between that screen and this one. The payout goes where the registry
+    // points now, not where it pointed when the owner typed the name.
+    const destination =
+      recipientKind === "tag" ? (await tags.resolveTag(recipient)).address : recipient.trim();
+    guard();
+    check(isAddress(destination), t("Enter a valid recipient address.", "请输入有效收款地址。"));
     const created = await api("/api/private-send/jobs", {
       asset,
       amount: raw,
       senderAddress: owner,
-      recipientAddress: recipient.trim(),
+      recipientAddress: destination,
     });
     guard();
     const tx = created.preparedDeposit;
@@ -458,7 +594,7 @@ function Wallet() {
       rows: [
         [t("Asset", "资产"), asset],
         [t("Amount", "金额"), `${amount} ${asset}`],
-        [t("Recipient", "收款方"), recipient.trim()],
+        [t("Recipient", "收款方"), destination],
         [t("Routing", "路由"), t("Intake → payout → recipient", "接收 → 支付 → 收款方")],
       ],
       steps: [{ to: tx.to, data: tx.data, value: BigInt(tx.value).toString(), chainId: chain.id }],
@@ -914,6 +1050,55 @@ function Wallet() {
     if (page === "home")
       return (
         <>
+          {/*
+            Asked for, not demanded. This wallet holds money, and a screen that
+            refused to open until a name was claimed would put a backend call
+            between an owner and their own funds. It reappears every launch
+            until it is dealt with, which gets to the same place without that.
+          */}
+          {update && update.state !== upd.CURRENT && (
+            <View style={s.panel}>
+              <Text style={s.text}>
+                {update.state === upd.REQUIRED
+                  ? t("Update required", "需要更新")
+                  : t("Update available", "有可用更新")}
+              </Text>
+              <Text style={s.small}>
+                {update.state === upd.REQUIRED
+                  ? t(
+                      "This build is below the supported version. Update to keep using it safely.",
+                      "此版本低于受支持的版本。请更新以继续安全使用。",
+                    )
+                  : t(
+                      `Version ${update.manifest.versionName} is published.`,
+                      `版本 ${update.manifest.versionName} 已发布。`,
+                    )}
+              </Text>
+              <Button primary onPress={() => setPage("update")}>
+                {t("Update", "更新")}
+              </Button>
+            </View>
+          )}
+          {tagsAvailable() && myTag === null && !claimDismissed && (
+            <View style={s.panel}>
+              <Text style={s.text}>{t("Claim your Tera tag", "领取您的 Tera 标签")}</Text>
+              <Text style={s.small}>
+                {t(
+                  "A tag lets people send to a name instead of your address. It is public, and it points at this wallet on Robinhood Chain.",
+                  "标签让他人可以向名称而非地址转账。它是公开的，并在 Robinhood Chain 上指向此钱包。",
+                )}
+              </Text>
+              <Button primary onPress={() => setPage("tag")}>
+                {t("Claim a tag", "领取标签")}
+              </Button>
+              <Button onPress={() => setClaimDismissed(true)}>{t("Not now", "暂不")}</Button>
+            </View>
+          )}
+          {tagsAvailable() && myTag && (
+            <Pressable accessibilityRole="button" onPress={() => setPage("tag")}>
+              <Text style={s.eyebrow}>{tags.display(myTag)}</Text>
+            </Pressable>
+          )}
           <View
             style={{
               backgroundColor: colors.dark,
@@ -1013,6 +1198,105 @@ function Wallet() {
           </View>
         </>
       );
+    if (page === "update") {
+      const kind = upd.javascriptUpdatesEnabled() ? upd.JAVASCRIPT : upd.NATIVE;
+      const expectation = upd.EXPECTATIONS[kind];
+      return (
+        <>
+          {title(
+            update?.state === upd.REQUIRED ? "Update required." : "Update available.",
+            update?.state === upd.REQUIRED ? "需要更新。" : "有可用更新。",
+            update ? `${update.manifest.versionName} · ${update.reason}` : "",
+          )}
+          <View style={s.panel}>
+            <Row label={t("Installed", "已安装")} value={String(upd.installedVersionCode() ?? "—")} />
+            <Row
+              label={t("Published", "已发布")}
+              value={String(update?.manifest.versionCode ?? "—")}
+            />
+            {update?.manifest.sizeBytes ? (
+              <Row
+                label={t("Download", "下载大小")}
+                value={`${Math.round(update.manifest.sizeBytes / 1e6)} MB`}
+              />
+            ) : null}
+          </View>
+          {/*
+            What will happen, in the app's own words, before the owner starts.
+            The native path cannot avoid Android's install screen and does not
+            pretend it can.
+          */}
+          <Text style={s.text}>{expectation.title}</Text>
+          <Text style={s.small}>{expectation.detail}</Text>
+          <Text style={s.small}>{expectation.limit}</Text>
+          {kind === upd.NATIVE && (
+            <Text style={s.small}>
+              {t(
+                "The file is checked against the hash published by the build that produced it. If it does not match, it is deleted and not installed.",
+                "文件将与构建时发布的哈希值比对。若不匹配，将被删除且不会安装。",
+              )}
+            </Text>
+          )}
+          {updateStage === "downloading" && (
+            <Text style={s.small}>
+              {t(
+                `Downloading… ${Math.round(updateProgress * 100)}%`,
+                `正在下载… ${Math.round(updateProgress * 100)}%`,
+              )}
+            </Text>
+          )}
+          {updateStage === "installing" && (
+            <Text style={s.small}>
+              {t(
+                "Verified. Android will now ask you to confirm the install.",
+                "校验通过。Android 现在会请您确认安装。",
+              )}
+            </Text>
+          )}
+          {update ? action("Update", "更新", runUpdate) : null}
+          <Button onPress={() => setPage("home")}>{t("Back", "返回")}</Button>
+        </>
+      );
+    }
+    if (page === "tag") {
+      return (
+        <>
+          {title(
+            "Your tag.",
+            "您的标签。",
+            myTag ? tags.display(myTag) : t("Not claimed yet", "尚未领取"),
+          )}
+          <Field
+            label={t("Tag", "标签")}
+            value={claimInput}
+            onChangeText={setClaimInput}
+            placeholder="@astra"
+          />
+          <Text style={s.small}>
+            {t(
+              "Three to twenty characters: letters, numbers and underscores, starting with a letter. Names that read alike are treated as the same name, so @astr0 cannot be claimed while @astro exists.",
+              "3 至 20 个字符：字母、数字和下划线，须以字母开头。外观相近的名称视为同一名称，因此 @astro 存在时无法领取 @astr0。",
+            )}
+          </Text>
+          <Text style={s.small}>
+            {t(
+              "A tag is public and permanent while you hold it: anyone can see which address it points at. It names this wallet on Robinhood Chain only — it is not an address on any other chain, and it cannot be used as a bridge destination.",
+              "标签是公开的，在您持有期间任何人都可查看其指向的地址。它仅在 Robinhood Chain 上标识此钱包，并非其他链上的地址，也不能用作跨链目标地址。",
+            )}
+          </Text>
+          {myTag && (
+            <Text style={s.small}>
+              {t(
+                `Claiming a new tag releases ${tags.display(myTag)} in the same transaction.`,
+                `领取新标签将在同一笔交易中释放 ${tags.display(myTag)}。`,
+              )}
+            </Text>
+          )}
+          {action("Claim this tag", "领取此标签", claimTagNow)}
+          <Button onPress={() => setPage("home")}>{t("Back", "返回")}</Button>
+        </>
+      );
+    }
     if (page === "receive")
       return (
         <>
@@ -1279,23 +1563,66 @@ function Wallet() {
           )}
           {flowStep === 3 && (
             <View style={{ gap: 12 }}>
+              {tagsAvailable() && (
+                <>
+                  <Text style={s.eyebrow}>{t("SEND TO", "发送至")}</Text>
+                  <Choices
+                    options={[t("Tera tag", "Tera 标签"), t("Wallet address", "钱包地址")]}
+                    value={
+                      recipientKind === "tag"
+                        ? t("Tera tag", "Tera 标签")
+                        : t("Wallet address", "钱包地址")
+                    }
+                    select={(choice) => {
+                      setRecipientKind(choice === t("Tera tag", "Tera 标签") ? "tag" : "address");
+                      setRecipient("");
+                      setTagLookup({ state: "idle" });
+                    }}
+                  />
+                </>
+              )}
               <Field
-                label={t("Receiving wallet address", "收款钱包地址")}
+                label={
+                  recipientKind === "tag"
+                    ? t("Tera tag", "Tera 标签")
+                    : t("Receiving wallet address", "收款钱包地址")
+                }
                 value={recipient}
-                onChangeText={setRecipient}
-                placeholder="0x..."
+                placeholder={recipientKind === "tag" ? "@astra" : "0x…"}
+                onChangeText={(value) => {
+                  setRecipient(value);
+                  // Any edit invalidates what the registry said a moment ago.
+                  // The lookup runs again when the owner continues, and the
+                  // stale address must not survive until then.
+                  if (tagLookup.state !== "idle") setTagLookup({ state: "idle" });
+                }}
               />
-              <Text style={s.small}>
-                {isPrivate
-                  ? t(
-                      "Enter the final destination address. Tera will route the payout here.",
-                      "请输入最终收款地址。Tera 将代币路由至此处。",
-                    )
-                  : t(
-                      "Enter the destination Robinhood Chain address.",
-                      "请输入 Robinhood Chain 收款地址。",
-                    )}
-              </Text>
+              {recipientKind === "tag" ? (
+                <Text style={[s.small, tagLookup.state === "error" && { color: colors.danger }]}>
+                  {tagLookup.state === "looking"
+                    ? t("Looking up the tag…", "正在查询标签…")
+                    : tagLookup.state === "found"
+                      ? `${tags.display(tagLookup.tag)} · ${tagLookup.address}`
+                      : tagLookup.state === "error"
+                        ? tagLookup.message
+                        : t(
+                            "A tag is looked up on Robinhood Chain. You will see the address it resolves to before you sign.",
+                            "标签将在 Robinhood Chain 上查询。签名前会显示其对应地址。",
+                          )}
+                </Text>
+              ) : (
+                <Text style={s.small}>
+                  {isPrivate
+                    ? t(
+                        "Enter the final destination address. Tera will route the payout here.",
+                        "请输入最终收款地址。Tera 将代币路由至此处。",
+                      )
+                    : t(
+                        "Enter the destination Robinhood Chain address.",
+                        "请输入 Robinhood Chain 收款地址。",
+                      )}
+                </Text>
+              )}
             </View>
           )}
           {flowStep === 4 && (
@@ -1313,7 +1640,13 @@ function Wallet() {
                 label={t("Amount", "金额")}
                 value={`${amount || "0"} ${selectedAsset.symbol}`}
               />
-              <Row label={t("To", "收款方")} value={recipient || "—"} />
+              {tagLookup.state === "found" && (
+                <Row label={t("Tag", "标签")} value={tags.display(tagLookup.tag)} />
+              )}
+              <Row
+                label={t("To", "收款方")}
+                value={(tagLookup.state === "found" ? tagLookup.address : recipient) || "—"}
+              />
               {isPrivate && (
                 <>
                   <Row

@@ -229,3 +229,41 @@ test("every topic and destination is reachable from a plausible question", () =>
     assert.equal(result.kind, NAVIGATE, destination.page);
   }
 });
+
+test("a transfer to a tag carries the name, never an address", () => {
+  const result = parse("send 50 usdg to @astra and sign it");
+  assert.equal(result.kind, COMPOSE);
+  assert.deepEqual(result.slots, { amount: "50", symbol: "USDG", recipientTag: "astra" });
+  // Resolving is a network call against the registry. This module does not
+  // make one, so it must not hand back something that looks like a resolved
+  // recipient.
+  assert.equal("recipient" in result.slots, false);
+  assert.equal(respond(result, sources), null);
+});
+
+test('a bare word after "to" is not read as a recipient', () => {
+  // "send 50 usdg to astra" could be a tag, a typo, or a sentence about a
+  // person. A parser that guessed here would fill a payment form with a name
+  // the owner never confirmed.
+  assert.equal(parse("send 50 usdg to astra").matched, false);
+  assert.equal(parse("send 50 usdg @astra").matched, false);
+});
+
+test("a tag transfer accepts the same amount and symbol shapes as an address one", () => {
+  assert.equal(parse("pay 1,250 to @astra").slots.amount, "1250");
+  assert.equal(parse("pay 1,250 to @astra").slots.symbol, "");
+  assert.equal(parse("transfer 0.5 ETH to @astra").slots.recipientTag, "astra");
+  assert.equal(parse("send 50 USDG to @ASTRA").slots.recipientTag, "astra");
+});
+
+test("a malformed tag is not a transfer at all", () => {
+  // Same grammar as tags.js: three characters, starts with a letter, no
+  // trailing underscore. A near miss falls through rather than composing
+  // something that cannot resolve.
+  assert.equal(parse("send 50 usdg to @as").matched, false);
+  assert.equal(parse("send 50 usdg to @1astra").matched, false);
+  // Not silently truncated to "@astra" either: the word boundary refuses the
+  // whole sentence, so a mistyped tag cannot become a valid one somebody
+  // else holds.
+  assert.equal(parse("send 50 usdg to @astra_").matched, false);
+});
