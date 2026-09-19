@@ -1,77 +1,45 @@
-// Tags, from the service's side.
+// Tags, and who decides what one means.
 //
-// The registry is the contract. This file reads it, relays claims into it, and
-// keeps a table that mirrors it — and the ordering of those three matters:
+// This service is the registry. A row in `tags` is the whole of the fact that
+// `@astra` is an address, and there is nothing else to check it against.
 //
-//   A resolve is answered from the chain, every time. The index is never
-//   consulted for "which address is @astra", because an index that lags by one
-//   block would answer with the previous owner of a name, and the one thing
-//   this service must not do is name the wrong recipient. If the RPC is
-//   unreachable the route says so rather than falling back.
+// That is worth stating plainly, because it is the weak point of this design
+// and the wallet's other answers do not work this way: a balance is read from
+// the chain, a transfer is rebuilt locally from calldata, a receipt is checked
+// against a published hash. A tag is none of those. If this database is wrong
+// — edited, restored from a stale backup, or tampered with — a wallet asking
+// "who is @astra" is told an address it cannot verify, and the owner sees a
+// name they trust above forty characters they will not read.
 //
-//   The index exists for the questions where being a little stale is harmless:
-//   prefix search, and listing. Everything it returns is labelled as coming
-//   from the index.
+// Three things follow, and each one is a rule below rather than a convention:
 //
-//   Relaying is a favour, not an authority. `claimFor` carries the owner's
-//   EIP-712 signature, so the most this service can do is decline to pay the
-//   gas. It cannot choose the name, the address, or the moment — and a claim
-//   is simulated before it is sent, so a signature that would revert costs
-//   nothing.
+//   Every answer says where it came from. `source: "service"` goes out with
+//   each resolution, and the surfaces print it. An owner should know they are
+//   trusting Tera for this and not for a balance.
+//
+//   Claims are signed by the owner. This service cannot bind a name to an
+//   address nobody asked it to: the claim carries a `personal_sign` over the
+//   exact text in `tags.js`, recovered here, and a claim it cannot recover is
+//   refused. It protects against a claim being forged in transit, not against
+//   this service later rewriting the row it stored — nothing here can.
+//
+//   Nothing is resolved without a ledger. If the database is unreachable the
+//   route says so, because "no such tag" and "we could not look" must not be
+//   the same answer at a payment form.
+//
+// The address a transfer is built from is still the address, never the tag —
+// see `validation.ts` on Android, which rebuilds calldata from what it was
+// given and would not care if the name changed underneath it.
 
-import {
-  createPublicClient,
-  createWalletClient,
-  getAddress,
-  http,
-  parseAbi,
-  parseAbiItem,
-  type Address,
-  type Hex,
-} from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { getAddress, isAddress, verifyMessage, type Hex } from "viem";
 import pool from "./db";
 import { env } from "./env";
-import { parseTag, skeleton } from "../../public/tera/core/tags.js";
+import { claimMessage, parseTag, releaseMessage, skeleton } from "../../public/tera/core/tags.js";
 
-export const REGISTRY_ABI = parseAbi([
-  "function resolve(string tag) view returns (address)",
-  "function tagOf(address owner) view returns (string)",
-  "function available(string tag) view returns (bool)",
-  "function isReserved(string tag) view returns (bool)",
-  "function nonces(address owner) view returns (uint256)",
-  "function claimFor(string tag, address owner, uint256 deadline, bytes signature)",
-  "function releaseFor(address owner, uint256 deadline, bytes signature)",
-  "event TagClaimed(bytes32 indexed tagHash, address indexed owner, string tag)",
-  "event TagReleased(bytes32 indexed tagHash, address indexed owner, string tag)",
-]);
+/** How long a signed claim stays good for. Matches the deletion request window. */
+const SIGNATURE_WINDOW_MS = 5 * 60_000;
 
-const CLAIMED = parseAbiItem(
-  "event TagClaimed(bytes32 indexed tagHash, address indexed owner, string tag)",
-);
-const RELEASED = parseAbiItem(
-  "event TagReleased(bytes32 indexed tagHash, address indexed owner, string tag)",
-);
-
-/** Blocks per indexing pass. Bounded so a cold start cannot ask for the chain in one call. */
-const INDEX_WINDOW = 2_000n;
-
-/** Relayed claims allowed per wallet per day. A rename is legitimate; forty are not. */
-const RELAY_DAILY_LIMIT = 3;
-
-const client = createPublicClient({
-  transport: http(env.rhcRpcUrl, { timeout: 10_000, retryCount: 1 }),
-});
-
-const isAddressLike = (value: string) => /^0x[\da-fA-F]{40}$/.test(value);
-const isKey = (value: string) => /^0x[\da-fA-F]{64}$/.test(value);
-
-/** Reading works with just an address; relaying additionally needs a funded key. */
-export const enabled = () => env.tagsEnabled && isAddressLike(env.tagRegistryAddress);
-export const relayEnabled = () => enabled() && isKey(env.tagRelayerPrivateKey);
-
-const registry = () => getAddress(env.tagRegistryAddress);
-const relayer = () => privateKeyToAccount(env.tagRelayerPrivateKey as Hex);
+export const enabled = () => Boolean(env.tagsEnabled && pool);
 
 export class TagServiceError extends Error {}
 
@@ -86,232 +54,158 @@ function canonical(input: unknown) {
   return parsed.tag as string;
 }
 
+function owned(input: unknown) {
+  must(
+    typeof input === "string" && isAddress(input, { strict: false }),
+    "A wallet address is required.",
+  );
+  return getAddress(input as string);
+}
+
 export function config() {
   return {
     enabled: enabled(),
-    relayEnabled: relayEnabled(),
-    registry: enabled() ? registry() : null,
     chainId: env.rhcChainId,
+    // Said in the config so a surface can show it before an owner claims
+    // anything, not only in the small print of a resolution.
+    authority:
+      "Tera keeps the tag register. A tag is not an on-chain name: resolving one means trusting this service to answer honestly, unlike a balance or a receipt.",
     note: "A tag names one address on Robinhood Chain. It is not an address on any other chain, and it is public once claimed.",
   };
 }
 
-// --- Reading, always from the chain ------------------------------------------
+// --- Reading ------------------------------------------------------------------
 
 export async function resolveTag(input: unknown) {
   const tag = canonical(input);
-  const address = await client.readContract({
-    address: registry(),
-    abi: REGISTRY_ABI,
-    functionName: "resolve",
-    args: [tag],
-  });
-  const blockNumber = await client.getBlockNumber();
+  must(pool, "The tag register is unavailable.");
+  const found = await pool!.query("SELECT owner_address FROM tags WHERE tag=$1", [tag]);
   return {
     tag,
-    address: address === "0x0000000000000000000000000000000000000000" ? null : getAddress(address),
-    // Both returned so a receipt can record what a name meant and when. A tag
-    // can be released and re-claimed, which makes an undated resolution a
-    // claim about the present tense only.
-    blockNumber: blockNumber.toString(),
+    address: found.rows[0] ? getAddress(found.rows[0].owner_address) : null,
     resolvedAt: new Date().toISOString(),
-    source: "chain" as const,
+    source: "service" as const,
   };
 }
 
 export async function tagForAddress(input: unknown) {
-  must(typeof input === "string" && isAddressLike(input), "A wallet address is required.");
-  const owner = getAddress(input as string);
-  const tag = await client.readContract({
-    address: registry(),
-    abi: REGISTRY_ABI,
-    functionName: "tagOf",
-    args: [owner],
-  });
-  return { address: owner, tag: tag || null, source: "chain" as const };
+  const address = owned(input);
+  must(pool, "The tag register is unavailable.");
+  const found = await pool!.query("SELECT tag FROM tags WHERE owner_address=$1", [address]);
+  return { address, tag: found.rows[0]?.tag ?? null, source: "service" as const };
 }
 
 export async function availability(input: unknown) {
-  // Shape first: it is free, and it gives the owner the specific reason rather
-  // than a bare "unavailable" from a contract that cannot explain itself.
+  // Shape first: it is free, and it names the specific problem rather than
+  // answering a bare "unavailable".
   const parsed = parseTag(input);
   if (!parsed.ok) return { tag: null, available: false, reason: parsed.reason };
-  const free = await client.readContract({
-    address: registry(),
-    abi: REGISTRY_ABI,
-    functionName: "available",
-    args: [parsed.tag],
-  });
+  must(pool, "The tag register is unavailable.");
+  const clash = await pool!.query("SELECT tag FROM tags WHERE tag=$1 OR skeleton=$2", [
+    parsed.tag,
+    skeleton(parsed.tag),
+  ]);
+  const free = clash.rowCount === 0;
   return {
     tag: parsed.tag,
     available: free,
     reason: free ? "" : "This tag, or one that reads like it, is already taken.",
-    source: "chain" as const,
+    source: "service" as const,
   };
 }
 
-export async function nonceOf(input: unknown) {
-  must(typeof input === "string" && isAddressLike(input), "A wallet address is required.");
-  const owner = getAddress(input as string);
-  const nonce = await client.readContract({
-    address: registry(),
-    abi: REGISTRY_ABI,
-    functionName: "nonces",
-    args: [owner],
-  });
-  return { address: owner, nonce: Number(nonce), chainId: env.rhcChainId, registry: registry() };
-}
-
-// --- Relaying ----------------------------------------------------------------
-
-async function withinRelayLimit(owner: Address) {
-  if (!pool) return;
-  const used = await pool.query(
-    "SELECT COUNT(*)::int AS count FROM tag_claim_relays WHERE owner_address=$1 AND created_at > NOW() - INTERVAL '1 day'",
-    [owner],
-  );
-  must(
-    (used.rows[0]?.count ?? 0) < RELAY_DAILY_LIMIT,
-    "This wallet has used its relayed claims for today. Claim from the wallet directly, or try again tomorrow.",
-  );
-}
-
-/**
- * Submit somebody else's signed claim and pay for it.
- *
- * Simulated first. A bad signature, a taken name or a passed deadline then
- * costs a failed read instead of a reverted transaction, and the caller gets
- * the contract's own error rather than a hash to go and look up.
- */
-export async function relayClaim(body: {
-  tag?: unknown;
-  owner?: unknown;
-  deadline?: unknown;
-  signature?: unknown;
-}) {
-  must(relayEnabled(), "Relayed claims are unavailable.");
-  const tag = canonical(body.tag);
-  must(typeof body.owner === "string" && isAddressLike(body.owner), "A wallet address is required.");
-  const owner = getAddress(body.owner as string);
-  const deadline = Number(body.deadline);
-  must(Number.isSafeInteger(deadline) && deadline > 0, "A deadline in seconds is required.");
-  must(
-    deadline > Math.floor(Date.now() / 1000),
-    "This claim has expired. Sign a new one and try again.",
-  );
-  must(
-    typeof body.signature === "string" && /^0x[\da-fA-F]+$/.test(body.signature),
-    "A signature is required.",
-  );
-  const signature = body.signature as Hex;
-
-  await withinRelayLimit(owner);
-
-  const account = relayer();
-  const { request } = await client.simulateContract({
-    account,
-    address: registry(),
-    abi: REGISTRY_ABI,
-    functionName: "claimFor",
-    args: [tag, owner, BigInt(deadline), signature],
-  });
-
-  const wallet = createWalletClient({ account, transport: http(env.rhcRpcUrl) });
-  const txHash = await wallet.writeContract(request);
-
-  if (pool) {
-    await pool.query(
-      "INSERT INTO tag_claim_relays(owner_address,tag,tx_hash) VALUES($1,$2,$3)",
-      [owner, tag, txHash],
-    );
-  }
-  return { tag, owner, txHash, paidBy: account.address };
-}
-
-// --- The index ---------------------------------------------------------------
-
 export async function searchTags(prefix: unknown, limit = 10) {
-  if (!pool) return { tags: [], source: "index" as const };
+  must(pool, "The tag register is unavailable.");
   const parsed = String(prefix ?? "")
     .normalize("NFKC")
     .trim()
     .replace(/^@+/, "")
     .toLowerCase();
-  if (!/^[a-z][a-z0-9_]{0,19}$/.test(parsed)) return { tags: [], source: "index" as const };
-  const rows = await pool.query(
+  if (!/^[a-z][a-z0-9_]{0,19}$/.test(parsed)) return { tags: [], source: "service" as const };
+  const rows = await pool!.query(
     "SELECT tag, owner_address FROM tags WHERE tag LIKE $1 ORDER BY LENGTH(tag), tag LIMIT $2",
     [`${parsed}%`, Math.min(Math.max(Number(limit) || 10, 1), 25)],
   );
   return {
     tags: rows.rows.map((row) => ({ tag: row.tag, address: getAddress(row.owner_address) })),
-    // Said out loud on every response: a name found here still has to be
-    // resolved against the chain before anything is sent to it.
-    source: "index" as const,
-    note: "From Tera's index, which can lag the chain. Resolve before sending.",
+    source: "service" as const,
   };
 }
 
-/**
- * Bring the table up to the chain.
- *
- * Events are applied strictly in log order, which is what makes a rename
- * correct: the contract emits the release before the claim, so replaying them
- * out of order would leave the old name pointing at a live owner.
- */
-export async function syncTagIndex() {
-  if (!enabled() || !pool) return { synced: false as const };
-  const cursor = await pool.query("SELECT last_block FROM tag_index_cursor WHERE id = TRUE");
-  const head = await client.getBlockNumber();
-  const last = BigInt(cursor.rows[0]?.last_block ?? 0);
-  const from = last + 1n;
-  if (from > head) return { synced: true as const, applied: 0, caughtUp: true as const };
-  const to = from + INDEX_WINDOW - 1n > head ? head : from + INDEX_WINDOW - 1n;
+// --- Writing --------------------------------------------------------------------
 
-  const logs = await client.getLogs({
-    address: registry(),
-    events: [CLAIMED, RELEASED],
-    fromBlock: from,
-    toBlock: to,
-  });
-  logs.sort((a, b) =>
-    a.blockNumber === b.blockNumber
-      ? Number(a.logIndex) - Number(b.logIndex)
-      : Number(a.blockNumber! - b.blockNumber!),
+/**
+ * Recover the signer of a claim, or refuse.
+ *
+ * The message is rebuilt here from the tag and address this service is about
+ * to act on — never taken from the request — so a signature over some other
+ * text cannot be replayed to bind a name the owner did not agree to.
+ */
+async function signedBy(
+  message: string,
+  address: `0x${string}`,
+  signature: unknown,
+  timestamp: number,
+) {
+  must(
+    typeof signature === "string" && /^0x[\da-fA-F]{130}$/.test(signature),
+    "A wallet signature is required.",
+  );
+  must(
+    Number.isSafeInteger(timestamp) && Math.abs(Date.now() - timestamp) < SIGNATURE_WINDOW_MS,
+    "This request has expired. Sign a new one and try again.",
+  );
+  let valid = false;
+  try {
+    valid = await verifyMessage({ address, message, signature: signature as Hex });
+  } catch {
+    valid = false;
+  }
+  must(valid, "That signature did not match this wallet.");
+}
+
+/**
+ * Bind a name to an address.
+ *
+ * One tag per address: claiming a second releases the first in the same
+ * transaction, so an owner changing name never ends up holding two or none.
+ * The skeleton column carries the uniqueness constraint for lookalikes, which
+ * makes the collision the database's job rather than a check to remember.
+ */
+export async function claimTag(body: {
+  tag?: unknown;
+  owner?: unknown;
+  timestamp?: unknown;
+  signature?: unknown;
+}) {
+  must(enabled(), "Tags are unavailable.");
+  const tag = canonical(body.tag);
+  const owner = owned(body.owner);
+  const timestamp = Number(body.timestamp);
+  await signedBy(
+    claimMessage({ tag, address: owner, timestamp }),
+    owner,
+    body.signature,
+    timestamp,
   );
 
-  const db = await pool.connect();
+  const db = await pool!.connect();
   try {
     await db.query("BEGIN");
-    for (const log of logs) {
-      const parsed = log as unknown as {
-        eventName: string;
-        args: { owner: Address; tag: string };
-        blockNumber: bigint;
-        logIndex: number;
-        transactionHash: Hex;
-      };
-      const tag = String(parsed.args?.tag ?? "");
-      if (!tag) continue;
-      if (parsed.eventName === "TagReleased") {
-        await db.query("DELETE FROM tags WHERE tag=$1", [tag]);
-        continue;
-      }
-      const owner = getAddress(parsed.args.owner);
-      // A wallet holds one tag, so an older row for the same owner is gone by
-      // definition — the contract released it in the same transaction.
-      await db.query("DELETE FROM tags WHERE owner_address=$1", [owner]);
-      await db.query(
-        `INSERT INTO tags(tag,skeleton,owner_address,block_number,log_index,tx_hash)
-         VALUES($1,$2,$3,$4,$5,$6)
-         ON CONFLICT (tag) DO UPDATE SET owner_address=EXCLUDED.owner_address,
-           block_number=EXCLUDED.block_number, log_index=EXCLUDED.log_index,
-           tx_hash=EXCLUDED.tx_hash, updated_at=NOW()`,
-        [tag, skeleton(tag), owner, parsed.blockNumber.toString(), parsed.logIndex, parsed.transactionHash],
-      );
+    const clash = await db.query(
+      "SELECT tag, owner_address FROM tags WHERE (tag=$1 OR skeleton=$2) AND owner_address<>$3",
+      [tag, skeleton(tag), owner],
+    );
+    if (clash.rowCount) {
+      throw new TagServiceError("This tag, or one that reads like it, is already taken.");
     }
-    await db.query("UPDATE tag_index_cursor SET last_block=$1, updated_at=NOW() WHERE id = TRUE", [
-      to.toString(),
-    ]);
+    // The previous name goes back to the pool in the same transaction, so a
+    // failure here cannot leave the owner with neither.
+    await db.query("DELETE FROM tags WHERE owner_address=$1", [owner]);
+    await db.query(
+      "INSERT INTO tags(tag, skeleton, owner_address, claimed_at, updated_at) VALUES($1,$2,$3,NOW(),NOW())",
+      [tag, skeleton(tag), owner],
+    );
     await db.query("COMMIT");
   } catch (error) {
     await db.query("ROLLBACK").catch(() => {});
@@ -319,30 +213,30 @@ export async function syncTagIndex() {
   } finally {
     db.release();
   }
-  return { synced: true as const, applied: logs.length, caughtUp: to >= head };
+  return { tag, owner, claimedAt: new Date().toISOString() };
 }
 
-let indexing = false;
-
-export function startTagIndexer() {
-  if (!enabled() || !pool) return;
-  const tick = async () => {
-    if (indexing) return;
-    indexing = true;
-    try {
-      // Keep going while a cold start is still behind the head, but bounded:
-      // a chain this service cannot catch up with in one interval should fall
-      // behind visibly rather than spin.
-      for (let pass = 0; pass < 25; pass += 1) {
-        const result = await syncTagIndex();
-        if (!result.synced || result.caughtUp) break;
-      }
-    } catch (error) {
-      console.error("Tag index sync failed", error);
-    } finally {
-      indexing = false;
-    }
-  };
-  void tick();
-  setInterval(() => void tick(), env.tagIndexIntervalMs).unref();
+/** Give a tag up, returning the name and its lookalikes to the pool. */
+export async function releaseTag(body: {
+  tag?: unknown;
+  owner?: unknown;
+  timestamp?: unknown;
+  signature?: unknown;
+}) {
+  must(enabled(), "Tags are unavailable.");
+  const tag = canonical(body.tag);
+  const owner = owned(body.owner);
+  const timestamp = Number(body.timestamp);
+  await signedBy(
+    releaseMessage({ tag, address: owner, timestamp }),
+    owner,
+    body.signature,
+    timestamp,
+  );
+  const gone = await pool!.query("DELETE FROM tags WHERE tag=$1 AND owner_address=$2", [
+    tag,
+    owner,
+  ]);
+  must(gone.rowCount, "This wallet does not hold that tag.");
+  return { tag, owner, released: true };
 }

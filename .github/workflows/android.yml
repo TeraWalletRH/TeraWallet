@@ -31,9 +31,6 @@ jobs:
       EXPO_PUBLIC_API_URL: https://api.terawallet.app
       EXPO_PUBLIC_RPC_URL: https://rpc.mainnet.chain.robinhood.com
       EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY: ${{ vars.EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY || '0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05' }}
-      # Unset until TagRegistry is deployed: the app hides every tag control
-      # rather than offering a lookup it cannot make.
-      EXPO_PUBLIC_TAG_REGISTRY_ADDRESS: ${{ vars.EXPO_PUBLIC_TAG_REGISTRY_ADDRESS || '' }}
       # Unset means no JavaScript update channel, and the Update button falls
       # back to downloading a new APK.
       EXPO_PUBLIC_UPDATES_URL: ${{ vars.EXPO_PUBLIC_UPDATES_URL || '' }}

@@ -13,7 +13,6 @@ export * as ingress from "../../public/tera/core/ingress.js";
 export * as receipt from "../../public/tera/core/receipt.js";
 export * as parse from "../../public/tera/core/parse.js";
 export * as tags from "../../public/tera/core/tags.js";
-export * as tagsChain from "../../public/tera/core/tags-chain.js";
 
 // Re-exported by name because validation.ts and App.tsx use these directly and
 // a namespace would read worse at every call site.
