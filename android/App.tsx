@@ -57,6 +57,7 @@ const tokenImages: Record<string, any> = {
   NVDA: require("./assets/RH-RWA-Assets-Media/nvidia.png"),
   SPCX: require("./assets/RH-RWA-Assets-Media/spacex.png"),
   TSLA: require("./assets/RH-RWA-Assets-Media/tesla.png"),
+  TERA: require("./assets/icon.png"),
 };
 function TokenIcon({ symbol, size = 32 }: { symbol: string; size?: number }) {
   return (
@@ -113,7 +114,8 @@ function Wallet() {
   const [amount, setAmount] = useState(""),
     [recipient, setRecipient] = useState(""),
     [assetSymbol, setAssetSymbol] = useState("USDG"),
-    [privateAsset, setPrivateAsset] = useState<"ETH" | "TERA">("ETH");
+    [privateAsset, setPrivateAsset] = useState<"ETH" | "TERA">("ETH"),
+    [sendMode, setSendMode] = useState<"public" | "private">("public");
   const [destination, setDestination] = useState(8453),
     [outSymbol, setOutSymbol] = useState("ETH"),
     [trade, setTrade] = useState("BUY");
@@ -248,9 +250,16 @@ function Wallet() {
     const version = vault.sessionVersion();
     const registryResult = await api("/api/assets").catch(() => ({ assets: [] }));
     const registry: Asset[] = registryResult.assets || [];
+    const teraAsset: Asset = {
+      symbol: "TERA",
+      address: "0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8",
+      decimals: 18,
+      name: "Tera",
+    };
     const supported = [
       ...sources,
-      ...registry.filter((a) => !sources.some((s) => s.symbol === a.symbol)),
+      teraAsset,
+      ...registry.filter((a) => !sources.some((s) => s.symbol === a.symbol) && a.symbol !== "TERA"),
     ];
     const result = await Promise.allSettled([
       balances(address, supported),
@@ -295,36 +304,61 @@ function Wallet() {
     return n;
   }
   function continueSend() {
-    if (flowStep !== 1) {
-      setFlowStep((step) => step + 1);
+    if (flowStep === 0) {
+      if (sendMode === "private" && assetSymbol !== "ETH" && assetSymbol !== "TERA") {
+        setAssetSymbol("ETH");
+        setPrivateAsset("ETH");
+      }
+      setFlowStep(1);
       return;
     }
-    try {
-      const requested = BigInt(units(amount, selectedAsset.decimals));
-      const available = BigInt(balance?.[selectedAsset.symbol] || "0");
-      if (requested > available) {
+    if (flowStep === 1) {
+      setFlowStep(2);
+      return;
+    }
+    if (flowStep === 2) {
+      try {
+        const decimals = selectedAsset.decimals;
+        const requested = BigInt(units(amount, decimals));
+        const available = BigInt(balance?.[selectedAsset.symbol] || "0");
+        if (requested > available) {
+          setAmountInvalid(true);
+          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          setNotice({
+            title: t("Insufficient balance", "余额不足"),
+            body: t(
+              `You have ${formatUnits(available, decimals)} ${selectedAsset.symbol} available.`,
+              `可用余额为 ${formatUnits(available, decimals)} ${selectedAsset.symbol}。`,
+            ),
+            tone: "error",
+          });
+          return;
+        }
+        setAmountInvalid(false);
+        setFlowStep(3);
+      } catch (e) {
         setAmountInvalid(true);
         void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         setNotice({
-          title: t("Insufficient balance", "余额不足"),
-          body: t(
-            `You have ${formatUnits(available, selectedAsset.decimals)} ${selectedAsset.symbol} available.`,
-            `可用余额为 ${formatUnits(available, selectedAsset.decimals)} ${selectedAsset.symbol}。`,
-          ),
+          title: t("Enter an amount", "输入金额"),
+          body: e instanceof Error ? e.message : t("Enter a valid amount.", "请输入有效金额。"),
+          tone: "error",
+        });
+      }
+      return;
+    }
+    if (flowStep === 3) {
+      if (!isAddress(recipient.trim())) {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        setNotice({
+          title: t("Invalid address", "无效地址"),
+          body: t("Enter a valid recipient EVM address.", "请输入有效的 EVM 收款地址。"),
           tone: "error",
         });
         return;
       }
-      setAmountInvalid(false);
-      setFlowStep((step) => step + 1);
-    } catch (e) {
-      setAmountInvalid(true);
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setNotice({
-        title: t("Enter an amount", "输入金额"),
-        body: e instanceof Error ? e.message : t("Enter a valid amount.", "请输入有效金额。"),
-        tone: "error",
-      });
+      setFlowStep(4);
+      return;
     }
   }
   async function prepareTransfer(guard: () => void) {
@@ -407,17 +441,18 @@ function Wallet() {
     showProposal(p);
   }
   async function preparePrivateSend(guard: () => void) {
+    const asset = (assetSymbol === "TERA" || privateAsset === "TERA" ? "TERA" : "ETH") as "ETH" | "TERA";
     const decimals = 18;
     const raw = units(amount, decimals);
     check(isAddress(recipient.trim()), t("Enter a valid recipient address.", "请输入有效收款地址。"));
-    const created = await api("/api/private-send/jobs", { asset: privateAsset, amount: raw, senderAddress: owner, recipientAddress: recipient.trim() });
+    const created = await api("/api/private-send/jobs", { asset, amount: raw, senderAddress: owner, recipientAddress: recipient.trim() });
     guard();
     const tx = created.preparedDeposit;
     await presentReview({
       title: t("Review private route", "审核私密路由"),
-      rows: [[t("Asset", "资产"), privateAsset], [t("Amount", "金额"), `${amount} ${privateAsset}`], [t("Recipient", "收款方"), recipient.trim()], [t("Routing", "路由"), t("Intake → payout → recipient", "接收 → 支付 → 收款方")]],
+      rows: [[t("Asset", "资产"), asset], [t("Amount", "金额"), `${amount} ${asset}`], [t("Recipient", "收款方"), recipient.trim()], [t("Routing", "路由"), t("Intake → payout → recipient", "接收 → 支付 → 收款方")]],
       steps: [{ to: tx.to, data: tx.data, value: BigInt(tx.value).toString(), chainId: chain.id }],
-      verify: () => transferTx(privateAsset === "ETH" ? zeroAddress : "0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8", created.job.intake_address, raw),
+      verify: () => transferTx(asset === "ETH" ? zeroAddress : "0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8", created.job.intake_address, raw),
       recipient: created.job.intake_address,
       reference: created.job.id,
       afterSubmitted: async (hash) => { await api(`/api/private-send/jobs/${created.job.id}/deposit`, { txHash: hash }); },
@@ -914,7 +949,6 @@ function Wallet() {
               ["arrow-down", "Receive", "收款", "receive"],
               ["swap-horizontal", "Swap", "兑换", "swap"],
               ["bridge", "Bridge", "跨链", "bridge"],
-              ["shield-lock-outline", "Private", "私密", "private"],
             ].map(([icon, en, zh, p]) => (
               <Pressable
                 key={p}
@@ -925,6 +959,7 @@ function Wallet() {
                   setAmount("");
                   setRecipient("");
                   setFlowStep(0);
+                  if (p === "send") setSendMode("public");
                   setPage(p);
                 }}
               >
@@ -1006,11 +1041,65 @@ function Wallet() {
         </>
       );
     if (page === "private") {
-      return <><>{title("Private route.", "私密路由。", t("ETH + TERA", "ETH + TERA"))}</><View style={s.wrap}>{(["ETH", "TERA"] as const).map(a=><Pressable key={a} onPress={()=>setPrivateAsset(a)} style={[s.panel,{width:"48%"},privateAsset===a&&{borderWidth:2,borderColor:colors.green}]}><Text style={s.text}>{a}</Text></Pressable>)}</View><Field label={t("Amount", "金额")} value={amount} onChangeText={setAmount} keyboardType="decimal-pad"/><Field label={t("Recipient address", "收款地址")} value={recipient} onChangeText={setRecipient}/><Text style={s.small}>{t("Tera routes the confirmed deposit through separate intake and payout wallets. This reduces the direct link but is not anonymous.", "Tera 通过独立的钱包路由已确认的存款。这会减少直接关联，但并不匿名。")}</Text>{action("Review private route", "审核私密路由", preparePrivateSend)}</>;
+      return (
+        <>
+          {title("Private route.", "私密路由。")}
+          <View style={s.wrap}>
+            {(["ETH", "TERA"] as const).map((a) => (
+              <Pressable
+                key={a}
+                accessibilityRole="button"
+                onPress={() => {
+                  setPrivateAsset(a);
+                  setAssetSymbol(a);
+                }}
+                style={[
+                  s.panel,
+                  { width: "48%", flexDirection: "row", alignItems: "center", gap: 10 },
+                  privateAsset === a && { borderWidth: 2, borderColor: colors.green },
+                ]}
+              >
+                <TokenIcon symbol={a} size={28} />
+                <Text style={[s.text, { fontWeight: "700" }]}>{a}</Text>
+              </Pressable>
+            ))}
+          </View>
+          <Field
+            label={t("Amount", "金额")}
+            value={amount}
+            onChangeText={setAmount}
+            keyboardType="decimal-pad"
+          />
+          <Field
+            label={t("Recipient address", "收款地址")}
+            value={recipient}
+            onChangeText={setRecipient}
+          />
+          <Text style={s.small}>
+            {t(
+              "Tera routes the confirmed deposit through separate intake and payout wallets. This reduces the direct link but is not anonymous.",
+              "Tera 通过独立的钱包路由已确认的存款。这会减少直接关联，但并不匿名。",
+            )}
+          </Text>
+          {action("Review private route", "审核私密路由", preparePrivateSend)}
+        </>
+      );
     }
     if (page === "send") {
-      const sendAssets = assets;
+      const isPrivate = sendMode === "private";
+      const sendAssets = isPrivate
+        ? [
+            { symbol: "ETH", address: zeroAddress, decimals: 18, name: "Ether" },
+            {
+              symbol: "TERA",
+              address: "0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8",
+              decimals: 18,
+              name: "Tera Token",
+            },
+          ]
+        : assets;
       const stepTitle = [
+        t("Select route", "选择路由"),
         t("Choose asset", "选择资产"),
         t("Enter amount", "输入金额"),
         t("Recipient", "收款方"),
@@ -1018,26 +1107,140 @@ function Wallet() {
       ][flowStep];
       return (
         <>
-          {title("Send.", "发送。", `${flowStep + 1}/4 · ${stepTitle}`)}
+          {title("Send.", "发送。", `${flowStep + 1}/5 · ${stepTitle}`)}
           {flowStep === 0 && (
+            <View style={{ gap: 14 }}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  setSendMode("public");
+                }}
+                style={[
+                  s.panel,
+                  {
+                    paddingVertical: 26,
+                    paddingHorizontal: 20,
+                    borderRadius: 22,
+                    borderWidth: sendMode === "public" ? 2 : 1,
+                    borderColor: sendMode === "public" ? colors.green : colors.line,
+                    backgroundColor: sendMode === "public" ? "#eef6eb" : colors.paper,
+                    overflow: "hidden",
+                    position: "relative",
+                    justifyContent: "center",
+                  },
+                ]}
+              >
+                <MaterialCommunityIcons
+                  name="earth"
+                  size={96}
+                  color={sendMode === "public" ? colors.green : colors.ink}
+                  style={{
+                    position: "absolute",
+                    right: -16,
+                    bottom: -22,
+                    opacity: sendMode === "public" ? 0.12 : 0.05,
+                  }}
+                />
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <Text style={{ fontSize: 20, fontWeight: "800", color: colors.ink }}>
+                    {t("Public Send", "公开发送")}
+                  </Text>
+                  {sendMode === "public" && (
+                    <MaterialCommunityIcons name="check-circle" size={22} color={colors.green} />
+                  )}
+                </View>
+              </Pressable>
+
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => {
+                  setSendMode("private");
+                  if (assetSymbol !== "ETH" && assetSymbol !== "TERA") {
+                    setAssetSymbol("ETH");
+                    setPrivateAsset("ETH");
+                  }
+                }}
+                style={[
+                  s.panel,
+                  {
+                    paddingVertical: 26,
+                    paddingHorizontal: 20,
+                    borderRadius: 22,
+                    borderWidth: sendMode === "private" ? 2 : 1,
+                    borderColor: sendMode === "private" ? colors.green : colors.line,
+                    backgroundColor: sendMode === "private" ? "#eef6eb" : colors.paper,
+                    overflow: "hidden",
+                    position: "relative",
+                    justifyContent: "center",
+                  },
+                ]}
+              >
+                <MaterialCommunityIcons
+                  name="shield"
+                  size={96}
+                  color={sendMode === "private" ? colors.green : colors.ink}
+                  style={{
+                    position: "absolute",
+                    right: -16,
+                    bottom: -22,
+                    opacity: sendMode === "private" ? 0.12 : 0.05,
+                  }}
+                />
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                  }}
+                >
+                  <Text style={{ fontSize: 20, fontWeight: "800", color: colors.ink }}>
+                    {t("Private Send", "私密发送")}
+                  </Text>
+                  {sendMode === "private" && (
+                    <MaterialCommunityIcons name="check-circle" size={22} color={colors.green} />
+                  )}
+                </View>
+              </Pressable>
+            </View>
+          )}
+          {flowStep === 1 && (
             <View style={s.wrap}>
               {sendAssets.map((asset) => (
                 <Pressable
                   key={asset.symbol}
-                  onPress={() => setAssetSymbol(asset.symbol)}
+                  accessibilityRole="button"
+                  onPress={() => {
+                    setAssetSymbol(asset.symbol);
+                    if (asset.symbol === "ETH" || asset.symbol === "TERA") {
+                      setPrivateAsset(asset.symbol);
+                    }
+                  }}
                   style={[
                     s.panel,
                     { width: "48%", flexDirection: "row", alignItems: "center", gap: 10 },
                     assetSymbol === asset.symbol && { borderWidth: 2, borderColor: colors.green },
                   ]}
                 >
-                  <TokenIcon symbol={asset.symbol} />
-                  <Text style={s.text}>{asset.symbol}</Text>
+                  <TokenIcon symbol={asset.symbol} size={28} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.text, { fontWeight: "700" }]}>{asset.symbol}</Text>
+                    <Text style={s.small} numberOfLines={1}>
+                      {balance?.[asset.symbol]
+                        ? `${formatUnits(BigInt(balance[asset.symbol]), asset.decimals)}`
+                        : "0.0"}
+                    </Text>
+                  </View>
                 </Pressable>
               ))}
             </View>
           )}
-          {flowStep === 1 && (
+          {flowStep === 2 && (
             <View style={{ alignItems: "center", gap: 16, paddingVertical: 44 }}>
               <TokenIcon symbol={selectedAsset.symbol} size={52} />
               <TextInput
@@ -1061,28 +1264,73 @@ function Wallet() {
               <Text style={[s.small, amountInvalid && { color: colors.danger }]}>
                 {amountInvalid
                   ? t("Amount exceeds your on-chain balance", "金额超过链上余额")
-                  : selectedAsset.symbol}
+                  : `${t("Available:", "可用:")} ${
+                      balance?.[selectedAsset.symbol]
+                        ? formatUnits(BigInt(balance[selectedAsset.symbol]), selectedAsset.decimals)
+                        : "0"
+                    } ${selectedAsset.symbol}`}
               </Text>
             </View>
           )}
-          {flowStep === 2 && (
-            <Field
-              label={t("Receiving wallet address", "收款钱包地址")}
-              value={recipient}
-              onChangeText={setRecipient}
-            />
-          )}
           {flowStep === 3 && (
-            <View style={s.panel}>
-              <Row label={t("Asset", "资产")} value={selectedAsset.symbol} />
-              <Row label={t("Amount", "金额")} value={`${amount || "0"} ${selectedAsset.symbol}`} />
-              <Row label={t("To", "收款方")} value={recipient || "—"} />
+            <View style={{ gap: 12 }}>
+              <Field
+                label={t("Receiving wallet address", "收款钱包地址")}
+                value={recipient}
+                onChangeText={setRecipient}
+                placeholder="0x..."
+              />
+              <Text style={s.small}>
+                {isPrivate
+                  ? t(
+                      "Enter the final destination address. Tera will route the payout here.",
+                      "请输入最终收款地址。Tera 将代币路由至此处。",
+                    )
+                  : t(
+                      "Enter the destination Robinhood Chain address.",
+                      "请输入 Robinhood Chain 收款地址。",
+                    )}
+              </Text>
             </View>
           )}
-          {flowStep < 3 ? (
+          {flowStep === 4 && (
+            <View style={s.panel}>
+              <Row
+                label={t("Route", "路由方式")}
+                value={
+                  isPrivate
+                    ? t("Private Route", "私密路由")
+                    : t("Public (Direct)", "公开（直接）")
+                }
+              />
+              <Row label={t("Asset", "资产")} value={selectedAsset.symbol} />
+              <Row
+                label={t("Amount", "金额")}
+                value={`${amount || "0"} ${selectedAsset.symbol}`}
+              />
+              <Row label={t("To", "收款方")} value={recipient || "—"} />
+              {isPrivate && (
+                <>
+                  <Row
+                    label={t("Routing", "路由路径")}
+                    value={t("Intake → Payout → Recipient", "接收 → 支付 → 收款方")}
+                  />
+                  <Text style={[s.small, { marginTop: 10, lineHeight: 18 }]}>
+                    {t(
+                      "Tera routes the confirmed deposit through separate intake and payout wallets. This reduces the direct link but is not anonymous.",
+                      "Tera 通过独立的钱包路由已确认的存款。这会减少直接关联，但并不匿名。",
+                    )}
+                  </Text>
+                </>
+              )}
+            </View>
+          )}
+          {flowStep < 4 ? (
             <Button primary onPress={continueSend}>
               {t("Continue", "继续")}
             </Button>
+          ) : isPrivate ? (
+            action("Review private route", "审核私密路由", preparePrivateSend)
           ) : (
             action("Review transaction", "审核交易", prepareTransfer)
           )}
