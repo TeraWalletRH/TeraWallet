@@ -1,1 +1,356 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Private send — Tera</title><style>body{margin:0;background:#f6f5f2;color:#18251e;font-family:Arial}.w{max-width:720px;margin:auto;padding:28px}.nav{font:14px monospace;border-bottom:1px solid #c9d0bf;padding-bottom:20px}.nav a{color:inherit;text-decoration:none}.hero{padding:50px 0 25px}h1{font-size:clamp(48px,10vw,86px);letter-spacing:-.08em;font-weight:400;line-height:.88;margin:10px 0}.ey{font:11px monospace;color:#74803c;text-transform:uppercase}.p{border:1px solid #c9d0bf;background:#fff;padding:22px;margin-top:18px}.row{display:flex;gap:10px;flex-wrap:wrap}.i{padding:14px;border:1px solid #aeb9a1;flex:1;font:16px Arial}.b{padding:14px 17px;border:0;background:#1d4330;color:#fff;font:13px monospace;cursor:pointer}.note,#status{color:#697461;line-height:1.5}.step{font:12px monospace;border-top:1px solid #d6ddce;padding:12px 0}.ok{color:#356e45}</style></head><body><main class="w"><nav class="nav"><a href="/">TERA WALLET</a> / <a href="/dashboard/">WALLET</a></nav><section class="hero"><div class="ey">Private routing / ETH + TERA</div><h1>Route privately.<br>Send deliberately.</h1><p class="note">Tera routes a confirmed deposit through separate intake and payout wallets. This reduces the direct sender-recipient link; it is not anonymous or untraceable.</p><div class="row"><button class="b" id="connect">Connect wallet</button><span id="status">Connect to begin.</span></div></section><section class="p"><div class="row"><select class="i" id="asset"><option>ETH</option><option>TERA</option></select><input class="i" id="amount" inputmode="decimal" placeholder="Amount"><input class="i" id="recipient" placeholder="Recipient 0x address"></div><div class="row" style="margin-top:10px"><button class="b" id="route">Review private route</button></div></section><section class="p"><div class="ey">Route status</div><div id="job" class="note">No route started.</div></section></main><script>const api='https://api.terawallet.app',q=s=>document.querySelector(s);let owner='',job=(()=>{try{return JSON.parse(localStorage.getItem('tera.privateSendJob')||'null')}catch{return null}})(),timer=null;const u=v=>{if(!/^\d*(\.\d*)?$/.test(v)||!/[0-9]/.test(v))throw Error('Enter a valid amount.');let[a,b='']=v.split('.');if(b.length>18)throw Error('Maximum 18 decimals.');return(BigInt(a||0)*10n**18n+BigInt((b+'0'.repeat(18)).slice(0,18))).toString()};const f=async(p,o={})=>{let r=await fetch(api+p,{headers:{'content-type':'application/json'},...o}),j=await r.json();if(!r.ok||j.success===false)throw Error(j.error||'Request failed');return j};const say=x=>q('#status').textContent=x;async function refresh(){if(!job)return;let r=await f('/api/private-send/jobs/'+job.id);job=r.job;localStorage.setItem('tera.privateSendJob',JSON.stringify(job));q('#job').innerHTML=`<div class="step">DEPOSIT · ${job.deposit_tx_hash||'awaiting'}</div><div class="step">INTAKE SWEEP · ${job.sweep_tx_hash||'awaiting'}</div><div class="step">RECIPIENT PAYOUT · ${job.payout_tx_hash||'awaiting'}</div><div class="step ok">${job.status.toUpperCase()}</div>`;if(job.status==='confirmed'||job.status==='failed'||job.status==='expired')localStorage.removeItem('tera.privateSendJob');else{clearTimeout(timer);timer=setTimeout(refresh,12000)}}q('#connect').onclick=async()=>{try{owner=(await ethereum.request({method:'eth_requestAccounts'}))[0];q('#connect').textContent=owner.slice(0,6)+'…'+owner.slice(-4);say('Wallet connected.')}catch(e){say(e.message)}};q('#route').onclick=async()=>{try{if(!owner)throw Error('Connect your wallet first.');let asset=q('#asset').value,amount=u(q('#amount').value),recipient=q('#recipient').value.trim();let r=await f('/api/private-send/jobs',{method:'POST',body:JSON.stringify({asset,amount,senderAddress:owner,recipientAddress:recipient})});job=r.job;localStorage.setItem('tera.privateSendJob',JSON.stringify(job));say('Review the exact deposit in your wallet.');let tx=await ethereum.request({method:'eth_sendTransaction',params:[{from:owner,to:r.preparedDeposit.to,data:r.preparedDeposit.data,value:r.preparedDeposit.value}]});await f('/api/private-send/jobs/'+job.id+'/deposit',{method:'POST',body:JSON.stringify({txHash:tx})});say('Deposit submitted. Routing begins after confirmations.');refresh()}catch(e){say(e.message)}};if(job)refresh().catch(e=>say(e.message));</script></body></html>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Private Routing — Tera</title>
+  <link rel="icon" href="/tera/logo.png">
+  <style>
+    body { margin: 0; background: #f6f5f2; color: #18251e; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+    .w { max-width: 760px; margin: auto; padding: 28px 20px; }
+    .nav { font: 13px monospace; border-bottom: 1px solid #c9d0bf; padding-bottom: 18px; display: flex; justify-content: space-between; align-items: center; }
+    .nav a { color: inherit; text-decoration: none; }
+    .hero { padding: 40px 0 24px; }
+    h1 { font-size: clamp(38px, 8vw, 68px); letter-spacing: -0.06em; font-weight: 500; line-height: 0.95; margin: 12px 0; }
+    .ey { font: 12px monospace; color: #52634f; text-transform: uppercase; letter-spacing: 0.08em; display: flex; align-items: center; gap: 6px; }
+    .shield-badge { display: inline-flex; align-items: center; justify-content: center; width: 18px; height: 18px; border-radius: 4px; background: #1d4330; color: #fff; font-size: 11px; }
+    .p { border: 1px solid #c9d0bf; background: #fff; border-radius: 12px; padding: 24px; margin-top: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.02); }
+    .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+    .i { padding: 14px 16px; border: 1px solid #aeb9a1; border-radius: 8px; flex: 1; font: 15px monospace; background: #fafaf8; box-sizing: border-box; min-width: 200px; }
+    .i:focus { outline: none; border-color: #1d4330; background: #fff; }
+    .b { padding: 14px 22px; border: 0; border-radius: 8px; background: #1d4330; color: #fff; font: 13px monospace; font-weight: 600; cursor: pointer; transition: background 0.15s ease; }
+    .b:hover { background: #143224; }
+    .b:disabled { opacity: 0.5; cursor: not-allowed; }
+    .b-sec { background: #e2e8dc; color: #1d4330; }
+    .b-sec:hover { background: #d3decb; }
+    .note, #status { color: #586552; line-height: 1.5; font-size: 14px; }
+    .step { font: 13px monospace; border-top: 1px solid #eef2ea; padding: 12px 0; display: flex; justify-content: space-between; align-items: center; }
+    .ok { color: #2e7343; font-weight: 700; }
+    .tag { font-size: 11px; padding: 3px 8px; border-radius: 4px; background: #eaf2e8; color: #235432; font-family: monospace; }
+    .grid-asset { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 10px; margin: 12px 0 16px; }
+    .asset-card { border: 1px solid #d4dcce; border-radius: 8px; padding: 12px; cursor: pointer; text-align: left; background: #fafaf8; transition: all 0.15s ease; }
+    .asset-card.active { border-color: #1d4330; background: #eef5eb; outline: 2px solid #1d4330; }
+    .asset-sym { font-weight: 700; font-size: 16px; }
+    .asset-bal { font-size: 12px; color: #62725e; margin-top: 4px; font-family: monospace; }
+    .history-card { margin-top: 14px; padding: 16px; border: 1px solid #d9e2d3; border-radius: 8px; background: #fdfdfc; }
+    .mono-link { font-family: monospace; font-size: 12px; color: #1d4330; text-decoration: underline; }
+  </style>
+</head>
+<body>
+<main class="w">
+  <nav class="nav">
+    <div><a href="/">TERA WALLET</a> / <a href="/dashboard/">WALLET</a></div>
+    <div id="net-tag" class="tag">Robinhood Chain (4663)</div>
+  </nav>
+
+  <section class="hero">
+    <div class="ey"><span class="shield-badge">🛡</span> Private routing</div>
+    <h1>Route privately.<br>Send deliberately.</h1>
+    <p class="note">
+      Tera routes a confirmed deposit through separate intake and payout wallets. This breaks the direct sender-to-recipient on-chain link for ETH, USDG, TERA, and tokenized real-world assets (RWAs).
+    </p>
+    <div class="row" style="margin-top: 18px;">
+      <button class="b" id="connect">Connect wallet</button>
+      <span id="status">Connect to begin routing.</span>
+    </div>
+  </section>
+
+  <section class="p">
+    <div class="ey">1. Select asset</div>
+    <div id="asset-grid" class="grid-asset">
+      <!-- Dynamically filled with supported assets -->
+      <div class="asset-card active" data-symbol="ETH" data-decimals="18">
+        <div class="asset-sym">ETH</div>
+        <div class="asset-bal" id="bal-ETH">0.0 ETH</div>
+      </div>
+      <div class="asset-card" data-symbol="TERA" data-decimals="18">
+        <div class="asset-sym">TERA</div>
+        <div class="asset-bal" id="bal-TERA">0.0 TERA</div>
+      </div>
+      <div class="asset-card" data-symbol="USDG" data-decimals="6">
+        <div class="asset-sym">USDG</div>
+        <div class="asset-bal" id="bal-USDG">0.0 USDG</div>
+      </div>
+    </div>
+
+    <div class="ey" style="margin-top: 18px;">2. Transfer details</div>
+    <div class="row" style="margin-top: 10px;">
+      <input class="i" id="amount" inputmode="decimal" placeholder="Amount (e.g. 1.5)">
+      <input class="i" id="recipient" placeholder="Recipient 0x address">
+    </div>
+
+    <div class="row" style="margin-top: 18px;">
+      <button class="b" id="route">Review private route</button>
+      <span id="avail-info" class="note"></span>
+    </div>
+  </section>
+
+  <section class="p">
+    <div class="ey" style="display: flex; justify-content: space-between;">
+      <span>Route status & history</span>
+      <button class="b b-sec" id="refresh-history" style="padding: 4px 10px; font-size: 11px;">Refresh</button>
+    </div>
+    <div id="history-container">
+      <div id="job" class="note" style="margin-top: 10px;">No route started.</div>
+    </div>
+  </section>
+</main>
+
+<script>
+const configEl = document.getElementById('tera-config');
+const config = configEl ? JSON.parse(configEl.textContent || '{}') : {};
+const api = config.apiUrl || 'https://api.terawallet.app';
+const chainId = config.chainId || 4663;
+
+const q = (s) => document.querySelector(s);
+const qa = (s) => document.querySelectorAll(s);
+
+let owner = '';
+let selectedAsset = { symbol: 'ETH', decimals: 18 };
+let assetsList = [
+  { symbol: 'ETH', decimals: 18, name: 'Ether' },
+  { symbol: 'TERA', decimals: 18, name: 'Tera Token' },
+  { symbol: 'USDG', decimals: 6, name: 'Global Dollar' }
+];
+
+let timer = null;
+
+const say = (msg) => { q('#status').textContent = msg; };
+
+function getHistory() {
+  try { return JSON.parse(localStorage.getItem('tera.privateSendHistory') || '[]'); } catch { return []; }
+}
+function saveHistory(list) {
+  try { localStorage.setItem('tera.privateSendHistory', JSON.stringify(list)); } catch {}
+}
+
+const parseUnits = (val, dec) => {
+  if (!/^\d*(\.\d*)?$/.test(val) || !/[0-9]/.test(val)) throw Error('Enter a valid numeric amount.');
+  let [intPart, fracPart = ''] = val.split('.');
+  if (fracPart.length > dec) throw Error(`Maximum ${dec} decimals allowed for this asset.`);
+  const paddedFrac = (fracPart + '0'.repeat(dec)).slice(0, dec);
+  return (BigInt(intPart || 0) * (10n ** BigInt(dec)) + BigInt(paddedFrac)).toString();
+};
+
+const formatUnits = (raw, dec) => {
+  const b = BigInt(raw || '0');
+  const divisor = 10n ** BigInt(dec);
+  const intVal = b / divisor;
+  const rem = (b % divisor).toString().padStart(dec, '0').replace(/0+$/, '');
+  return rem ? `${intVal}.${rem.slice(0, 4)}` : `${intVal}`;
+};
+
+const f = async (path, opts = {}) => {
+  const res = await fetch(api + path, {
+    headers: { 'content-type': 'application/json' },
+    ...opts
+  });
+  const json = await res.json();
+  if (!res.ok || json.success === false) throw Error(json.error || 'Request failed');
+  return json;
+};
+
+async function loadConfigAssets() {
+  try {
+    const res = await f('/api/private-send/config');
+    if (res.assets && Array.isArray(res.assets)) {
+      assetsList = res.assets;
+      renderAssets();
+    }
+  } catch (e) {
+    console.warn('Could not load remote asset config, using defaults', e);
+  }
+}
+
+function renderAssets() {
+  const grid = q('#asset-grid');
+  grid.innerHTML = assetsList.map((a) => `
+    <div class="asset-card ${a.symbol === selectedAsset.symbol ? 'active' : ''}" data-symbol="${a.symbol}" data-decimals="${a.decimals}">
+      <div class="asset-sym">${a.symbol}</div>
+      <div class="asset-bal" id="bal-${a.symbol}">—</div>
+    </div>
+  `).join('');
+
+  qa('.asset-card').forEach((card) => {
+    card.onclick = () => {
+      qa('.asset-card').forEach((c) => c.classList.remove('active'));
+      card.classList.add('active');
+      selectedAsset = {
+        symbol: card.dataset.symbol,
+        decimals: Number(card.dataset.decimals || 18)
+      };
+      updateAvailableText();
+    };
+  });
+}
+
+function updateAvailableText() {
+  const balEl = q(`#bal-${selectedAsset.symbol}`);
+  q('#avail-info').textContent = balEl ? `Available: ${balEl.textContent}` : '';
+}
+
+async function updateBalances() {
+  if (!owner || !window.ethereum) return;
+  for (const a of assetsList) {
+    try {
+      if (a.symbol === 'ETH') {
+        const balHex = await ethereum.request({ method: 'eth_getBalance', params: [owner, 'latest'] });
+        const bal = formatUnits(BigInt(balHex).toString(), 18);
+        const el = q('#bal-ETH');
+        if (el) el.textContent = `${bal} ETH`;
+      } else if (a.address && a.address.startsWith('0x')) {
+        // balanceOf(address) -> 0x70a08231 + padded address
+        const data = '0x70a08231' + owner.slice(2).padStart(64, '0');
+        const res = await ethereum.request({
+          method: 'eth_call',
+          params: [{ to: a.address, data }, 'latest']
+        });
+        const bal = formatUnits(BigInt(res || '0').toString(), a.decimals);
+        const el = q(`#bal-${a.symbol}`);
+        if (el) el.textContent = `${bal} ${a.symbol}`;
+      }
+    } catch {}
+  }
+  updateAvailableText();
+}
+
+async function ensureNetwork() {
+  if (!window.ethereum) throw Error('No EVM browser wallet detected.');
+  const cur = await ethereum.request({ method: 'eth_chainId' });
+  if (parseInt(cur, 16) !== chainId) {
+    try {
+      await ethereum.request({
+        method: 'wallet_switchEthereumChain',
+        params: [{ chainId: '0x' + Number(chainId).toString(16) }]
+      });
+    } catch {
+      throw Error(`Please switch your wallet to Robinhood Chain (Chain ID ${chainId}).`);
+    }
+  }
+}
+
+async function renderHistory() {
+  const list = getHistory();
+  if (!list.length) {
+    q('#history-container').innerHTML = '<div class="note">No routing history found.</div>';
+    return;
+  }
+
+  q('#history-container').innerHTML = list.map((job) => `
+    <div class="history-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+        <span style="font-weight: 700; font-family: monospace;">${job.asset_symbol} ${formatUnits(job.amount, job.decimals)}</span>
+        <span class="tag ${job.status === 'confirmed' ? 'ok' : ''}">${(job.status || 'unknown').toUpperCase()}</span>
+      </div>
+      <div class="step"><span>Deposit</span> <span>${job.deposit_tx_hash ? `<a class="mono-link" href="https://robinhoodchain.blockscout.com/tx/${job.deposit_tx_hash}" target="_blank" rel="noopener">${job.deposit_tx_hash.slice(0, 10)}...${job.deposit_tx_hash.slice(-6)} ↗</a>` : 'awaiting'}</span></div>
+      <div class="step"><span>Sweep</span> <span>${job.sweep_tx_hash ? `<a class="mono-link" href="https://robinhoodchain.blockscout.com/tx/${job.sweep_tx_hash}" target="_blank" rel="noopener">${job.sweep_tx_hash.slice(0, 10)}...${job.sweep_tx_hash.slice(-6)} ↗</a>` : 'awaiting'}</span></div>
+      <div class="step"><span>Payout</span> <span>${job.payout_tx_hash ? `<a class="mono-link" href="https://robinhoodchain.blockscout.com/tx/${job.payout_tx_hash}" target="_blank" rel="noopener">${job.payout_tx_hash.slice(0, 10)}...${job.payout_tx_hash.slice(-6)} ↗</a>` : 'awaiting'}</span></div>
+    </div>
+  `).join('');
+}
+
+async function pollPendingJobs() {
+  const list = getHistory();
+  let updated = false;
+  for (let i = 0; i < list.length; i++) {
+    const job = list[i];
+    if (['awaiting_deposit', 'deposit_pending', 'deposit_confirmed', 'sweep_signed', 'sweep_broadcast', 'sweep_confirmed', 'payout_signed', 'payout_broadcast'].includes(job.status)) {
+      try {
+        const res = await f('/api/private-send/jobs/' + job.id);
+        if (res.job) {
+          list[i] = { ...job, ...res.job };
+          updated = true;
+        }
+      } catch {}
+    }
+  }
+  if (updated) {
+    saveHistory(list);
+    renderHistory();
+  }
+}
+
+q('#refresh-history').onclick = () => {
+  pollPendingJobs().then(renderHistory);
+};
+
+q('#connect').onclick = async () => {
+  try {
+    if (!window.ethereum) throw Error('MetaMask or EVM browser wallet is required.');
+    await ensureNetwork();
+    const accounts = await ethereum.request({ method: 'eth_requestAccounts' });
+    owner = accounts[0];
+    q('#connect').textContent = owner.slice(0, 6) + '…' + owner.slice(-4);
+    say('Connected: ' + owner);
+    await updateBalances();
+  } catch (e) {
+    say(e.message);
+  }
+};
+
+q('#route').onclick = async () => {
+  try {
+    if (!owner) throw Error('Connect your wallet first.');
+    await ensureNetwork();
+
+    const recipient = q('#recipient').value.trim();
+    if (!/^0x[a-fA-F0-9]{40}$/.test(recipient)) throw Error('Enter a valid 0x recipient address.');
+
+    const rawAmount = parseUnits(q('#amount').value, selectedAsset.decimals);
+    say('Preparing private route…');
+
+    const prep = await f('/api/private-send/jobs', {
+      method: 'POST',
+      body: JSON.stringify({
+        asset: selectedAsset.symbol,
+        amount: rawAmount,
+        senderAddress: owner,
+        recipientAddress: recipient
+      })
+    });
+
+    const job = prep.job;
+    const history = getHistory();
+    history.unshift(job);
+    saveHistory(history.slice(0, 20));
+    renderHistory();
+
+    say('Please confirm the deposit transaction in your wallet.');
+    const txHash = await ethereum.request({
+      method: 'eth_sendTransaction',
+      params: [{
+        from: owner,
+        to: prep.preparedDeposit.to,
+        data: prep.preparedDeposit.data,
+        value: prep.preparedDeposit.value
+      }]
+    });
+
+    say('Deposit submitted (' + txHash.slice(0, 10) + '…). Registering deposit…');
+    await f(`/api/private-send/jobs/${job.id}/deposit`, {
+      method: 'POST',
+      body: JSON.stringify({ txHash })
+    });
+
+    job.deposit_tx_hash = txHash;
+    job.status = 'deposit_pending';
+    saveHistory(history);
+    renderHistory();
+
+    say('Routing in progress! Confirmed intake will automatically sweep and pay out.');
+    q('#amount').value = '';
+    q('#recipient').value = '';
+    await updateBalances();
+  } catch (e) {
+    say(e.message);
+  }
+};
+
+loadConfigAssets().then(() => {
+  renderAssets();
+  renderHistory();
+  setInterval(pollPendingJobs, 10000);
+});
+</script>
+</body>
+</html>

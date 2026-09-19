@@ -441,21 +441,38 @@ function Wallet() {
     showProposal(p);
   }
   async function preparePrivateSend(guard: () => void) {
-    const asset = (assetSymbol === "TERA" || privateAsset === "TERA" ? "TERA" : "ETH") as "ETH" | "TERA";
-    const decimals = 18;
+    const asset = selectedAsset.symbol;
+    const decimals = selectedAsset.decimals;
     const raw = units(amount, decimals);
     check(isAddress(recipient.trim()), t("Enter a valid recipient address.", "请输入有效收款地址。"));
-    const created = await api("/api/private-send/jobs", { asset, amount: raw, senderAddress: owner, recipientAddress: recipient.trim() });
+    const created = await api("/api/private-send/jobs", {
+      asset,
+      amount: raw,
+      senderAddress: owner,
+      recipientAddress: recipient.trim(),
+    });
     guard();
     const tx = created.preparedDeposit;
     await presentReview({
       title: t("Review private route", "审核私密路由"),
-      rows: [[t("Asset", "资产"), asset], [t("Amount", "金额"), `${amount} ${asset}`], [t("Recipient", "收款方"), recipient.trim()], [t("Routing", "路由"), t("Intake → payout → recipient", "接收 → 支付 → 收款方")]],
+      rows: [
+        [t("Asset", "资产"), asset],
+        [t("Amount", "金额"), `${amount} ${asset}`],
+        [t("Recipient", "收款方"), recipient.trim()],
+        [t("Routing", "路由"), t("Intake → payout → recipient", "接收 → 支付 → 收款方")],
+      ],
       steps: [{ to: tx.to, data: tx.data, value: BigInt(tx.value).toString(), chainId: chain.id }],
-      verify: () => transferTx(asset === "ETH" ? zeroAddress : "0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8", created.job.intake_address, raw),
+      verify: () =>
+        transferTx(
+          selectedAsset.symbol === "ETH" ? zeroAddress : (selectedAsset.address as Address),
+          created.job.intake_address,
+          raw,
+        ),
       recipient: created.job.intake_address,
       reference: created.job.id,
-      afterSubmitted: async (hash) => { await api(`/api/private-send/jobs/${created.job.id}/deposit`, { txHash: hash }); },
+      afterSubmitted: async (hash) => {
+        await api(`/api/private-send/jobs/${created.job.id}/deposit`, { txHash: hash });
+      },
     });
   }
   async function prepareBridge(guard: () => void) {
@@ -1088,17 +1105,7 @@ function Wallet() {
     }
     if (page === "send") {
       const isPrivate = sendMode === "private";
-      const sendAssets = isPrivate
-        ? [
-            { symbol: "ETH", address: zeroAddress, decimals: 18, name: "Ether" },
-            {
-              symbol: "TERA",
-              address: "0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8",
-              decimals: 18,
-              name: "Tera Token",
-            },
-          ]
-        : assets;
+      const sendAssets = assets;
       const stepTitle = [
         t("Select route", "选择路由"),
         t("Choose asset", "选择资产"),
@@ -1218,9 +1225,6 @@ function Wallet() {
                   accessibilityRole="button"
                   onPress={() => {
                     setAssetSymbol(asset.symbol);
-                    if (asset.symbol === "ETH" || asset.symbol === "TERA") {
-                      setPrivateAsset(asset.symbol);
-                    }
                   }}
                   style={[
                     s.panel,
