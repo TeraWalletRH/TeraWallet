@@ -2,37 +2,475 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>TERA Staking Dashboard</title><link rel="icon" href="/tera/favicon.png">
+  <title>TERA Staking Dashboard — Fixed & Epoch Staking</title><link rel="icon" href="/tera/favicon.png">
   <style>
-    :root{font-family:Arial,sans-serif;background:#f6f5f2;color:#18251e;--green:#1d4330;--lime:#b9eb85;--line:#c9d0bf;--muted:#697461;--wash:#e8ecdf}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1080px;margin:auto;padding:28px}.nav{display:flex;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:20px;font:14px monospace}.nav a{color:inherit;text-decoration:none}.hero{padding:54px 0 25px}.hero h1{font-size:clamp(46px,9vw,82px);font-weight:400;letter-spacing:-.07em;line-height:.9;margin:12px 0}.eyebrow,.label{font:11px monospace;color:#74803c;text-transform:uppercase;letter-spacing:.06em}.grid{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line)}.card{padding:22px;border-right:1px solid var(--line)}.card:last-child{border:0}.value{font-size:28px;margin-top:9px;word-break:break-word}.panel{margin-top:22px;border:1px solid var(--line);padding:24px;background:#fff}.panel h2{margin:0 0 11px;font-size:23px;font-weight:400}.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.input{min-width:160px;flex:1;padding:13px;border:1px solid #b6c0a9;font:16px Arial}.btn{padding:13px 16px;background:var(--green);color:#fff;border:0;font:13px monospace;cursor:pointer}.btn:disabled{opacity:.45;cursor:not-allowed}.btn.alt{background:#fff;color:#18251e;border:1px solid #9ca98e}.note,#status{color:var(--muted);line-height:1.5}.history{display:grid;gap:10px}.payout{border:1px solid var(--line);padding:16px;display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start}.payout-title{font:13px monospace;letter-spacing:.05em}.payout-amount{font-size:20px;margin-top:7px}.payout-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.payout-meta span{font:11px monospace;color:var(--muted);border:1px solid var(--line);padding:6px 8px}.payout-meta button{font:11px monospace;border:1px solid var(--line);padding:6px 8px;background:#fff;color:var(--ink);cursor:pointer}.pill{font:11px monospace;padding:7px 9px;border:1px solid var(--line);color:var(--muted)}.pill.confirmed{background:var(--wash);color:var(--green);border-color:#aab997}.pill.failed{color:#8c3d35;border-color:#d2aaa2}.project{display:grid;grid-template-columns:1fr 1.15fr;border:1px solid var(--line);margin-top:22px}.project-copy{padding:24px;background:var(--wash)}.project-copy h2{margin:7px 0 12px;font-size:28px;font-weight:400;letter-spacing:-.04em}.metrics{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid var(--line);margin-top:20px}.metric{padding:16px 10px 0 0}.metric+ .metric{padding-left:16px;border-left:1px solid var(--line)}.metric b{display:block;font-size:24px;font-weight:400;margin-top:7px}.chart-wrap{padding:24px;background:var(--green);color:#fff}.chart-title{display:flex;justify-content:space-between;font:11px monospace;color:var(--lime);text-transform:uppercase;letter-spacing:.05em}.chart{width:100%;height:220px;display:block;margin-top:15px}.axis{display:flex;justify-content:space-between;font:11px monospace;color:#dbe6d2}.modal{position:fixed;inset:0;background:rgba(12,27,18,.62);display:none;align-items:end;justify-content:center;padding:20px;z-index:10}.modal.open{display:flex}.modal-card{width:min(560px,100%);background:#f6f5f2;border:1px solid var(--lime);padding:28px;box-shadow:0 -14px 45px rgba(0,0,0,.24)}.modal-card h2{font-size:clamp(34px,7vw,58px);line-height:.92;letter-spacing:-.06em;font-weight:400;margin:11px 0 16px}.modal-card p{color:var(--muted);line-height:1.55;margin:0 0 22px}.footer{margin-top:60px;border-top:1px solid var(--line);padding:22px 0;font:11px monospace;color:var(--muted)}@media(max-width:650px){.wrap{padding:20px}.grid,.project{grid-template-columns:1fr}.card{border-right:0;border-bottom:1px solid var(--line)}.card:last-child{border-bottom:0}.project-copy{border-bottom:1px solid var(--line)}}
+    :root{font-family:Arial,sans-serif;background:#f6f5f2;color:#18251e;--green:#1d4330;--lime:#b9eb85;--line:#c9d0bf;--muted:#697461;--wash:#e8ecdf;--amber:#b45309;--amber-bg:#fef3c7}
+    *{box-sizing:border-box}body{margin:0}.wrap{max-width:1080px;margin:auto;padding:28px}
+    .nav{display:flex;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:20px;font:14px monospace}
+    .nav a{color:inherit;text-decoration:none}
+    .hero{padding:54px 0 25px}.hero h1{font-size:clamp(46px,9vw,82px);font-weight:400;letter-spacing:-.07em;line-height:.9;margin:12px 0}
+    .eyebrow,.label{font:11px monospace;color:#74803c;text-transform:uppercase;letter-spacing:.06em}
+    .grid{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line)}
+    .card{padding:22px;border-right:1px solid var(--line)}.card:last-child{border:0}
+    .value{font-size:28px;margin-top:9px;word-break:break-word}
+    .panel{margin-top:22px;border:1px solid var(--line);padding:24px;background:#fff}
+    .panel h2{margin:0 0 11px;font-size:23px;font-weight:400}
+    .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+    .input{min-width:160px;flex:1;padding:13px;border:1px solid #b6c0a9;font:16px Arial}
+    .btn{padding:13px 18px;background:var(--green);color:#fff;border:0;font:13px monospace;cursor:pointer;transition:background .15s}
+    .btn:hover:not(:disabled){background:#25553d}
+    .btn:disabled{opacity:.45;cursor:not-allowed}
+    .btn.alt{background:#fff;color:#18251e;border:1px solid #9ca98e}
+    .btn.alt:hover:not(:disabled){background:var(--wash)}
+    .btn.claim-btn{background:#1a5937;color:#fff;font-weight:600}
+    .note,#status{color:var(--muted);line-height:1.5}
+    .tier-selector{display:flex;gap:10px;margin-bottom:18px;flex-wrap:wrap}
+    .tier-btn{flex:1;min-width:140px;padding:14px 12px;border:1px solid var(--line);background:#fff;cursor:pointer;text-align:center;font-family:inherit;transition:all .15s}
+    .tier-btn .tier-days{font-size:18px;font-weight:bold;color:var(--green);display:block}
+    .tier-btn .tier-apy{font:12px monospace;color:#74803c;margin-top:4px;display:block}
+    .tier-btn.active{border-color:var(--green);background:var(--wash);box-shadow:inset 0 0 0 1px var(--green)}
+    .tier-summary{background:var(--wash);border:1px solid var(--line);padding:18px;margin:16px 0;display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px}
+    .tier-summary .stat-label{font:10px monospace;color:var(--muted);text-transform:uppercase}
+    .tier-summary .stat-val{font-size:18px;margin-top:4px;font-weight:600}
+    .lock-warning{margin:12px 0 16px;padding:10px 14px;background:var(--amber-bg);border:1px solid #fde68a;color:var(--amber);font:12px monospace;line-height:1.4}
+    .history{display:grid;gap:10px}
+    .locks-list{display:grid;gap:12px;margin-top:14px}
+    .lock-item{border:1px solid var(--line);padding:18px;background:#fff;display:grid;grid-template-columns:1fr auto;gap:14px;align-items:center}
+    .lock-title{font:13px monospace;letter-spacing:.05em;display:flex;gap:8px;align-items:center}
+    .lock-amounts{margin-top:8px}
+    .lock-principal{font-size:22px;font-weight:bold}
+    .lock-reward{font-size:14px;color:#2e6945;margin-left:6px;font-family:monospace}
+    .lock-meta{display:flex;gap:12px;flex-wrap:wrap;margin-top:10px;font:11px monospace;color:var(--muted)}
+    .lock-meta span{border:1px solid var(--line);padding:4px 7px;background:var(--wash)}
+    .payout{border:1px solid var(--line);padding:16px;display:grid;grid-template-columns:1fr auto;gap:14px;align-items:start}
+    .payout-title{font:13px monospace;letter-spacing:.05em}
+    .payout-amount{font-size:20px;margin-top:7px}
+    .payout-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+    .payout-meta span{font:11px monospace;color:var(--muted);border:1px solid var(--line);padding:6px 8px}
+    .payout-meta button{font:11px monospace;border:1px solid var(--line);padding:6px 8px;background:#fff;color:var(--ink);cursor:pointer}
+    .pill{font:11px monospace;padding:7px 9px;border:1px solid var(--line);color:var(--muted);text-transform:uppercase}
+    .pill.locked{background:#fff8e6;color:#854d0e;border-color:#fef08a}
+    .pill.matured{background:#ecfdf5;color:#065f46;border-color:#a7f3d0;font-weight:bold}
+    .pill.claimed{background:var(--wash);color:var(--green);border-color:#aab997}
+    .pill.confirmed{background:var(--wash);color:var(--green);border-color:#aab997}
+    .pill.failed{color:#8c3d35;border-color:#d2aaa2}
+    .modal{position:fixed;inset:0;background:rgba(12,27,18,.62);display:none;align-items:end;justify-content:center;padding:20px;z-index:10}
+    .modal.open{display:flex}
+    .modal-card{width:min(560px,100%);background:#f6f5f2;border:1px solid var(--lime);padding:28px;box-shadow:0 -14px 45px rgba(0,0,0,.24)}
+    .modal-card h2{font-size:clamp(34px,7vw,58px);line-height:.92;letter-spacing:-.06em;font-weight:400;margin:11px 0 16px}
+    .modal-card p{color:var(--muted);line-height:1.55;margin:0 0 22px}
+    .footer{margin-top:60px;border-top:1px solid var(--line);padding:22px 0;font:11px monospace;color:var(--muted)}
+    @media(max-width:650px){.wrap{padding:20px}.grid{grid-template-columns:1fr}.card{border-right:0;border-bottom:1px solid var(--line)}.card:last-child{border-bottom:0}.lock-item{grid-template-columns:1fr}}
   </style>
 </head>
 <body><main class="wrap">
-  <nav class="nav"><a href="/">TERA WALLET</a><a href="/staking/">← STAKING</a></nav>
-  <section class="hero"><div class="eyebrow">TERA staking / live</div><h1>Your stake.<br>Your share.</h1><div class="row"><button class="btn" id="connect">Connect wallet</button><span id="status">Connect to load your position.</span></div></section>
-  <section class="grid"><div class="card"><div class="label">Active stake</div><div class="value" id="stake">—</div></div><div class="card"><div class="label">Claimable TERA</div><div class="value" id="rewards">—</div></div><div class="card"><div class="label">Current epoch</div><div class="value" id="epoch">—</div></div></section>
-  <section class="project"><div class="project-copy"><div class="eyebrow">Your projection</div><h2>Estimated rewards<br>to epoch end.</h2><p class="note">This estimate uses the current reward rate and total active stake. It changes as people stake or unstake.</p><div class="metrics"><div class="metric"><span class="label">Projected reward</span><b id="projected">—</b></div><div class="metric"><span class="label">Days remaining</span><b id="days">—</b></div></div></div><div class="chart-wrap"><div class="chart-title"><span>Projected reward accrual</span><span id="chartTotal">—</span></div><svg class="chart" viewBox="0 0 600 220" preserveAspectRatio="none" role="img" aria-label="Projected TERA reward chart"><path id="area" fill="#b9eb85" fill-opacity=".18"></path><polyline id="line" fill="none" stroke="#b9eb85" stroke-width="3" points=""></polyline><line x1="0" y1="184" x2="600" y2="184" stroke="#b9eb85" stroke-opacity=".35"></line></svg><div class="axis"><span>Today</span><span id="endLabel">Epoch end</span></div></div></section>
-  <section class="panel"><h2>Stake TERA</h2><p class="note">Enter a regular TERA amount. The wallet converts it to token units before preparing the transfer to the verified staking pool.</p><div class="row"><input class="input" id="deposit" inputmode="decimal" autocomplete="off" placeholder="0.00 TERA"><button class="btn" id="stakeBtn">Review stake</button></div></section>
-  <section class="panel"><h2>Recover pending stake</h2><p class="note">If a previous transfer reached the pool before it was credited, paste its transaction hash to verify and recover it safely.</p><div class="row"><input class="input" id="recoverTx" autocomplete="off" placeholder="0x transaction hash"><button class="btn alt" id="recoverBtn">Recover stake</button></div></section>
-  <section class="panel"><h2>Claim or unstake</h2><p class="note">Claims request all settled rewards. Unstake returns the TERA amount you enter plus settled rewards after payout confirmation.</p><div class="row"><button class="btn" id="claim">Request claim</button><input class="input" id="unstake" inputmode="decimal" autocomplete="off" placeholder="0.00 TERA"><button class="btn alt" id="unstakeBtn">Request unstake</button></div></section>
-  <section class="panel"><h2>Payout history</h2><div id="history" class="history">Connect wallet to load payout history.</div></section>
-  <footer class="footer">© 2026 TERA WALLET · Reward projections are estimates and are not guaranteed.</footer>
+  <nav class="nav"><a href="/">TERA WALLET</a><a href="/staking/">← STAKING EXPLAINER</a></nav>
+  <section class="hero">
+    <div class="eyebrow">TERA staking / fixed &amp; flexible</div>
+    <h1>Lock TERA.<br>Guaranteed Returns.</h1>
+    <div class="row">
+      <button class="btn" id="connect">Connect wallet</button>
+      <span id="status">Connect to load your fixed locks and position.</span>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="card"><div class="label">Total Locked TERA</div><div class="value" id="totalLocked">—</div></div>
+    <div class="card"><div class="label">Guaranteed Rewards</div><div class="value" id="totalRewards">—</div></div>
+    <div class="card"><div class="label">Active Locks</div><div class="value" id="locksCount">—</div></div>
+  </section>
+
+  <!-- FIXED STAKING PANEL -->
+  <section class="panel">
+    <h2>Fixed Staking (Strict Maturity Lock)</h2>
+    <p class="note">Select a duration tier. Rewards are calculated deterministically and locked from treasury reserves. Tokens cannot be withdrawn early.</p>
+    
+    <div class="tier-selector">
+      <button type="button" class="tier-btn active" data-days="30" data-apy="6.0" data-bps="600">
+        <span class="tier-days">30 Days</span>
+        <span class="tier-apy">6.0% APY</span>
+      </button>
+      <button type="button" class="tier-btn" data-days="45" data-apy="9.0" data-bps="900">
+        <span class="tier-days">45 Days</span>
+        <span class="tier-apy">9.0% APY</span>
+      </button>
+      <button type="button" class="tier-btn" data-days="90" data-apy="14.0" data-bps="1400">
+        <span class="tier-days">90 Days</span>
+        <span class="tier-apy">14.0% APY</span>
+      </button>
+    </div>
+
+    <div class="row">
+      <input class="input" id="depositAmount" inputmode="decimal" autocomplete="off" placeholder="0.00 TERA">
+      <button class="btn" id="lockStakeBtn">Lock TERA</button>
+    </div>
+
+    <div class="tier-summary" id="tierSummary">
+      <div><span class="stat-label">Term Duration</span><div class="stat-val" id="summaryDays">30 Days</div></div>
+      <div><span class="stat-label">Guaranteed APY</span><div class="stat-val" id="summaryApy">6.0%</div></div>
+      <div><span class="stat-label">Unlock Date</span><div class="stat-val" id="summaryUnlock">—</div></div>
+      <div><span class="stat-label">Estimated Reward</span><div class="stat-val" id="summaryReward">0.00 TERA</div></div>
+      <div><span class="stat-label">Total at Maturity</span><div class="stat-val" id="summaryTotal">0.00 TERA</div></div>
+    </div>
+
+    <div class="lock-warning">
+      🔒 <strong>STRICT LOCK POLICY:</strong> Deposits are locked completely for the full duration. No early withdrawals or claims before the maturity date.
+    </div>
+  </section>
+
+  <!-- USER ACTIVE LOCKS PANEL -->
+  <section class="panel">
+    <h2>My Fixed Staking Locks</h2>
+    <p class="note">Each lock matures at its specific unlock timestamp. When matured, you can claim your principal and guaranteed reward in one transaction.</p>
+    <div id="locksList" class="locks-list">Connect wallet to view your fixed locks.</div>
+  </section>
+
+  <!-- RECOVER PENDING LOCK -->
+  <section class="panel">
+    <h2>Recover Pending Lock</h2>
+    <p class="note">If an on-chain transfer was submitted but not credited, enter the transaction hash and selected tier to reconcile it safely.</p>
+    <div class="row">
+      <select id="recoverTier" class="input" style="max-width:180px">
+        <option value="30">30 Days (6.0% APY)</option>
+        <option value="45">45 Days (9.0% APY)</option>
+        <option value="90">90 Days (14.0% APY)</option>
+      </select>
+      <input class="input" id="recoverTx" autocomplete="off" placeholder="0x transaction hash">
+      <button class="btn alt" id="recoverBtn">Recover Lock</button>
+    </div>
+  </section>
+
+  <!-- PAYOUT HISTORY -->
+  <section class="panel">
+    <h2>Payout History</h2>
+    <div id="history" class="history">Connect wallet to load payout history.</div>
+  </section>
+
+  <footer class="footer">© 2026 TERA WALLET · Fixed staking rewards are backed by pre-funded treasury reserves.</footer>
 </main>
-<div class="modal" id="successModal" role="dialog" aria-modal="true" aria-labelledby="successTitle"><div class="modal-card"><div class="eyebrow">TERA staking</div><h2 id="successTitle">Stake successful.</h2><p id="successCopy">Your stake has been confirmed and credited to this epoch.</p><button class="btn" id="successClose">Continue</button></div></div>
+
+<div class="modal" id="successModal" role="dialog" aria-modal="true" aria-labelledby="successTitle">
+  <div class="modal-card">
+    <div class="eyebrow">TERA fixed staking</div>
+    <h2 id="successTitle">Lock Successful.</h2>
+    <p id="successCopy">Your TERA stake has been confirmed and locked for the selected term.</p>
+    <button class="btn" id="successClose">Continue</button>
+  </div>
+</div>
+
 <script>
-const api=window.TERA_API_BASE||'https://api.terawallet.app',q=s=>document.querySelector(s),DECIMALS=18n,SCALE=10n**DECIMALS;
-let wallet='',epoch='',activeEpoch=null,position=null;
-const f=async(p,o={})=>{let r=await fetch(api+p,{headers:{'content-type':'application/json'},...o}),j=await r.json();if(!r.ok)throw Error(j.error||'Request failed');return j};
-const msg=t=>q('#status').textContent=t;const showSuccess=amount=>{q('#successCopy').textContent=`${tera(amount)} has been confirmed and credited to your active stake.`;q('#successModal').classList.add('open')};q('#successClose').onclick=()=>q('#successModal').classList.remove('open');q('#successModal').onclick=e=>{if(e.target===q('#successModal'))q('#successModal').classList.remove('open')};const pendingKey=()=>wallet&&epoch?`tera.staking.pending.${wallet.toLowerCase()}.${epoch}`:'';const savePending=(txHash,amount)=>localStorage.setItem(pendingKey(),JSON.stringify({txHash,amount}));const pending=()=>{try{return JSON.parse(localStorage.getItem(pendingKey())||'null')}catch{return null}};const clearPending=()=>localStorage.removeItem(pendingKey());
-function parseTera(value){const v=String(value).trim();if(!/^\d*(\.\d*)?$/.test(v)||!/[0-9]/.test(v))throw Error('Enter a valid TERA amount.');const[a,b='']=v.split('.');if(b.length>18)throw Error('TERA supports up to 18 decimal places.');return (BigInt(a||'0')*SCALE+BigInt((b+'0'.repeat(18)).slice(0,18))).toString()}
-function tera(raw,max=4){try{const n=BigInt(raw||0),whole=n/SCALE,fraction=(n%SCALE).toString().padStart(18,'0').slice(0,max).replace(/0+$/,'');return `${whole.toLocaleString()}${fraction?'.'+fraction:''} TERA`}catch{return '0 TERA'}}
-function short(value){return value?`${value.slice(0,8)}…${value.slice(-6)}`:''}function copy(value){navigator.clipboard?.writeText(value).then(()=>msg('Copied to clipboard.')).catch(()=>msg('Unable to copy.'))}function renderHistory(payouts){const host=q('#history');host.replaceChildren();if(!payouts.length){host.textContent='No payouts yet.';return}for(const item of payouts){const card=document.createElement('article'),top=document.createElement('div'),title=document.createElement('div'),amount=document.createElement('div'),pill=document.createElement('div'),meta=document.createElement('div');card.className='payout';title.className='payout-title';title.textContent=item.kind.toUpperCase();amount.className='payout-amount';amount.textContent=tera(BigInt(item.principal_amount)+BigInt(item.reward_amount));pill.className=`pill ${item.status}`;pill.textContent=item.status.toUpperCase();meta.className='payout-meta';const ref=document.createElement('span');ref.textContent=`Reference ${short(item.id)}`;const refCopy=document.createElement('button');refCopy.textContent='Copy reference';refCopy.onclick=()=>copy(item.id);meta.append(ref,refCopy);if(item.tx_hash){const tx=document.createElement('span');tx.textContent=`Transaction ${short(item.tx_hash)}`;const txCopy=document.createElement('button');txCopy.textContent='Copy transaction';txCopy.onclick=()=>copy(item.tx_hash);meta.append(tx,txCopy)}top.append(title,amount,meta);card.append(top,pill);host.append(card)}}function project(){const input=q('#deposit').value;let added=0n;try{added=input?BigInt(parseTera(input)):0n}catch{}const existing=position?BigInt(position.active_stake):0n;if(!activeEpoch){q('#projected').textContent='—';q('#days').textContent='—';q('#chartTotal').textContent='—';return}const now=Math.floor(Date.now()/1000),end=Math.floor(new Date(activeEpoch.ends_at).getTime()/1000),left=Math.max(0,end-now),total=BigInt(activeEpoch.total_active_stake||0)+added,stake=existing+added,rate=BigInt(activeEpoch.reward_rate_per_second||0),reward=total>0n?(stake*rate*BigInt(left))/total:0n;q('#projected').textContent=tera(reward);q('#chartTotal').textContent=tera(reward);q('#days').textContent=`${Math.ceil(left/86400)} days`;q('#endLabel').textContent=new Date(activeEpoch.ends_at).toLocaleDateString();const pts=[];for(let i=0;i<=60;i++){const x=i*10,y=184-(i/60)*142;pts.push(`${x},${y}`)}q('#line').setAttribute('points',pts.join(' '));q('#area').setAttribute('d',`M0,184 L${pts.join(' L')} L600,184 Z`)}
-async function load(){let e=await f('/api/staking/epochs');activeEpoch=e.epochs.find(x=>x.status==='active')||null;epoch=activeEpoch?.id||'';q('#epoch').textContent=activeEpoch?'LIVE':'—';if(wallet){let[p,h]=await Promise.all([f('/api/staking/position/'+wallet),f('/api/staking/payouts/'+wallet)]);position=p.positions.find(x=>x.epoch_id===epoch)||null;q('#stake').textContent=tera(position?.active_stake);q('#rewards').textContent=tera(position?.accrued_rewards);renderHistory(h.payouts)}project()}
-async function reconcileStake(txHash,amount){if(!wallet||!epoch)return;try{const out=await f('/api/staking/deposits',{method:'POST',body:JSON.stringify({epochId:epoch,walletAddress:wallet,txHash})});if(out.status==='awaiting_confirmations'){msg('Stake submitted. Awaiting chain confirmations.');setTimeout(()=>reconcileStake(txHash,amount),12000);return}clearPending();await load();msg('Stake confirmed and credited.');showSuccess(out.creditedAmount||amount)}catch(error){msg('Stake is still pending. Keep this page open or use Recover pending stake with your transaction hash.')}}
-function resumePending(){const item=pending();if(item){msg('Resuming your pending stake confirmation.');void reconcileStake(item.txHash,item.amount)}}
-q('#connect').onclick=async()=>{try{if(!window.ethereum)throw Error('Install an EVM wallet.');wallet=(await ethereum.request({method:'eth_requestAccounts'}))[0];q('#connect').textContent=wallet.slice(0,6)+'…'+wallet.slice(-4);msg('Wallet connected.');await load();resumePending()}catch(e){msg(e.message)}};
-q('#deposit').addEventListener('input',project);
-q('#stakeBtn').onclick=async()=>{try{if(!wallet||!epoch)throw Error('Connect wallet and wait for an active epoch.');const amount=parseTera(q('#deposit').value);if(BigInt(amount)<=0n)throw Error('Enter an amount above zero.');const p=await f('/api/staking/prepare-deposit',{method:'POST',body:JSON.stringify({amount})});const tx=await ethereum.request({method:'eth_sendTransaction',params:[{from:wallet,to:p.preparedTransaction.to,data:p.preparedTransaction.data,value:'0x0'}]});savePending(tx,amount);msg('Stake submitted. Awaiting chain confirmations.');void reconcileStake(tx,amount)}catch(e){msg(e.message)}};
-q('#recoverBtn').onclick=async()=>{try{if(!wallet||!epoch)throw Error('Connect wallet and wait for an active epoch.');const tx=q('#recoverTx').value.trim();if(!/^0x[\da-fA-F]{64}$/.test(tx))throw Error('Enter a valid transaction hash.');savePending(tx,'0');msg('Verifying your submitted stake.');void reconcileStake(tx,'0')}catch(e){msg(e.message)}};
-async function payout(kind){try{if(!wallet||!epoch)throw Error('Connect wallet and wait for an active epoch.');const amount=kind==='unstake'?parseTera(q('#unstake').value):'0',id=crypto.randomUUID(),a={kind,walletAddress:wallet,epochId:epoch,amount,idempotencyKey:id};if(kind==='unstake'&&BigInt(amount)<=0n)throw Error('Enter an amount above zero.');const auth=await f('/api/staking/payout-authorization',{method:'POST',body:JSON.stringify(a)}),signature=await ethereum.request({method:'personal_sign',params:[auth.message,wallet]}),out=await f('/api/staking/payouts',{method:'POST',body:JSON.stringify({...a,signature})});msg(`Payout ${out.payout.status}. Reference: ${out.payout.id}. Tera will broadcast and confirm it automatically.`);await load()}catch(e){msg(e.message)}}q('#claim').onclick=()=>payout('claim');q('#unstakeBtn').onclick=()=>payout('unstake');load().catch(e=>msg(e.message));
-</script></body></html>
+const api = window.TERA_API_BASE || '', q = s => document.querySelector(s), qa = s => document.querySelectorAll(s), DECIMALS = 18n, SCALE = 10n**DECIMALS;
+let wallet = '', selectedTier = 30, selectedBps = 600, userLocks = [];
+
+const TIERS = {
+  30: { days: 30, apy: 6.0, bps: 600 },
+  45: { days: 45, apy: 9.0, bps: 900 },
+  90: { days: 90, apy: 14.0, bps: 1400 }
+};
+
+const f = async (p, o = {}) => {
+  let r = await fetch(api + p, { headers: { 'content-type': 'application/json' }, ...o }), j = await r.json();
+  if (!r.ok) throw Error(j.error || 'Request failed');
+  return j;
+};
+
+const msg = t => q('#status').textContent = t;
+const showSuccess = (title, text) => {
+  q('#successTitle').textContent = title;
+  q('#successCopy').textContent = text;
+  q('#successModal').classList.add('open');
+};
+q('#successClose').onclick = () => q('#successModal').classList.remove('open');
+q('#successModal').onclick = e => { if (e.target === q('#successModal')) q('#successModal').classList.remove('open'); };
+
+function parseTera(value) {
+  const v = String(value).trim();
+  if (!/^\d*(\.\d*)?$/.test(v) || !/[0-9]/.test(v)) throw Error('Enter a valid TERA amount.');
+  const [a, b = ''] = v.split('.');
+  if (b.length > 18) throw Error('TERA supports up to 18 decimal places.');
+  return (BigInt(a || '0') * SCALE + BigInt((b + '0'.repeat(18)).slice(0, 18))).toString();
+}
+
+function tera(raw, max = 4) {
+  try {
+    const n = BigInt(raw || 0), whole = n / SCALE, fraction = (n % SCALE).toString().padStart(18, '0').slice(0, max).replace(/0+$/, '');
+    return `${whole.toLocaleString()}${fraction ? '.' + fraction : ''} TERA`;
+  } catch { return '0 TERA'; }
+}
+
+function short(val) { return val ? `${val.slice(0, 8)}…${val.slice(-6)}` : ''; }
+function copy(val) { navigator.clipboard?.writeText(val).then(() => msg('Copied to clipboard.')).catch(() => msg('Unable to copy.')); }
+
+function updateProjection() {
+  const tier = TIERS[selectedTier] || TIERS[30];
+  q('#summaryDays').textContent = `${tier.days} Days`;
+  q('#summaryApy').textContent = `${tier.apy.toFixed(1)}%`;
+  const unlockDate = new Date(Date.now() + tier.days * 86400 * 1000);
+  q('#summaryUnlock').textContent = unlockDate.toLocaleDateString();
+
+  let amount = 0n;
+  try {
+    const val = q('#depositAmount').value;
+    if (val) amount = BigInt(parseTera(val));
+  } catch {}
+
+  const reward = (amount * BigInt(tier.bps) * BigInt(tier.days)) / 3650000n;
+  q('#summaryReward').textContent = tera(reward);
+  q('#summaryTotal').textContent = tera(amount + reward);
+}
+
+qa('.tier-btn').forEach(btn => {
+  btn.onclick = () => {
+    qa('.tier-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    selectedTier = Number(btn.dataset.days);
+    selectedBps = Number(btn.dataset.bps);
+    updateProjection();
+  };
+});
+q('#depositAmount').addEventListener('input', updateProjection);
+
+function renderLocks(locks) {
+  const host = q('#locksList');
+  host.replaceChildren();
+  if (!locks.length) {
+    host.textContent = 'You have no fixed staking locks yet.';
+    q('#totalLocked').textContent = '0 TERA';
+    q('#totalRewards').textContent = '0 TERA';
+    q('#locksCount').textContent = '0';
+    return;
+  }
+
+  let totalPrincipal = 0n, totalRewards = 0n, activeCount = 0;
+  for (const lock of locks) {
+    const p = BigInt(lock.principal_amount), r = BigInt(lock.reward_amount);
+    if (lock.status === 'locked' || lock.effectiveStatus === 'matured') {
+      totalPrincipal += p;
+      totalRewards += r;
+      activeCount++;
+    }
+
+    const card = document.createElement('article');
+    card.className = 'lock-item';
+    const left = document.createElement('div');
+    const title = document.createElement('div');
+    title.className = 'lock-title';
+    title.innerHTML = `<strong>${lock.term_days} DAYS LOCK</strong> <span>·</span> <span>${(lock.apy_bps / 100).toFixed(1)}% APY</span>`;
+
+    const amounts = document.createElement('div');
+    amounts.className = 'lock-amounts';
+    amounts.innerHTML = `<span class="lock-principal">${tera(p)}</span> <span class="lock-reward">+${tera(r)} reward</span>`;
+
+    const meta = document.createElement('div');
+    meta.className = 'lock-meta';
+    const unlockDate = new Date(lock.unlocks_at);
+    const startsDate = new Date(lock.starts_at);
+    meta.innerHTML = `<span>Started: ${startsDate.toLocaleDateString()}</span> <span>Maturity: ${unlockDate.toLocaleDateString()}</span>`;
+    
+    if (lock.deposit_tx_hash) {
+      const tx = document.createElement('span');
+      tx.textContent = `Tx: ${short(lock.deposit_tx_hash)}`;
+      meta.append(tx);
+    }
+
+    left.append(title, amounts, meta);
+
+    const right = document.createElement('div');
+    right.style.textAlign = 'right';
+
+    const pill = document.createElement('div');
+    pill.className = `pill ${lock.effectiveStatus}`;
+    pill.textContent = lock.effectiveStatus.toUpperCase();
+    right.append(pill);
+
+    if (lock.effectiveStatus === 'matured') {
+      const claimBtn = document.createElement('button');
+      claimBtn.className = 'btn claim-btn';
+      claimBtn.style.marginTop = '10px';
+      claimBtn.textContent = 'Unlock & Claim';
+      claimBtn.onclick = () => unlockLock(lock.id);
+      right.append(claimBtn);
+    } else if (lock.effectiveStatus === 'locked') {
+      const timer = document.createElement('div');
+      timer.style.font = '11px monospace';
+      timer.style.color = 'var(--muted)';
+      timer.style.marginTop = '8px';
+      const daysLeft = Math.ceil(lock.secondsRemaining / 86400);
+      timer.textContent = `${daysLeft} day${daysLeft === 1 ? '' : 's'} remaining`;
+      right.append(timer);
+    }
+
+    card.append(left, right);
+    host.append(card);
+  }
+
+  q('#totalLocked').textContent = tera(totalPrincipal);
+  q('#totalRewards').textContent = tera(totalRewards);
+  q('#locksCount').textContent = activeCount.toString();
+}
+
+function renderHistory(payouts) {
+  const host = q('#history');
+  host.replaceChildren();
+  if (!payouts.length) {
+    host.textContent = 'No payouts yet.';
+    return;
+  }
+  for (const item of payouts) {
+    const card = document.createElement('article'), top = document.createElement('div'), title = document.createElement('div'), amount = document.createElement('div'), pill = document.createElement('div'), meta = document.createElement('div');
+    card.className = 'payout';
+    title.className = 'payout-title';
+    title.textContent = item.kind.toUpperCase();
+    amount.className = 'payout-amount';
+    amount.textContent = tera(BigInt(item.principal_amount) + BigInt(item.reward_amount));
+    pill.className = `pill ${item.status}`;
+    pill.textContent = item.status.toUpperCase();
+    meta.className = 'payout-meta';
+    const ref = document.createElement('span');
+    ref.textContent = `Reference ${short(item.id)}`;
+    const refCopy = document.createElement('button');
+    refCopy.textContent = 'Copy reference';
+    refCopy.onclick = () => copy(item.id);
+    meta.append(ref, refCopy);
+    if (item.tx_hash) {
+      const tx = document.createElement('span');
+      tx.textContent = `Tx ${short(item.tx_hash)}`;
+      const txCopy = document.createElement('button');
+      txCopy.textContent = 'Copy tx';
+      txCopy.onclick = () => copy(item.tx_hash);
+      meta.append(tx, txCopy);
+    }
+    top.append(title, amount, meta);
+    card.append(top, pill);
+    host.append(card);
+  }
+}
+
+async function load() {
+  if (!wallet) return;
+  try {
+    const [locksRes, payoutsRes] = await Promise.all([
+      f(`/api/staking/locks/${wallet}`),
+      f(`/api/staking/payouts/${wallet}`)
+    ]);
+    userLocks = locksRes.locks || [];
+    renderLocks(userLocks);
+    renderHistory(payoutsRes.payouts || []);
+  } catch (err) {
+    msg(err.message);
+  }
+}
+
+async function reconcileLock(txHash, termDays, amount) {
+  if (!wallet) return;
+  try {
+    const out = await f('/api/staking/locks', {
+      method: 'POST',
+      body: JSON.stringify({ walletAddress: wallet, txHash, termDays })
+    });
+    if (out.status === 'awaiting_confirmations') {
+      msg('Lock submitted. Awaiting block confirmations...');
+      setTimeout(() => reconcileLock(txHash, termDays, amount), 12000);
+      return;
+    }
+    localStorage.removeItem(`tera.pending.lock.${wallet.toLowerCase()}`);
+    await load();
+    msg('Lock confirmed and recorded.');
+    showSuccess('Fixed Stake Locked', `${tera(amount)} is strictly locked for ${termDays} days with guaranteed rewards.`);
+  } catch (error) {
+    msg('Lock verification pending: ' + error.message);
+  }
+}
+
+function resumePendingLock() {
+  if (!wallet) return;
+  try {
+    const item = JSON.parse(localStorage.getItem(`tera.pending.lock.${wallet.toLowerCase()}`) || 'null');
+    if (item && item.txHash) {
+      msg('Resuming verification of pending lock...');
+      void reconcileLock(item.txHash, item.termDays, item.amount);
+    }
+  } catch {}
+}
+
+q('#connect').onclick = async () => {
+  try {
+    if (!window.ethereum) throw Error('Install an EVM wallet.');
+    wallet = (await ethereum.request({ method: 'eth_requestAccounts' }))[0];
+    q('#connect').textContent = wallet.slice(0, 6) + '…' + wallet.slice(-4);
+    msg('Wallet connected.');
+    await load();
+    resumePendingLock();
+  } catch (e) {
+    msg(e.message);
+  }
+};
+
+q('#lockStakeBtn').onclick = async () => {
+  try {
+    if (!wallet) throw Error('Connect wallet first.');
+    const amount = parseTera(q('#depositAmount').value);
+    if (BigInt(amount) <= 0n) throw Error('Enter an amount above zero.');
+
+    const p = await f('/api/staking/prepare-deposit', {
+      method: 'POST',
+      body: JSON.stringify({ amount, termDays: selectedTier })
+    });
+
+    const tx = await ethereum.request({
+      method: 'eth_sendTransaction',
+      params: [{ from: wallet, to: p.preparedTransaction.to, data: p.preparedTransaction.data, value: '0x0' }]
+    });
+
+    localStorage.setItem(`tera.pending.lock.${wallet.toLowerCase()}`, JSON.stringify({ txHash: tx, termDays: selectedTier, amount }));
+    msg('Transaction broadcasted. Awaiting chain confirmations...');
+    void reconcileLock(tx, selectedTier, amount);
+  } catch (e) {
+    msg(e.message);
+  }
+};
+
+q('#recoverBtn').onclick = async () => {
+  try {
+    if (!wallet) throw Error('Connect wallet first.');
+    const tx = q('#recoverTx').value.trim();
+    const term = Number(q('#recoverTier').value);
+    if (!/^0x[0-9a-fA-F]{64}$/.test(tx)) throw Error('Enter a valid 0x transaction hash.');
+    msg('Verifying and recovering lock...');
+    void reconcileLock(tx, term, '0');
+  } catch (e) {
+    msg(e.message);
+  }
+};
+
+async function unlockLock(lockId) {
+  try {
+    if (!wallet) throw Error('Connect wallet first.');
+    const idempotencyKey = crypto.randomUUID();
+    const auth = await f('/api/staking/locks/unlock-authorization', {
+      method: 'POST',
+      body: JSON.stringify({ walletAddress: wallet, lockId, idempotencyKey })
+    });
+
+    const signature = await ethereum.request({
+      method: 'personal_sign',
+      params: [auth.message, wallet]
+    });
+
+    const out = await f('/api/staking/locks/unlock', {
+      method: 'POST',
+      body: JSON.stringify({ walletAddress: wallet, lockId, idempotencyKey, signature })
+    });
+
+    msg(`Unlock requested! Reference: ${short(out.payout.id)}. Treasury executor will send principal + rewards automatically.`);
+    showSuccess('Unlock Requested', 'Your matured lock has been unlocked. The payout executor is broadcasting your principal and rewards.');
+    await load();
+  } catch (e) {
+    msg(e.message);
+  }
+}
+
+updateProjection();
+</script>
+</body>
+</html>

@@ -83,7 +83,7 @@ export async function confirmPayout(payoutId: string): Promise<Payout | null> {
   });
   if (matching.length !== 1) throw new Error("Payout receipt did not contain the expected TERA transfer.");
   const result = await pool.query("UPDATE staking_payouts SET status='confirmed',confirmed_at=NOW(),updated_at=NOW() WHERE id=$1 AND status='broadcast' RETURNING id,wallet_address,principal_amount,reward_amount,status,serialized_tx,tx_hash", [payout.id]);
-  if (result.rowCount) await pool.query("INSERT INTO staking_events (epoch_id,wallet_address,kind,amount,metadata) SELECT epoch_id,wallet_address,'payout_confirmed',principal_amount+reward_amount,jsonb_build_object('payoutId',id,'txHash',tx_hash) FROM staking_payouts WHERE id=$1", [payout.id]);
+  if (result.rowCount) await pool.query("INSERT INTO staking_events (epoch_id,lock_id,wallet_address,kind,amount,metadata) SELECT epoch_id,lock_id,wallet_address,'payout_confirmed',principal_amount+reward_amount,jsonb_build_object('payoutId',id,'txHash',tx_hash) FROM staking_payouts WHERE id=$1", [payout.id]);
   return (result.rows[0] ?? payout) as Payout;
 }
 

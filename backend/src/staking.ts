@@ -72,3 +72,33 @@ export function reserveSummary(
   const required = principalOwed + rewardLiability;
   return { poolBalance, principalOwed, rewardLiability, required, surplus: poolBalance - required, solvent: poolBalance >= required };
 }
+
+export const FIXED_STAKING_TIERS = {
+  30: { days: 30, apyBps: 600, label: "30 Days", apyPercent: "6.0%" },
+  45: { days: 45, apyBps: 900, label: "45 Days", apyPercent: "9.0%" },
+  90: { days: 90, apyBps: 1400, label: "90 Days", apyPercent: "14.0%" },
+} as const;
+
+export type StakingTierDays = 30 | 45 | 90;
+
+export function isValidStakingTier(days: unknown): days is StakingTierDays {
+  return typeof days === "number" && (days === 30 || days === 45 || days === 90);
+}
+
+/**
+ * Deterministic fixed reward calculation in base token units:
+ * Reward = (principal * apyBps * days) / (10,000 * 365)
+ *        = (principal * apyBps * days) / 3,650,000
+ */
+export function calculateFixedReward(principal: bigint, days: number, apyBps: number): bigint {
+  if (principal <= 0n) return 0n;
+  return (principal * BigInt(apyBps) * BigInt(days)) / 3650000n;
+}
+
+/**
+ * Check if a fixed staking lock is mature (strict lock: strictly no early unlock).
+ */
+export function isLockMature(unlocksAtSeconds: number, chainNowSeconds: number): boolean {
+  return chainNowSeconds >= unlocksAtSeconds;
+}
+
