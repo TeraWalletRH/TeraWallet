@@ -34,7 +34,7 @@
 import { getAddress, isAddress, verifyMessage, type Hex } from "viem";
 import pool from "./db";
 import { env } from "./env";
-import { claimMessage, parseTag, releaseMessage, skeleton } from "../../public/tera/core/tags.js";
+import { claimMessage, parseTag, releaseMessage, skeleton } from "./tag-core";
 
 /** How long a signed claim stays good for. Matches the deletion request window. */
 const SIGNATURE_WINDOW_MS = 5 * 60_000;
