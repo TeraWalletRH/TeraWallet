@@ -5,8 +5,8 @@ import { privateKeyToAccount } from "viem/accounts";
 import pool from "../db";
 import { env } from "../env";
 import { logger } from "../logging";
-import { advanceEpoch, changeStake, type StakingEpoch, type StakingPosition } from "../staking";
-import { payoutAuthorizationMessage, payoutTotal } from "../staking-outbox";
+import { advanceEpoch, changeStake, calculateFixedReward, FIXED_STAKING_TIERS, isLockMature, isValidStakingTier, type StakingEpoch, type StakingPosition } from "../staking";
+import { lockPayoutAuthorizationMessage, payoutAuthorizationMessage, payoutTotal } from "../staking-outbox";
 import { broadcastPayout, confirmPayout } from "../staking-executor";
 
 const router = Router();
@@ -114,14 +114,350 @@ router.get("/api/admin/staking/epochs", requireAdmin, async (_req, res) => {
   } catch { res.status(503).json({success:false,error:'Unable to read admin epochs.'}); }
 });
 
+router.get("/api/staking/tiers", (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    tiers: Object.values(FIXED_STAKING_TIERS),
+  });
+});
+
 /** Exact TERA transfer the wallet should review and submit when staking. */
 router.post("/api/staking/prepare-deposit", (req, res) => {
   try {
     if (!configured()) throw new Error('Staking is unavailable.');
-    const amount=base(req.body?.amount,'amount'); if(amount<=0n) throw new Error('amount must be positive.');
-    const data=encodeFunctionData({abi:erc20Abi,functionName:'transfer',args:[poolAddress()!,amount]});
-    res.json({success:true,preparedTransaction:{to:getAddress(env.teraTokenAddress),data,value:'0x0',chainId:env.rhcChainId},poolAddress:poolAddress(),amount:amount.toString()});
-  } catch(error) { res.status(422).json({success:false,error:error instanceof Error?error.message:'Unable to prepare deposit.'}); }
+    const amount = base(req.body?.amount, 'amount');
+    if (amount <= 0n) throw new Error('amount must be positive.');
+    const data = encodeFunctionData({ abi: erc20Abi, functionName: 'transfer', args: [poolAddress()!, amount] });
+
+    let tierInfo = null;
+    const termDays = req.body?.termDays !== undefined && req.body?.termDays !== null ? Number(req.body.termDays) : null;
+    if (termDays !== null) {
+      if (!isValidStakingTier(termDays)) throw new Error('Invalid staking tier duration. Must be 30, 45, or 90 days.');
+      const tier = FIXED_STAKING_TIERS[termDays];
+      const reward = calculateFixedReward(amount, tier.days, tier.apyBps);
+      tierInfo = {
+        days: tier.days,
+        apyPercent: tier.apyPercent,
+        apyBps: tier.apyBps,
+        projectedReward: reward.toString(),
+        totalReturn: (amount + reward).toString(),
+      };
+    }
+
+    res.json({
+      success: true,
+      preparedTransaction: { to: getAddress(env.teraTokenAddress), data, value: '0x0', chainId: env.rhcChainId },
+      poolAddress: poolAddress(),
+      amount: amount.toString(),
+      tier: tierInfo,
+    });
+  } catch(error) {
+    res.status(422).json({ success: false, error: error instanceof Error ? error.message : 'Unable to prepare deposit.' });
+  }
+});
+
+/** Create/reconcile a fixed staking lock after on-chain transfer confirmation. */
+router.post("/api/staking/locks", async (req: Request, res: Response) => {
+  if (!configured() || !pool) {
+    res.status(503).json({ success: false, error: "Staking is not available." });
+    return;
+  }
+  try {
+    const termDays = Number(req.body?.termDays);
+    if (!isValidStakingTier(termDays)) {
+      throw new Error("Invalid staking tier duration. Must be 30, 45, or 90 days.");
+    }
+    const tier = FIXED_STAKING_TIERS[termDays];
+    const walletAddress = typeof req.body?.walletAddress === "string" && isAddress(req.body.walletAddress)
+      ? getAddress(req.body.walletAddress)
+      : null;
+    const txHash = typeof req.body?.txHash === "string" && /^0x[\da-fA-F]{64}$/.test(req.body.txHash)
+      ? (req.body.txHash as Hex)
+      : null;
+
+    if (!walletAddress || !txHash) {
+      throw new Error("walletAddress and txHash are required.");
+    }
+
+    const transfer = await confirmedTransfer(txHash, walletAddress, poolAddress()!, null);
+    const db = await pool.connect();
+    try {
+      await db.query("BEGIN");
+      await db.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`tera_staking_lock:${txHash}`]);
+
+      const existing = await db.query(
+        "SELECT * FROM staking_locks WHERE deposit_tx_hash = $1 LIMIT 1 FOR UPDATE",
+        [txHash],
+      );
+      if (existing.rowCount) {
+        await db.query("COMMIT");
+        res.status(200).json({
+          success: true,
+          status: "credited",
+          alreadyCredited: true,
+          lock: existing.rows[0],
+        });
+        return;
+      }
+
+      const startsAt = transfer.blockTimestamp;
+      const unlocksAt = startsAt + (tier.days * 86400);
+      const rewardAmount = calculateFixedReward(transfer.amount, tier.days, tier.apyBps);
+
+      const bal = await client.readContract({
+        address: getAddress(env.teraTokenAddress),
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [poolAddress()!],
+      });
+      const liabilitiesResult = await db.query(`
+        SELECT COALESCE(SUM(active_stake + accrued_rewards), 0) AS amount FROM staking_positions
+        UNION ALL
+        SELECT COALESCE(SUM(principal_amount + reward_amount), 0) FROM staking_locks WHERE status = 'locked'
+        UNION ALL
+        SELECT COALESCE(SUM(principal_amount + reward_amount), 0) FROM staking_payouts WHERE status IN ('requested', 'signed', 'broadcast')
+      `);
+      const existingLiabilities = liabilitiesResult.rows.reduce((sum, r) => sum + BigInt(r.amount), 0n);
+      const required = existingLiabilities + transfer.amount + rewardAmount;
+      if (bal < required) {
+        throw new Error("Pool reserve cannot cover guaranteed rewards for this lock duration.");
+      }
+
+      const lockInsert = await db.query(
+        `INSERT INTO staking_locks (
+          wallet_address, term_days, apy_bps, principal_amount, reward_amount,
+          starts_at, unlocks_at, deposit_tx_hash, status
+        ) VALUES ($1, $2, $3, $4, $5, to_timestamp($6), to_timestamp($7), $8, 'locked')
+        RETURNING *`,
+        [
+          walletAddress,
+          tier.days,
+          tier.apyBps,
+          transfer.amount.toString(),
+          rewardAmount.toString(),
+          startsAt,
+          unlocksAt,
+          txHash,
+        ],
+      );
+      const lock = lockInsert.rows[0];
+
+      await db.query(
+        `INSERT INTO staking_events (lock_id, wallet_address, kind, amount, tx_hash, metadata)
+         VALUES ($1, $2, 'stake', $3, $4, $5)`,
+        [
+          lock.id,
+          walletAddress,
+          transfer.amount.toString(),
+          txHash,
+          JSON.stringify({
+            termDays: tier.days,
+            apyBps: tier.apyBps,
+            startsAt,
+            unlocksAt,
+            rewardAmount: rewardAmount.toString(),
+          }),
+        ],
+      );
+
+      await db.query("COMMIT");
+      res.status(201).json({
+        success: true,
+        status: "credited",
+        creditedAmount: transfer.amount.toString(),
+        rewardAmount: rewardAmount.toString(),
+        lock,
+      });
+    } catch (err) {
+      await db.query("ROLLBACK");
+      throw err;
+    } finally {
+      db.release();
+    }
+  } catch (error) {
+    logger.warn(req, "staking.fixed_lock_rejected", error);
+    const message = error instanceof Error ? error.message : "Unable to credit fixed lock.";
+    if (/awaiting a chain receipt|awaiting required chain confirmations/i.test(message)) {
+      res.status(202).json({ success: true, status: "awaiting_confirmations" });
+      return;
+    }
+    res.status(message.includes("already exists") ? 409 : 422).json({ success: false, error: message });
+  }
+});
+
+/** List all fixed staking locks for a wallet. */
+router.get("/api/staking/locks/:walletAddress", async (req: Request, res: Response) => {
+  const walletAddress = String(req.params.walletAddress);
+  if (!isAddress(walletAddress)) {
+    res.status(400).json({ success: false, error: "walletAddress must be a valid EVM address." });
+    return;
+  }
+  if (!pool) {
+    res.status(200).json({ success: true, locks: [] });
+    return;
+  }
+  try {
+    const result = await pool.query(
+      `SELECT id, wallet_address, term_days, apy_bps, principal_amount, reward_amount,
+              starts_at, unlocks_at, deposit_tx_hash, status, claimed_at, payout_id, created_at
+       FROM staking_locks
+       WHERE LOWER(wallet_address) = LOWER($1)
+       ORDER BY created_at DESC`,
+      [walletAddress],
+    );
+
+    let chainNow = Math.floor(Date.now() / 1000);
+    try { chainNow = Number((await client.getBlock()).timestamp); } catch {}
+
+    const locks = result.rows.map((row) => {
+      const unlockSeconds = Math.floor(new Date(row.unlocks_at).getTime() / 1000);
+      const isMatured = row.status === "locked" && chainNow >= unlockSeconds;
+      const secondsRemaining = Math.max(0, unlockSeconds - chainNow);
+      return {
+        ...row,
+        effectiveStatus: row.status === "claimed" ? "claimed" : isMatured ? "matured" : "locked",
+        isMatured,
+        secondsRemaining,
+      };
+    });
+
+    res.json({ success: true, locks });
+  } catch (error) {
+    logger.error(req, "staking.locks_read_failed", error);
+    res.status(503).json({ success: false, error: "Staking ledger is unavailable." });
+  }
+});
+
+/** Prepare authorization message for unlocking a matured fixed staking lock. */
+router.post("/api/staking/locks/unlock-authorization", async (req: Request, res: Response) => {
+  if (!pool) {
+    res.status(503).json({ success: false, error: "Staking ledger is unavailable." });
+    return;
+  }
+  try {
+    const wallet = typeof req.body?.walletAddress === "string" && isAddress(req.body.walletAddress) ? getAddress(req.body.walletAddress) : null;
+    const lockId = String(req.body?.lockId ?? "");
+    const idempotencyKey = String(req.body?.idempotencyKey ?? "");
+    if (!wallet || !lockId || !idempotencyKey) throw new Error("Valid walletAddress, lockId, and idempotencyKey are required.");
+
+    const found = await pool.query("SELECT * FROM staking_locks WHERE id = $1 AND LOWER(wallet_address) = LOWER($2)", [lockId, wallet]);
+    const lock = found.rows[0];
+    if (!lock) throw new Error("Staking lock not found.");
+    if (lock.status === "claimed") throw new Error("This lock has already been claimed.");
+
+    let chainNow: number;
+    try { chainNow = Number((await client.getBlock()).timestamp); }
+    catch { chainNow = Math.floor(Date.now() / 1000); }
+
+    const unlockSeconds = Math.floor(new Date(lock.unlocks_at).getTime() / 1000);
+    if (!isLockMature(unlockSeconds, chainNow)) {
+      const remainingDays = Math.ceil((unlockSeconds - chainNow) / 86400);
+      throw new Error(`Lock is strictly non-withdrawable until maturity (${remainingDays} days remaining).`);
+    }
+
+    const totalPayout = BigInt(lock.principal_amount) + BigInt(lock.reward_amount);
+    res.json({
+      success: true,
+      message: lockPayoutAuthorizationMessage(wallet, lockId, totalPayout.toString(), idempotencyKey),
+      totalPayout: totalPayout.toString(),
+    });
+  } catch (error) {
+    res.status(422).json({ success: false, error: error instanceof Error ? error.message : "Unable to prepare unlock authorization." });
+  }
+});
+
+/** Claim and unlock a matured fixed staking lock (strict lock verified). */
+router.post("/api/staking/locks/unlock", async (req: Request, res: Response) => {
+  if (!pool || !configured()) {
+    res.status(503).json({ success: false, error: "Staking is unavailable." });
+    return;
+  }
+  try {
+    const wallet = typeof req.body?.walletAddress === "string" && isAddress(req.body.walletAddress) ? getAddress(req.body.walletAddress) : null;
+    const lockId = String(req.body?.lockId ?? "");
+    const idempotencyKey = String(req.body?.idempotencyKey ?? "");
+    const signature = typeof req.body?.signature === "string" ? (req.body.signature as Hex) : null;
+
+    if (!wallet || !lockId || !idempotencyKey || !signature || idempotencyKey.length > 128) {
+      throw new Error("Valid signed unlock request is required.");
+    }
+
+    const found = await pool.query("SELECT * FROM staking_locks WHERE id = $1 AND LOWER(wallet_address) = LOWER($2)", [lockId, wallet]);
+    const lock = found.rows[0];
+    if (!lock) throw new Error("Staking lock not found.");
+    if (lock.status === "claimed") throw new Error("This lock has already been claimed.");
+
+    const totalPayout = BigInt(lock.principal_amount) + BigInt(lock.reward_amount);
+    const expectedMessage = lockPayoutAuthorizationMessage(wallet, lockId, totalPayout.toString(), idempotencyKey);
+    const signed = await verifyMessage({ address: wallet, message: expectedMessage, signature });
+    if (!signed) throw new Error("Unlock signature does not belong to the wallet.");
+
+    let chainNow: number;
+    try { chainNow = Number((await client.getBlock()).timestamp); }
+    catch { throw new Error("Unable to read blockchain timestamp."); }
+
+    const unlockSeconds = Math.floor(new Date(lock.unlocks_at).getTime() / 1000);
+    if (!isLockMature(unlockSeconds, chainNow)) {
+      throw new Error("Lock is strictly non-withdrawable before maturity.");
+    }
+
+    const db = await pool.connect();
+    try {
+      await db.query("BEGIN");
+      await db.query("SELECT pg_advisory_xact_lock(hashtext('tera_staking_pool'))");
+
+      const currentLockResult = await db.query("SELECT * FROM staking_locks WHERE id = $1 FOR UPDATE", [lockId]);
+      const currentLock = currentLockResult.rows[0];
+      if (currentLock.status === "claimed") throw new Error("This lock has already been claimed.");
+
+      const bal = await client.readContract({
+        address: getAddress(env.teraTokenAddress),
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [poolAddress()!],
+      });
+      const liabilities = await db.query(`
+        SELECT COALESCE(SUM(active_stake + accrued_rewards), 0) AS owners FROM staking_positions
+        UNION ALL
+        SELECT COALESCE(SUM(principal_amount + reward_amount), 0) FROM staking_locks WHERE status = 'locked' AND id <> $1
+        UNION ALL
+        SELECT COALESCE(SUM(principal_amount + reward_amount), 0) FROM staking_payouts WHERE status IN ('requested', 'signed', 'broadcast')
+      `, [lockId]);
+      const required = liabilities.rows.reduce((n, r) => n + BigInt(r.owners), 0n) + totalPayout;
+      if (bal < required) throw new Error("Pool reserve is insufficient; payout was not created.");
+
+      const out = await db.query(
+        `INSERT INTO staking_payouts (lock_id, wallet_address, kind, principal_amount, reward_amount, idempotency_key)
+         VALUES ($1, $2, 'unstake', $3, $4, $5)
+         ON CONFLICT (idempotency_key) DO NOTHING RETURNING *`,
+        [lockId, wallet, lock.principal_amount, lock.reward_amount, idempotencyKey],
+      );
+      if (!out.rowCount) throw new Error("This payout request already exists.");
+      const payout = out.rows[0];
+
+      await db.query(
+        "UPDATE staking_locks SET status = 'claimed', claimed_at = NOW(), payout_id = $2, updated_at = NOW() WHERE id = $1",
+        [lockId, payout.id],
+      );
+
+      await db.query(
+        `INSERT INTO staking_events (lock_id, wallet_address, kind, amount, metadata)
+         VALUES ($1, $2, 'unstake_requested', $3, $4)`,
+        [lockId, wallet, totalPayout.toString(), JSON.stringify({ payoutId: payout.id })],
+      );
+
+      await db.query("COMMIT");
+      res.status(201).json({ success: true, payout });
+    } catch (e) {
+      await db.query("ROLLBACK");
+      throw e;
+    } finally {
+      db.release();
+    }
+  } catch (e) {
+    logger.warn(req, "staking.fixed_unlock_rejected", e);
+    res.status(422).json({ success: false, error: e instanceof Error ? e.message : "Unable to unlock fixed staking position." });
+  }
 });
 
 router.get("/api/staking/payouts/:walletAddress", async (req, res) => {
@@ -331,7 +667,7 @@ router.post("/api/staking/payouts", async (req, res) => {
       const out=await db.query("INSERT INTO staking_payouts (epoch_id,wallet_address,kind,principal_amount,reward_amount,idempotency_key) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (idempotency_key) DO NOTHING RETURNING *",[epochId,wallet,kind,principal.toString(),reward.toString(),key]);
       if(!out.rowCount) throw new Error('This payout request already exists.');
       const bal=await client.readContract({address:getAddress(env.teraTokenAddress),abi:erc20Abi,functionName:'balanceOf',args:[poolAddress()!]});
-      const liabilities=await db.query("SELECT COALESCE(SUM(active_stake+accrued_rewards),0) AS owners FROM staking_positions UNION ALL SELECT COALESCE(SUM(principal_amount+reward_amount),0) FROM staking_payouts WHERE status IN ('requested','signed','broadcast')");
+      const liabilities=await db.query("SELECT COALESCE(SUM(active_stake+accrued_rewards),0) AS owners FROM staking_positions UNION ALL SELECT COALESCE(SUM(principal_amount+reward_amount),0) FROM staking_locks WHERE status='locked' UNION ALL SELECT COALESCE(SUM(principal_amount+reward_amount),0) FROM staking_payouts WHERE status IN ('requested','signed','broadcast')");
       const required=liabilities.rows.reduce((n,r)=>n+BigInt(r.owners),0n); if(bal<required) throw new Error('Pool reserve is insufficient; payout was not created.');
       await db.query("INSERT INTO staking_events (epoch_id,wallet_address,kind,amount,metadata) VALUES ($1,$2,$3,$4,$5)",[epochId,wallet,kind==='claim'?'claim_requested':'unstake_requested',total.toString(),JSON.stringify({payoutId:out.rows[0].id})]);
       await db.query('COMMIT'); res.status(201).json({success:true,payout:out.rows[0]});
