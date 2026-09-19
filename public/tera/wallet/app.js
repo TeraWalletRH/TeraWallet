@@ -2287,7 +2287,7 @@ async function loadMyTag() {
 
 function tagPanel() {
   if (!tagsAvailable())
-    return "<p>This deployment has no tag registry, so tags are unavailable here.</p>";
+    return "<p>Tags aren't available right now. Please try again shortly.</p>";
   if (!state.owner) return "<p>Connect your wallet to see or claim a tag.</p>";
   const held =
     state.myTag === undefined
@@ -2308,7 +2308,7 @@ function tagPanel() {
  */
 function claimTagDialog() {
   connected();
-  if (!tagsAvailable()) throw new Error("This deployment has no tag registry.");
+  if (!tagsAvailable()) throw new Error("Something went wrong. Please try again shortly.");
   dialog(
     "Claim a tag.",
     `<form id="tag-form"><div class="field"><label for="tag-name">Tag</label><input id="tag-name" name="tag" placeholder="@astra" autocomplete="off" autocapitalize="none" spellcheck="false" required></div><p id="tag-form-status" class="micro"></p><p class="micro">You will be asked to sign the claim. There is no network fee: the tag is recorded by Tera, not on chain.</p><p class="live-form-error" role="alert"></p><button class="btn primary">Sign and claim ↗</button></form>`,
@@ -3166,7 +3166,7 @@ function composeTransfer(slots) {
   if (slots.recipientTag && !tagsAvailable()) {
     state.chat.push({
       role: "assistant",
-      text: `This wallet has no tag registry configured, so ${displayTag(slots.recipientTag)} could not be looked up and nothing was filled in. Paste the recipient's address instead.`,
+      text: `Tags aren't available right now, so ${displayTag(slots.recipientTag)} couldn't be looked up. Paste the recipient's address instead.`,
       local: true,
       note: "Read from your message on this device. No model ran and no request was made.",
     });
