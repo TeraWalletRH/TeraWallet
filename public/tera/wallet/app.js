@@ -2082,9 +2082,12 @@ async function refreshAccount() {
     ["sessions", `/api/session/${owner}`],
   ];
   const results = await Promise.allSettled(requests.map(([, path]) => api(path)));
+  if (version !== generation) return;
   // Read from the registry rather than requested alongside the service calls
   // above: the owner's own name is answered by the chain like everyone
-  // else's, and a service outage leaves it unknown rather than blank.
+  // else's, and a service outage leaves it unknown rather than blank. After
+  // the generation check, so a disconnect mid-refresh cannot write the old
+  // account's name into the new one's state.
   await loadMyTag();
   if (version !== generation) return;
   results.forEach((result, i) => {
