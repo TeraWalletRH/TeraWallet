@@ -9,8 +9,8 @@ Native Expo / React Native wallet, using Tera's cream, forest-green and monospac
 - Robinhood Chain ETH and USDG balances, transfers, locally reviewed USDG/equity swaps, assistant proposals and scoped service tokens.
 - Relay bridges from RH ETH/USDG to Base ETH/USDC, Solana SOL/USDC/USDT and Arc USDC. Destination address is pasted; source transactions are signed on the phone.
 - Encrypted local drafts, pending hashes and history, configurable retention, local deletion and signed backend proposal deletion. Assistant chat is memory-only.
-- Tags: send to `@astra` instead of an address, and claim a name for this wallet. The tag is resolved against `TagRegistry` on chain — by the app, not by the API — and the resolved address is shown on the review sheet and re-read immediately before signing. Tags are not offered as bridge destinations, because a bridge sends to another chain where that address is a different account.
-- In-app updates: the app checks `/api/mobile/android/manifest` on launch and offers what is published. Set `EXPO_PUBLIC_TAG_REGISTRY_ADDRESS` and `EXPO_PUBLIC_UPDATES_URL` to turn either on; unset, the controls stay hidden.
+- Tags: send to `@astra` instead of an address, and claim a name for this wallet. Tera keeps the register, so resolving a name means trusting the service — unlike a balance or a receipt, there is nothing else to check it against, and the claim screen says so. The resolved address is shown on the review sheet and re-read immediately before signing, and the transfer is built from the address. Tags are not offered as bridge destinations, because a bridge sends to another chain where that address is a different account.
+- In-app updates: the app checks `/api/mobile/android/manifest` on launch and offers what is published. Set `EXPO_PUBLIC_UPDATES_URL` for JavaScript updates; unset, the Update button falls back to a new APK. Tags turn on when the API says the register is enabled.
 
 ## Updating
 

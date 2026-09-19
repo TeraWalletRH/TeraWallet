@@ -154,11 +154,9 @@ import { parseRegistry, LIMITS as REGISTRY_LIMITS } from "../core/registry.js";
 import {
   parseTag,
   display as displayTag,
-  claimTypedData,
-  eip712Payload,
+  claimMessage,
   LIMITS as TAG_LIMITS,
 } from "../core/tags.js";
-import { resolveOnChain, tagOfOnChain, noncesOnChain } from "../core/tags-chain.js";
 import {
   ACTIONS,
   createPreset,
@@ -171,13 +169,10 @@ import {
 const config = JSON.parse(document.getElementById("tera-config")?.textContent || "{}");
 const chainId = Number(config.chainId || 4663);
 const apiUrl = config.apiUrl || "https://api.terawallet.app";
-// Where the tag registry lives. Unset means this deployment has no registry
-// deployed yet, and every tag control stays hidden rather than offering a
-// lookup that cannot be made.
-const tagRegistry = /^0x[\da-fA-F]{40}$/.test(String(config.tagRegistryAddress || ""))
-  ? config.tagRegistryAddress
-  : "";
-const tagsAvailable = () => Boolean(tagRegistry);
+// Whether this deployment keeps a tag register at all. Answered by the
+// service on load; until it says yes, every tag control stays hidden rather
+// than offering a lookup that cannot be made.
+const tagsAvailable = () => Boolean(state.tagsEnabled);
 const serviceHost = (() => {
   try {
     return new URL(apiUrl).host;
@@ -387,6 +382,10 @@ const pair = (label, value) =>
   `<div class="pair"><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
 const state = {
   owner: "",
+  // Whether this deployment keeps a tag register. Assumed off until the
+  // service says otherwise, so a failed config call hides the controls rather
+  // than showing ones that cannot work.
+  tagsEnabled: false,
   // The owner's own tag. `undefined` means not checked, `null` means none.
   myTag: undefined,
   tagPromptDismissed: false,
@@ -2230,23 +2229,6 @@ async function setAccount(accounts) {
   }
   if (version === generation) await refreshAccount();
 }
-// Reading the tag registry through the wallet's own provider.
-//
-// Deliberately not through the service. `/api/tags/resolve` exists, and it is
-// useful for autocomplete, but the address a transaction is built from is read
-// here by the same eth_call path as a balance — because a service that
-// answered with the wrong address would be believed, and the owner would be
-// reading a name they trust rather than the forty characters underneath it.
-//
-// If there is no connected provider there is nothing to read with, and the
-// form says so. It never falls back to an answer somebody else gave it.
-function registryCall() {
-  const provider = state.provider;
-  if (!provider) return null;
-  return ({ to, data }) =>
-    provider.request({ method: "eth_call", params: [{ to, data }, "latest"] });
-}
-
 // What the owner most recently confirmed a tag to mean, by address. Shown
 // beside the recipient on the approvals panel so the name and the address stay
 // together after the form is closed. Never sent anywhere, and never used to
@@ -2260,15 +2242,21 @@ function noteTagResolution(tag, address) {
 const tagFor = (address) =>
   (isAddress(address) && tagResolutions.get(String(address).toLowerCase())?.tag) || "";
 
+/**
+ * Ask Tera which address a name stands for.
+ *
+ * Tera keeps this register, so this answer is trusted in a way a balance is
+ * not. That is why the form prints the address it got back rather than a tick
+ * beside the name: the owner is agreeing to the address, and it is the only
+ * part of this a wrong answer cannot survive unnoticed.
+ */
 async function resolveTagForSend(input) {
   const parsed = parseTag(input);
   if (!parsed.ok) throw new Error(parsed.reason);
-  const call = registryCall();
-  if (!call) throw new Error("Connect your wallet before looking up a tag.");
-  const { address } = await resolveOnChain({ call, registry: tagRegistry, tag: parsed.tag });
-  if (!address) throw new Error(`No wallet holds ${displayTag(parsed.tag)}.`);
-  noteTagResolution(parsed.tag, address);
-  return { tag: parsed.tag, address };
+  const result = await api("/api/tags/resolve", { tag: parsed.tag });
+  if (!result.address) throw new Error(`No wallet holds ${displayTag(parsed.tag)}.`);
+  noteTagResolution(parsed.tag, result.address);
+  return { tag: parsed.tag, address: result.address };
 }
 
 /**
@@ -2277,12 +2265,21 @@ async function resolveTagForSend(input) {
  * `null` means they hold none; `undefined` means the question has not been
  * answered, which the panel shows as "not checked" rather than as "none".
  */
+async function loadTagConfig() {
+  try {
+    const result = await api("/api/tags/config");
+    state.tagsEnabled = Boolean(result.enabled);
+  } catch {
+    state.tagsEnabled = false;
+  }
+  if (state.tagsEnabled) await loadMyTag();
+  render();
+}
+
 async function loadMyTag() {
   if (!tagsAvailable() || !state.owner) return;
-  const call = registryCall();
-  if (!call) return;
   try {
-    state.myTag = await tagOfOnChain({ call, registry: tagRegistry, address: state.owner });
+    state.myTag = (await api(`/api/tags/by-address/${state.owner}`)).tag ?? null;
   } catch {
     state.myTag = undefined;
   }
@@ -2298,24 +2295,23 @@ function tagPanel() {
       : state.myTag
         ? displayTag(state.myTag)
         : "None claimed";
-  return `<p>A tag lets someone send to a name instead of your address. It is public: anyone can read which address it points at, and it names this wallet on Robinhood Chain only.</p>${pair("Your tag", held)}${pair("Registry", short(tagRegistry))}<p class="micro">${esc(`${TAG_LIMITS.minLength}–${TAG_LIMITS.maxLength} characters of ${TAG_LIMITS.charset}, ${TAG_LIMITS.shape}. Names that read alike count as the same name, so @astr0 cannot be claimed while @astro exists.`)}</p><div class="actions">${button(state.myTag ? "Change tag" : "Claim a tag", "tag-claim")}</div>`;
+  return `<p>A tag lets someone send to a name instead of your address. It is public: anyone can read which address it points at, and it names this wallet on Robinhood Chain only.</p><p class="micro">Tera keeps the tag register. Resolving a name means trusting Tera to answer honestly — unlike a balance or a receipt, there is nothing else to check it against. Read the address on the review screen before you approve.</p>${pair("Your tag", held)}<p class="micro">${esc(`${TAG_LIMITS.minLength}–${TAG_LIMITS.maxLength} characters of ${TAG_LIMITS.charset}, ${TAG_LIMITS.shape}. Names that read alike count as the same name, so @astr0 cannot be claimed while @astro exists.`)}</p><div class="actions">${button(state.myTag ? "Change tag" : "Claim a tag", "tag-claim")}</div>`;
 }
 
 /**
  * Claim a name.
  *
- * The owner signs an EIP-712 struct naming the tag, their address, the
- * registry's current nonce for them and a deadline; Tera submits it and pays
- * the gas. Tera cannot alter any of those four — the registry checks the
- * owner's signature, not the sender's — so the most it can do is decline to
- * relay.
+ * The owner signs the claim with their wallet and Tera records it. The
+ * signature stops a claim being forged in transit; it does not make Tera
+ * unable to rewrite the register afterwards, and the dialog says so rather
+ * than implying a guarantee this design does not provide.
  */
 function claimTagDialog() {
   connected();
   if (!tagsAvailable()) throw new Error("This deployment has no tag registry.");
   dialog(
     "Claim a tag.",
-    `<form id="tag-form"><div class="field"><label for="tag-name">Tag</label><input id="tag-name" name="tag" placeholder="@astra" autocomplete="off" autocapitalize="none" spellcheck="false" required></div><p id="tag-form-status" class="micro"></p><p class="micro">You will be asked to sign the claim. Tera submits it and pays the network fee; it cannot change the name or the address you signed for.</p><p class="live-form-error" role="alert"></p><button class="btn primary">Sign and claim ↗</button></form>`,
+    `<form id="tag-form"><div class="field"><label for="tag-name">Tag</label><input id="tag-name" name="tag" placeholder="@astra" autocomplete="off" autocapitalize="none" spellcheck="false" required></div><p id="tag-form-status" class="micro"></p><p class="micro">You will be asked to sign the claim. There is no network fee: the tag is recorded by Tera, not on chain.</p><p class="live-form-error" role="alert"></p><button class="btn primary">Sign and claim ↗</button></form>`,
   );
   const form = document.getElementById("tag-form");
   const status = document.getElementById("tag-form-status");
@@ -2330,33 +2326,22 @@ function claimTagDialog() {
     try {
       const parsed = parseTag(new FormData(form).get("tag"));
       if (!parsed.ok) throw new Error(parsed.reason);
-      const call = registryCall();
-      if (!call) throw new Error("Connect your wallet before claiming a tag.");
-      const nonce = await noncesOnChain({ call, registry: tagRegistry, address: state.owner });
-      // Seconds, because the registry compares this to block.timestamp.
-      const deadline = Math.floor(Date.now() / 1000) + 15 * 60;
-      const payload = eip712Payload(
-        claimTypedData({
-          tag: parsed.tag,
-          owner: state.owner,
-          nonce,
-          deadline,
-          chainId,
-          registry: tagRegistry,
-        }),
-      );
+      const timestamp = Date.now();
+      // The same builder the service verifies against, so what is signed and
+      // what is checked cannot drift apart.
+      const message = claimMessage({ tag: parsed.tag, address: state.owner, timestamp });
       const signature = await state.provider.request({
-        method: "eth_signTypedData_v4",
-        params: [state.owner, JSON.stringify(payload)],
+        method: "personal_sign",
+        params: [message, state.owner],
       });
-      const result = await api("/api/tags/claim", {
+      await api("/api/tags/claim", {
         tag: parsed.tag,
         owner: state.owner,
-        deadline,
+        timestamp,
         signature,
       });
       closeDialog();
-      state.notice = `${displayTag(parsed.tag)} claimed. Tera submitted it as ${short(result.txHash)}; it points at your address once that transaction confirms.`;
+      state.notice = `${displayTag(parsed.tag)} now points at your address in Tera's tag register.`;
       await loadMyTag();
       render();
     } catch (error) {
@@ -4011,4 +3996,5 @@ setInterval(() => {
 }, 1000);
 render();
 void loadAssets();
+void loadTagConfig();
 void checkIntegrity();

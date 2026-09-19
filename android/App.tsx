@@ -22,8 +22,9 @@ import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { formatUnits, parseUnits, zeroAddress, isAddress, type Address } from "viem";
 import { api } from "./src/api";
-import { Asset, chain, destinations, sources, tagsAvailable, Tx, USDG } from "./src/config";
+import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
+const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
 import { balances, client, execute, transactionStatus } from "./src/network";
 import { policyFor } from "./src/policy";
@@ -130,6 +131,7 @@ function Wallet() {
     [myTag, setMyTag] = useState<string | null>(null),
     [claimInput, setClaimInput] = useState(""),
     [claimDismissed, setClaimDismissed] = useState(false),
+    [, setTagsOn] = useState(false),
     // What the published build is, if the check got an answer. Null means the
     // check has not run or could not be made — never "you are up to date",
     // which would be a claim this app did not verify.
@@ -191,6 +193,10 @@ function Wallet() {
     // Asked once, on launch, and never retried in a loop: an update is not
     // urgent enough to keep a phone talking to the network about it.
     void upd.checkForUpdate().then(setUpdate);
+    // Whether this deployment keeps a tag register at all. Off until it says
+    // yes, so a failed call hides the controls rather than offering ones that
+    // cannot work.
+    void tags.loadTagConfig().then(setTagsOn);
   }, []);
   useEffect(() => {
     vault
@@ -459,13 +465,13 @@ function Wallet() {
   /**
    * Claim a name for this wallet.
    *
-   * Signed here with the owner's key and submitted by Tera, which pays the
-   * gas. Tera cannot alter what was signed — the registry checks the owner's
-   * signature, not the sender's — so the most it can do is decline.
+   * Signed here with the owner's key; Tera records it. The signature stops a
+   * claim being forged on the way, not Tera rewriting the register later —
+   * the claim screen says which of those it is.
    */
   async function claimTagNow(guard: () => void) {
     const account = vault.currentAccount();
-    const { tag, txHash } = await tags.claimTag(account as never, claimInput);
+    const { tag } = await tags.claimTag(account as never, claimInput);
     guard();
     setMyTag(tag);
     setClaimInput("");
@@ -473,8 +479,8 @@ function Wallet() {
     setNotice({
       title: t("Tag claimed", "标签已领取"),
       body: t(
-        `${tags.display(tag)} now points at this wallet. Transaction ${txHash.slice(0, 10)}…`,
-        `${tags.display(tag)} 现已指向此钱包。交易 ${txHash.slice(0, 10)}…`,
+        `${tags.display(tag)} now points at this wallet in Tera's tag register.`,
+        `${tags.display(tag)} 现已在 Tera 标签注册表中指向此钱包。`,
       ),
       tone: "success",
     });
@@ -1280,8 +1286,14 @@ function Wallet() {
           </Text>
           <Text style={s.small}>
             {t(
-              "A tag is public and permanent while you hold it: anyone can see which address it points at. It names this wallet on Robinhood Chain only — it is not an address on any other chain, and it cannot be used as a bridge destination.",
-              "标签是公开的，在您持有期间任何人都可查看其指向的地址。它仅在 Robinhood Chain 上标识此钱包，并非其他链上的地址，也不能用作跨链目标地址。",
+              "A tag is public while you hold it: anyone can see which address it points at. It names this wallet on Robinhood Chain only — it is not an address on any other chain, and it cannot be used as a bridge destination.",
+              "标签在您持有期间是公开的，任何人都可查看其指向的地址。它仅在 Robinhood Chain 上标识此钱包，并非其他链上的地址，也不能用作跨链目标地址。",
+            )}
+          </Text>
+          <Text style={s.small}>
+            {t(
+              "Tera keeps the tag register. Resolving a name means trusting Tera to answer honestly — unlike a balance or a receipt, there is nothing else to check it against. Always read the address on the review screen before you approve.",
+              "Tera 维护标签注册表。解析名称意味着信任 Tera 如实作答——与余额或收据不同，没有其他依据可供核对。批准前请务必核对审核页面上的地址。",
             )}
           </Text>
           {myTag && (
@@ -1606,8 +1618,8 @@ function Wallet() {
                       : tagLookup.state === "error"
                         ? tagLookup.message
                         : t(
-                            "A tag is looked up on Robinhood Chain. You will see the address it resolves to before you sign.",
-                            "标签将在 Robinhood Chain 上查询。签名前会显示其对应地址。",
+                            "A tag is looked up in Tera's register. You will see the address it resolves to before you sign — read it.",
+                            "标签将在 Tera 注册表中查询。签名前会显示其对应地址，请仔细核对。",
                           )}
                 </Text>
               ) : (

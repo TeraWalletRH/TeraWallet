@@ -37,14 +37,12 @@ export const env = {
     }
     return process.env.NODE_ENV === "test";
   },
-  // Tags. Reading needs only the deployed registry; relaying a claim on an
-  // owner's behalf additionally needs a funded key, and is off without one.
-  // The relayer cannot forge a claim — claimFor verifies the owner's
-  // signature — so the worst a leaked key costs is gas.
+  // Tags. Tera keeps the register, so this needs no contract and no key —
+  // only the database and an explicit switch, because a naming authority
+  // should not turn itself on by default. No test fallback either: a register
+  // that switched itself on would answer "this name is free" in an
+  // environment where nothing is actually stored.
   tagsEnabled: process.env.TAGS_ENABLED === "true",
-  tagRegistryAddress: process.env.TAG_REGISTRY_ADDRESS ?? "",
-  tagRelayerPrivateKey: process.env.TAG_RELAYER_PRIVATE_KEY ?? "",
-  tagIndexIntervalMs: Number(process.env.TAG_INDEX_INTERVAL_MS ?? 20000),
   get privateSendVaultPrivateKey(): string {
     return (
       process.env.PRIVATE_SEND_VAULT_PRIVATE_KEY ||
