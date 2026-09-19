@@ -1,12 +1,13 @@
 import { Router } from "express";
 import { randomUUID } from "node:crypto";
-import { getAddress, isAddress, type Hex } from "viem";
+import { encodeFunctionData, erc20Abi, getAddress, isAddress, type Hex } from "viem";
 import pool from "../db";
 import { env } from "../env";
 import {
   destinations,
   NATIVE,
   relay,
+  USDG,
   validRecipient,
   validateQuote,
 } from "../bridge";
@@ -32,8 +33,19 @@ const same = (a: unknown, b: string) =>
   typeof a === "string" && a.toLowerCase() === b.toLowerCase();
 
 export const privateSourceAssets = [
+  { currency: USDG, symbol: "USDG", decimals: 6, native: false },
   { currency: NATIVE, symbol: "ETH", decimals: 18, native: true },
 ];
+
+export function findPrivateSourceAsset(body: any) {
+  const identifier = body?.originCurrency ?? body?.assetSymbol;
+  if (!identifier) return privateSourceAssets[0];
+  return privateSourceAssets.find(
+    (a) =>
+      same(a.currency, identifier) ||
+      (typeof identifier === "string" && a.symbol.toUpperCase() === identifier.toUpperCase()),
+  );
+}
 
 function handleConfig(_req: any, res: any) {
   if (!enabled()) {
@@ -76,6 +88,9 @@ async function handleQuote(req: any, res: any) {
       throw Error("Enter a valid destination wallet address.");
     }
 
+    const source = findPrivateSourceAsset(req.body);
+    if (!source) throw Error("Unsupported source asset.");
+
     const amount = base(req.body?.amount);
     const addrs = addresses();
     const startedAt = Date.now();
@@ -84,8 +99,8 @@ async function handleQuote(req: any, res: any) {
       ownerAddress: addrs.payoutAddress,
       recipient,
       amount: amount.toString(),
-      originCurrency: NATIVE,
-      source: privateSourceAssets[0],
+      originCurrency: source.currency,
+      source,
       destinationChainId: dest.id,
       destination: { ...destToken, chainId: dest.id, name: dest.name },
     };
@@ -95,7 +110,7 @@ async function handleQuote(req: any, res: any) {
       recipient,
       originChainId: 4663,
       destinationChainId: dest.id,
-      originCurrency: NATIVE,
+      originCurrency: source.currency,
       destinationCurrency: destToken.currency,
       amount: amount.toString(),
       tradeType: "EXACT_INPUT",
@@ -149,6 +164,9 @@ async function handleCreateJob(req: any, res: any) {
     );
     if (!destToken) throw Error("Unsupported destination token.");
 
+    const source = findPrivateSourceAsset(req.body);
+    if (!source) throw Error("Unsupported source asset.");
+
     const amount = base(req.body?.amount);
     const quoteRequestId =
       typeof req.body?.quoteRequestId === "string" &&
@@ -174,8 +192,8 @@ async function handleCreateJob(req: any, res: any) {
           vault_address, payout_address, relay_request_id, expires_at
         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *`,
         [
-          "ETH",
-          18,
+          source.symbol,
+          source.decimals,
           sender,
           dest.id,
           destToken.symbol,
@@ -194,8 +212,8 @@ async function handleCreateJob(req: any, res: any) {
     } else {
       job = {
         id: randomUUID(),
-        asset_symbol: "ETH",
-        decimals: 18,
+        asset_symbol: source.symbol,
+        decimals: source.decimals,
         sender_address: sender,
         destination_chain_id: dest.id,
         destination_symbol: destToken.symbol,
@@ -223,12 +241,23 @@ async function handleCreateJob(req: any, res: any) {
       memoryBridgeJobs.set(job.id, job);
     }
 
-    const tx = {
-      to: addrs.vaultAddress,
-      data: "0x" as Hex,
-      value: `0x${amount.toString(16)}`,
-      chainId: env.rhcChainId,
-    };
+    const tx = source.native
+      ? {
+          to: addrs.vaultAddress,
+          data: "0x" as Hex,
+          value: `0x${amount.toString(16)}`,
+          chainId: env.rhcChainId,
+        }
+      : {
+          to: getAddress(source.currency),
+          data: encodeFunctionData({
+            abi: erc20Abi,
+            functionName: "transfer",
+            args: [addrs.vaultAddress, amount],
+          }),
+          value: "0x0",
+          chainId: env.rhcChainId,
+        };
 
     res.status(201).json({ success: true, job, preparedDeposit: tx });
   } catch (e) {
