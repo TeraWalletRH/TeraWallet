@@ -8,20 +8,19 @@
 // which allow-lists exact paths — so `/api/tags/resolve` can be sealed and
 // sent through the relay like the assistant call is.
 //
-// Everything a route returns says where it came from. `chain` answers are read
-// from the registry contract at a named block; `index` answers come from
-// Tera's table and may lag. Nothing that decides a recipient is ever answered
-// from the index.
+// Every answer carries `source: "service"`, because Tera keeps this register
+// and an owner resolving a name is trusting it in a way they are not when the
+// same wallet reads a balance or checks a receipt.
 
 import { Router, type Request, type Response } from "express";
 import { logger } from "../logging";
 import {
   TagServiceError,
   availability,
+  claimTag,
   config,
   enabled,
-  nonceOf,
-  relayClaim,
+  releaseTag,
   resolveTag,
   searchTags,
   tagForAddress,
@@ -47,7 +46,7 @@ function fail(req: Request, res: Response, error: unknown, event: string) {
   logger.error(req, event, error);
   res.status(502).json({
     success: false,
-    error: "The tag registry could not be reached, so this name was not checked.",
+    error: "The tag register could not be reached, so this name was not checked.",
   });
 }
 
@@ -82,21 +81,6 @@ router.get("/api/tags/available/:tag", async (req, res) => {
   }
 });
 
-/**
- * What a client needs to build the claim signature: the owner's current nonce,
- * the chain, and the contract it will be verified by. All three go into the
- * EIP-712 domain and struct, so a client that guessed any of them would sign
- * something the registry rejects.
- */
-router.get("/api/tags/nonce/:address", async (req, res) => {
-  if (!enabled()) return void unavailable(res);
-  try {
-    res.json({ success: true, ...(await nonceOf(req.params.address)) });
-  } catch (error) {
-    fail(req, res, error, "tags.nonce_failed");
-  }
-});
-
 router.get("/api/tags/search", async (req, res) => {
   if (!enabled()) return void unavailable(res);
   try {
@@ -107,17 +91,29 @@ router.get("/api/tags/search", async (req, res) => {
 });
 
 /**
- * Relay a signed claim and pay the gas for it.
+ * Bind a name to the wallet that signed for it.
  *
- * The signature is the authority. This service submits it or declines to; it
- * cannot alter what was signed, and the registry would reject it if it tried.
+ * The signature is the authority: this service rebuilds the exact message
+ * from the tag and address it is about to write, recovers the signer, and
+ * refuses anything it cannot recover. That stops a claim being forged in
+ * transit. It does not stop this service from later rewriting the row — no
+ * part of this design can, which is why the register says so in its config.
  */
 router.post("/api/tags/claim", async (req, res) => {
   if (!enabled()) return void unavailable(res);
   try {
-    res.status(202).json({ success: true, ...(await relayClaim(req.body ?? {})) });
+    res.status(201).json({ success: true, ...(await claimTag(req.body ?? {})) });
   } catch (error) {
-    fail(req, res, error, "tags.claim_relay_failed");
+    fail(req, res, error, "tags.claim_failed");
+  }
+});
+
+router.post("/api/tags/release", async (req, res) => {
+  if (!enabled()) return void unavailable(res);
+  try {
+    res.json({ success: true, ...(await releaseTag(req.body ?? {})) });
+  } catch (error) {
+    fail(req, res, error, "tags.release_failed");
   }
 });
 

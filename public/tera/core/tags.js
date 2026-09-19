@@ -7,10 +7,13 @@
 //
 // So this module holds the part of tags that must be identical everywhere —
 // what a tag may be, what two tags being "the same" means, and the exact bytes
-// an owner signs to claim one. It resolves nothing and fetches nothing. A name
-// is turned into an address by the registry contract, never here, and the
-// address is what every later check binds to: `validation.ts` rebuilds calldata
-// from the resolved address, and a review screen shows both.
+// an owner signs to claim one. It resolves nothing and fetches nothing.
+//
+// A name is turned into an address by Tera's registry service, never here, and
+// the address is what every later check binds to: `validation.ts` rebuilds
+// calldata from the resolved address, and a review screen shows both. Tera is
+// the authority on what a name means, which is a real limit and is stated
+// where an owner can read it rather than implied here.
 //
 // Three rules shape the grammar below, and each one is a test:
 //
@@ -24,10 +27,9 @@
 //   deliberately aggressive: a collision costs a claimant an alternative name,
 //   a miss costs somebody their money, and those are not comparable.
 //
-//   The claim payload is built here or not at all. Both surfaces sign what
-//   this module produces, and its EIP-712 types are the literal preimages of
-//   the typehashes in TagRegistry.sol, so a claim cannot be accepted against a
-//   struct the owner never saw.
+//   The claim message is built here or not at all. The client that signs and
+//   the service that verifies read the same function, so a claim cannot be
+//   accepted against a string the owner never saw.
 //
 // What a tag is not: a chain-agnostic identity. Every record here stands for
 // one address on Robinhood Chain. A bridge destination is an address on another
@@ -195,134 +197,39 @@ export const looksLikeTag = (input) => {
 };
 
 /**
- * What an owner signs to claim a tag, as EIP-712 typed data.
+ * The exact text an owner signs to claim a tag.
  *
- * Built here so there is one definition of what was agreed to, and so the
- * struct cannot drift from `TagRegistry.sol`: the type strings below are the
- * literal preimages of `CLAIM_TYPEHASH` and `RELEASE_TYPEHASH` in that
- * contract, and a test asserts the pair still hash alike.
+ * Both ends read this function, so there is one definition of what was agreed
+ * to and a claim cannot be accepted against a string the owner never saw. The
+ * shape follows the deletion request in `backend/src/routes/retention.ts` —
+ * purpose, subject, timestamp — because an owner who has signed one of those
+ * should recognise this one.
  *
- * Typed data rather than a readable sentence because the contract is what
- * verifies it, and a contract cannot parse prose. The readable version is the
- * review screen, which shows the tag and the address it will be bound to.
+ * The address is lowercased and the tag normalised before either reaches the
+ * message, so the same claim typed differently signs the same bytes and cannot
+ * be replayed under a different casing of the same two values.
  *
- * `deadline` is in **seconds**, because the contract compares it to
- * `block.timestamp`. Passing milliseconds signs something good for 50,000
- * years, so the builder refuses a value that looks like `Date.now()`.
- *
- * The nonce is the owner's current `nonces(owner)` on the registry. It is read
- * from the chain, never invented, and the contract re-reads it when the claim
- * lands, so a relayer cannot choose which of several signatures to submit.
+ * `timestamp` is in milliseconds, matching the other signed requests in this
+ * wallet; the service decides the window it will accept.
  */
-export const DOMAIN_NAME = "Tera Wallet Tags";
-export const DOMAIN_VERSION = "1";
-
-export const CLAIM_TYPES = {
-  Claim: [
-    { name: "tag", type: "string" },
-    { name: "owner", type: "address" },
-    { name: "nonce", type: "uint256" },
-    { name: "deadline", type: "uint256" },
-  ],
-};
-
-export const RELEASE_TYPES = {
-  Release: [
-    { name: "owner", type: "address" },
-    { name: "nonce", type: "uint256" },
-    { name: "deadline", type: "uint256" },
-  ],
-};
-
-/** Roughly the year 2100 in seconds. Anything past it was meant as milliseconds. */
-const SECONDS_CEILING = 4_102_444_800;
-
-const address = (value, what) => {
-  const text = String(value ?? "");
-  if (!/^0x[\da-fA-F]{40}$/.test(text)) throw new TagError(`A claim needs ${what}.`);
-  return text;
-};
-
-function commonFields({ owner, nonce, deadline, chainId, registry }) {
-  if (!Number.isSafeInteger(chainId) || chainId <= 0)
-    throw new TagError("A claim needs the chain it is for.");
-  if (!Number.isSafeInteger(nonce) || nonce < 0) throw new TagError("A claim needs a nonce.");
-  if (!Number.isSafeInteger(deadline) || deadline <= 0)
-    throw new TagError("A claim needs a deadline.");
-  if (deadline > SECONDS_CEILING)
-    throw new TagError("The deadline must be in seconds, not milliseconds.");
-  return {
-    domain: {
-      name: DOMAIN_NAME,
-      version: DOMAIN_VERSION,
-      chainId,
-      verifyingContract: address(registry, "the registry address"),
-    },
-    owner: address(owner, "a wallet address"),
-    nonce,
-    deadline,
-  };
-}
-
-/** The typed-data payload for claiming `tag`. Pass straight to `signTypedData`. */
-export function claimTypedData({ tag, owner, nonce, deadline, chainId, registry }) {
+export function claimMessage({ tag, address, timestamp }) {
   const name = normalise(tag);
-  const common = commonFields({ owner, nonce, deadline, chainId, registry });
-  return {
-    domain: common.domain,
-    types: CLAIM_TYPES,
-    primaryType: "Claim",
-    message: {
-      tag: name,
-      owner: common.owner,
-      nonce: BigInt(common.nonce),
-      deadline: BigInt(common.deadline),
-    },
-  };
+  const owner = String(address ?? "").toLowerCase();
+  if (!/^0x[\da-f]{40}$/.test(owner)) throw new TagError("A claim needs a wallet address.");
+  if (!Number.isSafeInteger(timestamp) || timestamp <= 0)
+    throw new TagError("A claim needs a timestamp.");
+  return `Tera Wallet tag claim
+Tag: ${display(name)}
+Wallet: ${owner}
+Timestamp: ${timestamp}`;
 }
 
-/** The same, for giving a tag up. A distinct struct, so one cannot be signed as the other. */
-export function releaseTypedData({ owner, nonce, deadline, chainId, registry }) {
-  const common = commonFields({ owner, nonce, deadline, chainId, registry });
-  return {
-    domain: common.domain,
-    types: RELEASE_TYPES,
-    primaryType: "Release",
-    message: {
-      owner: common.owner,
-      nonce: BigInt(common.nonce),
-      deadline: BigInt(common.deadline),
-    },
-  };
-}
-
-/**
- * The same payload, shaped for `eth_signTypedData_v4`.
- *
- * A browser wallet is handed JSON over JSON-RPC, so it needs the EIP712Domain
- * type spelled out and the numbers as strings — viem adds both for the Android
- * app, and a surface that assembled this itself would be one edit away from
- * signing a different struct from the other one. So it is assembled here,
- * once, from the same builder.
- */
-export function eip712Payload(typed) {
-  const message = {};
-  for (const [key, value] of Object.entries(typed.message))
-    message[key] = typeof value === "bigint" ? value.toString() : value;
-  return {
-    types: {
-      EIP712Domain: [
-        { name: "name", type: "string" },
-        { name: "version", type: "string" },
-        { name: "chainId", type: "uint256" },
-        { name: "verifyingContract", type: "address" },
-      ],
-      ...typed.types,
-    },
-    primaryType: typed.primaryType,
-    domain: typed.domain,
-    message,
-  };
+/** The same, for giving a tag up. Distinct text, so one cannot be signed as the other. */
+export function releaseMessage({ tag, address, timestamp }) {
+  return claimMessage({ tag, address, timestamp }).replace(
+    "Tera Wallet tag claim",
+    "Tera Wallet tag release",
+  );
 }
 
 /**
