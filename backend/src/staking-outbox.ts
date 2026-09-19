@@ -12,3 +12,8 @@ export function payoutTotal(principal: bigint, reward: bigint) {
 export function payoutAuthorizationMessage(action: 'claim' | 'unstake', wallet: string, epochId: string, amount: string, idempotencyKey: string) {
   return `Tera staking ${action}\nWallet: ${wallet.toLowerCase()}\nEpoch: ${epochId}\nAmount: ${amount}\nRequest: ${idempotencyKey}`;
 }
+
+export function lockPayoutAuthorizationMessage(wallet: string, lockId: string, amount: string, idempotencyKey: string) {
+  return `Tera fixed staking unlock\nWallet: ${wallet.toLowerCase()}\nLock: ${lockId}\nAmount: ${amount}\nRequest: ${idempotencyKey}`;
+}
+
