@@ -5,6 +5,8 @@ libs = ["lib"]
 solc_version = "0.8.28"
 optimizer = true
 optimizer_runs = 200
+# Deploy.s.sol seeds the reserved tag list from this generated file.
+fs_permissions = [{ access = "read", path = "./reserved-tags.json" }]
 
 [rpc_endpoints]
 robinhood = "${RHC_RPC_URL:-https://rpc.robinhood.com}"

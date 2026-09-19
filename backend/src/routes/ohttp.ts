@@ -43,7 +43,15 @@ export const GATEWAY_PATH = "/ohttp";
 // The assistant call is what this exists for. Anything not listed is refused:
 // an open gateway is a proxy, and a proxy on this origin would let a caller
 // borrow the service's own network position.
-export const DEFAULT_ALLOWED_PATHS = ["/api/agent/chat", "/api/agent/propose"] as const;
+//
+// Tag resolution is here for the same reason the assistant call is: the name
+// an owner is about to pay is as telling as the question they are about to
+// ask, and it would otherwise reach this service alongside their address.
+export const DEFAULT_ALLOWED_PATHS = [
+  "/api/agent/chat",
+  "/api/agent/propose",
+  "/api/tags/resolve",
+] as const;
 
 const MAX_CAPSULE_BYTES = 64 * 1024;
 

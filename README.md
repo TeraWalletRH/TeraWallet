@@ -32,6 +32,7 @@ Tera Wallet is a self-custodial wallet experience for supervised real-world-asse
 | **Asset registry**             | Supported assets, decimals, contract addresses, eligibility, and action availability are visible in the dashboard.                                     |
 | **Sessions and receipts**      | Agent sessions, revocation state, transaction status, and explorer links are available in the dashboard.                                               |
 | **Privacy direction**          | The assistant receives only the message and wallet address needed for a proposal; private policy and selective-disclosure features are being expanded. |
+| **Tags**                       | An owner can claim a name in an on-chain registry and be paid at `@astra` instead of an address. The wallet resolves it against the contract itself and shows the address before anything is signed. |
 
 ### Available now vs. planned
 
@@ -95,6 +96,31 @@ The backend exposes an Express service running under Bun:
 | `GET`  | `/api/session/:accountAddress`  | List account sessions                                |
 | `POST` | `/api/session/prepare-revoke`   | Prepare session revocation                           |
 | `POST` | `/api/session/revoke`           | Revoke a scoped session                              |
+| `GET`  | `/api/tags/config`              | Whether tags are configured, and the registry address |
+| `POST` | `/api/tags/resolve`             | Address a tag names, read from the chain             |
+| `GET`  | `/api/tags/by-address/:address` | Tag an address holds                                 |
+| `GET`  | `/api/tags/available/:tag`      | Whether a name can still be claimed                  |
+| `GET`  | `/api/tags/nonce/:address`      | Claim nonce a signature must commit to               |
+| `GET`  | `/api/tags/search`              | Prefix search over Tera's tag index                  |
+| `POST` | `/api/tags/claim`               | Relay a signed claim and pay its gas                 |
+| `GET`  | `/api/mobile/android/manifest`  | Published Android version, floor and APK digest      |
+
+### Tags
+
+`@astra` is a name in `contracts/src/registry/TagRegistry.sol`, not a row in Tera's
+database. The wallet resolves it with its own `eth_call` and shows the resolved address
+beside the name before a transfer is built; Tera's index is used only for search, and
+says so in every response. Claims are signed by the owner (EIP-712) and may be relayed
+by Tera, which pays the gas and cannot alter what was signed.
+
+A tag names one address **on Robinhood Chain**. It is not offered as a bridge
+destination, because the destination chain's address is a different account.
+Tags are public: anyone can read which address one points at.
+
+Set `VITE_TAG_REGISTRY_ADDRESS` (web) and `EXPO_PUBLIC_TAG_REGISTRY_ADDRESS` (Android)
+once the registry is deployed. Until then every tag control stays hidden rather than
+offering a lookup that cannot be made. Backend: `TAGS_ENABLED`, `TAG_REGISTRY_ADDRESS`,
+and `TAG_RELAYER_PRIVATE_KEY` for the optional relay.
 
 ---
 

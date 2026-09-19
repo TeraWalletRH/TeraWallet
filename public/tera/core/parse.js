@@ -257,6 +257,18 @@ const ABOUT_MY_DATA =
 const TRANSFER =
   /\b(?:send|transfer|pay)\s+([\d,]+(?:\.\d+)?)(?:\s*(?!to\b)([A-Za-z]{2,6})\b)?\s*(?:to\s+)?(0x[\da-fA-F]{40})\b/i;
 
+// The same sentence with a tag in place of the address. Both "to" and the "@"
+// are required, where the address form makes "to" optional: an address is
+// unmistakable and a bare word is not, and this module does not guess. So
+// "send 50 usdg to @astra" is a transfer and "send 50 usdg to astra" is not.
+//
+// It yields `recipientTag`, never `recipient`. Turning a name into an address
+// is a network call against the registry, and the rule at the top of this file
+// is that nothing here resolves, fetches or produces a transaction — the
+// composer does that, in front of the owner, and shows them both.
+const TRANSFER_TAG =
+  /\b(?:send|transfer|pay)\s+([\d,]+(?:\.\d+)?)(?:\s*(?!to\b)([A-Za-z]{2,6})\b)?\s*to\s+@([a-z][a-z0-9_]{1,18}[a-z0-9])\b/i;
+
 const NAVIGATION = /\b(?:open|show|go to|take me to|where (?:is|are))\b/i;
 
 /**
@@ -289,6 +301,18 @@ export function parse(message) {
         amount: transfer[1].replace(/,/g, ""),
         symbol: (transfer[2] || "").toUpperCase(),
         recipient: transfer[3],
+      },
+    };
+
+  const tagged = text.match(TRANSFER_TAG);
+  if (tagged)
+    return {
+      kind: COMPOSE,
+      matched: true,
+      slots: {
+        amount: tagged[1].replace(/,/g, ""),
+        symbol: (tagged[2] || "").toUpperCase(),
+        recipientTag: tagged[3].toLowerCase(),
       },
     };
 

@@ -1,3 +1,4 @@
+import { scopeRefusal } from "../core/tags.js";
 import { assertWallet, isHash, sameAddress, parseUnits, formatUnits } from "./core.js";
 
 export function checkBridgeQuote(q, input, now = Date.now()) {
@@ -70,6 +71,7 @@ export function bridgeView({ esc, pair, button, records, owner, demo }) {
   <div class="field"><label for="bridge-chain">Destination chain</label><select id="bridge-chain" name="destination"><option value="8453">Base</option><option value="5042">Arc</option><option value="792703809">Solana</option></select></div>
   <div class="field"><label for="bridge-token">Destination token</label><select id="bridge-token" name="destinationCurrency"><option value="0x0000000000000000000000000000000000000000">ETH</option><option value="0x833589fcd6edb6e08f4c7c32d4f71b54bda02913">USDC</option></select></div>
   <div class="field"><label for="bridge-recipient">Destination wallet address</label><input id="bridge-recipient" name="recipient" autocomplete="off" required placeholder="Paste the receiving wallet address"></div>
+  <p class="micro">${esc(scopeRefusal.bridge)}</p>
   <div class="field"><label for="bridge-amount">Amount</label><input id="bridge-amount" name="amount" inputmode="decimal" required placeholder="10.00"></div>
   <p class="micro">The token list updates for the selected chain. Review the full address carefully. Relay receives your source and destination addresses and amount.</p>
   <p role="alert"></p><button class="btn" ${!owner || demo ? "disabled" : ""}>Get bridge quote ↗</button></form></section>

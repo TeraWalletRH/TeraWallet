@@ -152,6 +152,14 @@ import {
 } from "../core/receipt.js";
 import { parseRegistry, LIMITS as REGISTRY_LIMITS } from "../core/registry.js";
 import {
+  parseTag,
+  display as displayTag,
+  claimTypedData,
+  eip712Payload,
+  LIMITS as TAG_LIMITS,
+} from "../core/tags.js";
+import { resolveOnChain, tagOfOnChain, noncesOnChain } from "../core/tags-chain.js";
+import {
   ACTIONS,
   createPreset,
   upsertPreset,
@@ -163,6 +171,13 @@ import {
 const config = JSON.parse(document.getElementById("tera-config")?.textContent || "{}");
 const chainId = Number(config.chainId || 4663);
 const apiUrl = config.apiUrl || "https://api.terawallet.app";
+// Where the tag registry lives. Unset means this deployment has no registry
+// deployed yet, and every tag control stays hidden rather than offering a
+// lookup that cannot be made.
+const tagRegistry = /^0x[\da-fA-F]{40}$/.test(String(config.tagRegistryAddress || ""))
+  ? config.tagRegistryAddress
+  : "";
+const tagsAvailable = () => Boolean(tagRegistry);
 const serviceHost = (() => {
   try {
     return new URL(apiUrl).host;
@@ -372,6 +387,8 @@ const pair = (label, value) =>
   `<div class="pair"><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
 const state = {
   owner: "",
+  // The owner's own tag. `undefined` means not checked, `null` means none.
+  myTag: undefined,
   provider: null,
   chain: null,
   assets: [],
@@ -1278,7 +1295,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
     ${previewBlock(p)}
     ${historyBlock(p)}
     ${boundaryBlock(p, index)}
-    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", intent.recipient) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
+    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", tagFor(intent.recipient) ? `${displayTag(tagFor(intent.recipient))} · ${intent.recipient}` : intent.recipient) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
     ${submitted ? `<p>Transaction: ${explorer(p.txHash)}</p>` : issue ? `<p class="live-blocked">${esc(issue)}</p>` : '<p class="micro">Review the token amount and recipient. Your wallet will ask you to sign and pay the network fee.</p>'}
     <div class="actions">${button("Approve in wallet ↗", "approve", `data-index="${index}" ${issue || submitted || state.busy || state.chain !== chainId ? "disabled" : ""}`)}${button("Prepare again", "reprepare", `data-index="${index}" ${state.busy || submitted || !intent ? "disabled" : ""}`)}${button("Share redacted", "share", `data-index="${index}"`)}${button("Dismiss", "draft-dismiss", `data-index="${index}" ${state.busy ? "disabled" : ""}`)}</div></article>`;
 }
@@ -2029,7 +2046,7 @@ async function saveBalanceEndpoint() {
 }
 
 function settings() {
-  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
+  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel"><h2>Your tag</h2>${tagPanel()}</section><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
 async function loadAssets() {
@@ -2065,6 +2082,13 @@ async function refreshAccount() {
     ["sessions", `/api/session/${owner}`],
   ];
   const results = await Promise.allSettled(requests.map(([, path]) => api(path)));
+  if (version !== generation) return;
+  // Read from the registry rather than requested alongside the service calls
+  // above: the owner's own name is answered by the chain like everyone
+  // else's, and a service outage leaves it unknown rather than blank. After
+  // the generation check, so a disconnect mid-refresh cannot write the old
+  // account's name into the new one's state.
+  await loadMyTag();
   if (version !== generation) return;
   results.forEach((result, i) => {
     const key = requests[i][0];
@@ -2198,13 +2222,150 @@ async function setAccount(accounts) {
   }
   if (version === generation) await refreshAccount();
 }
+// Reading the tag registry through the wallet's own provider.
+//
+// Deliberately not through the service. `/api/tags/resolve` exists, and it is
+// useful for autocomplete, but the address a transaction is built from is read
+// here by the same eth_call path as a balance — because a service that
+// answered with the wrong address would be believed, and the owner would be
+// reading a name they trust rather than the forty characters underneath it.
+//
+// If there is no connected provider there is nothing to read with, and the
+// form says so. It never falls back to an answer somebody else gave it.
+function registryCall() {
+  const provider = state.provider;
+  if (!provider) return null;
+  return ({ to, data }) =>
+    provider.request({ method: "eth_call", params: [{ to, data }, "latest"] });
+}
+
+// What the owner most recently confirmed a tag to mean, by address. Shown
+// beside the recipient on the approvals panel so the name and the address stay
+// together after the form is closed. Never sent anywhere, and never used to
+// build a transaction — the address does that.
+const tagResolutions = new Map();
+
+function noteTagResolution(tag, address) {
+  tagResolutions.set(String(address).toLowerCase(), { tag, at: new Date().toISOString() });
+}
+
+const tagFor = (address) =>
+  (isAddress(address) && tagResolutions.get(String(address).toLowerCase())?.tag) || "";
+
+async function resolveTagForSend(input) {
+  const parsed = parseTag(input);
+  if (!parsed.ok) throw new Error(parsed.reason);
+  const call = registryCall();
+  if (!call) throw new Error("Connect your wallet before looking up a tag.");
+  const { address } = await resolveOnChain({ call, registry: tagRegistry, tag: parsed.tag });
+  if (!address) throw new Error(`No wallet holds ${displayTag(parsed.tag)}.`);
+  noteTagResolution(parsed.tag, address);
+  return { tag: parsed.tag, address };
+}
+
+/**
+ * The owner's own name, read from the registry.
+ *
+ * `null` means they hold none; `undefined` means the question has not been
+ * answered, which the panel shows as "not checked" rather than as "none".
+ */
+async function loadMyTag() {
+  if (!tagsAvailable() || !state.owner) return;
+  const call = registryCall();
+  if (!call) return;
+  try {
+    state.myTag = await tagOfOnChain({ call, registry: tagRegistry, address: state.owner });
+  } catch {
+    state.myTag = undefined;
+  }
+}
+
+function tagPanel() {
+  if (!tagsAvailable())
+    return "<p>This deployment has no tag registry, so tags are unavailable here.</p>";
+  if (!state.owner) return "<p>Connect your wallet to see or claim a tag.</p>";
+  const held =
+    state.myTag === undefined
+      ? "Not checked — the registry could not be read."
+      : state.myTag
+        ? displayTag(state.myTag)
+        : "None claimed";
+  return `<p>A tag lets someone send to a name instead of your address. It is public: anyone can read which address it points at, and it names this wallet on Robinhood Chain only.</p>${pair("Your tag", held)}${pair("Registry", short(tagRegistry))}<p class="micro">${esc(`${TAG_LIMITS.minLength}–${TAG_LIMITS.maxLength} characters of ${TAG_LIMITS.charset}, ${TAG_LIMITS.shape}. Names that read alike count as the same name, so @astr0 cannot be claimed while @astro exists.`)}</p><div class="actions">${button(state.myTag ? "Change tag" : "Claim a tag", "tag-claim")}</div>`;
+}
+
+/**
+ * Claim a name.
+ *
+ * The owner signs an EIP-712 struct naming the tag, their address, the
+ * registry's current nonce for them and a deadline; Tera submits it and pays
+ * the gas. Tera cannot alter any of those four — the registry checks the
+ * owner's signature, not the sender's — so the most it can do is decline to
+ * relay.
+ */
+function claimTagDialog() {
+  connected();
+  if (!tagsAvailable()) throw new Error("This deployment has no tag registry.");
+  dialog(
+    "Claim a tag.",
+    `<form id="tag-form"><div class="field"><label for="tag-name">Tag</label><input id="tag-name" name="tag" placeholder="@astra" autocomplete="off" autocapitalize="none" spellcheck="false" required></div><p id="tag-form-status" class="micro"></p><p class="micro">You will be asked to sign the claim. Tera submits it and pays the network fee; it cannot change the name or the address you signed for.</p><p class="live-form-error" role="alert"></p><button class="btn primary">Sign and claim ↗</button></form>`,
+  );
+  const form = document.getElementById("tag-form");
+  const status = document.getElementById("tag-form-status");
+  form.addEventListener("input", () => {
+    const parsed = parseTag(form.querySelector('[name="tag"]').value);
+    status.textContent = parsed.ok ? `Will claim ${displayTag(parsed.tag)}.` : parsed.reason;
+  });
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const submit = form.querySelector("button");
+    submit.disabled = true;
+    try {
+      const parsed = parseTag(new FormData(form).get("tag"));
+      if (!parsed.ok) throw new Error(parsed.reason);
+      const call = registryCall();
+      if (!call) throw new Error("Connect your wallet before claiming a tag.");
+      const nonce = await noncesOnChain({ call, registry: tagRegistry, address: state.owner });
+      // Seconds, because the registry compares this to block.timestamp.
+      const deadline = Math.floor(Date.now() / 1000) + 15 * 60;
+      const payload = eip712Payload(
+        claimTypedData({
+          tag: parsed.tag,
+          owner: state.owner,
+          nonce,
+          deadline,
+          chainId,
+          registry: tagRegistry,
+        }),
+      );
+      const signature = await state.provider.request({
+        method: "eth_signTypedData_v4",
+        params: [state.owner, JSON.stringify(payload)],
+      });
+      const result = await api("/api/tags/claim", {
+        tag: parsed.tag,
+        owner: state.owner,
+        deadline,
+        signature,
+      });
+      closeDialog();
+      state.notice = `${displayTag(parsed.tag)} claimed. Tera submitted it as ${short(result.txHash)}; it points at your address once that transaction confirms.`;
+      await loadMyTag();
+      render();
+    } catch (error) {
+      form.querySelector('[role="alert"]').textContent = errorMessage(error);
+    } finally {
+      submit.disabled = false;
+    }
+  };
+}
+
 function createProposal(symbol, draft = null) {
   connected();
   if (!state.assetsLoaded) throw new Error("Load the asset registry before preparing a proposal.");
   const assets = state.assets.filter((a) => isAddress(a.address) && a.status === "ACTIVE");
   dialog(
     "Prepare an exact action.",
-    `<form id="proposal-form"><div class="field"><label for="proposal-asset">Asset</label><select id="proposal-asset" name="asset">${assets.map((a) => `<option value="${esc(a.symbol)}" ${a.symbol === symbol ? "selected" : ""}>${esc(a.symbol)} · ${esc(a.name)}</option>`).join("")}</select></div><div class="field"><label for="proposal-action">Action</label><select id="proposal-action" name="action"><option>TRANSFER</option><option>BUY</option><option>SELL</option></select></div><div class="field"><label id="proposal-amount-label" for="proposal-amount">Token amount</label><input id="proposal-amount" name="amount" inputmode="decimal" required placeholder="0.00" pattern="[0-9]+(\\.[0-9]+)?"></div><div class="field"><label for="proposal-recipient">Recipient</label><input id="proposal-recipient" name="recipient" placeholder="Required for transfers" autocomplete="off"></div><p id="proposal-help" class="micro"></p><p class="live-form-error" role="alert"></p><button class="btn primary">Run the checks ↗</button></form>`,
+    `<form id="proposal-form"><div class="field"><label for="proposal-asset">Asset</label><select id="proposal-asset" name="asset">${assets.map((a) => `<option value="${esc(a.symbol)}" ${a.symbol === symbol ? "selected" : ""}>${esc(a.symbol)} · ${esc(a.name)}</option>`).join("")}</select></div><div class="field"><label for="proposal-action">Action</label><select id="proposal-action" name="action"><option>TRANSFER</option><option>BUY</option><option>SELL</option></select></div><div class="field"><label id="proposal-amount-label" for="proposal-amount">Token amount</label><input id="proposal-amount" name="amount" inputmode="decimal" required placeholder="0.00" pattern="[0-9]+(\\.[0-9]+)?"></div>${tagsAvailable() ? '<div class="field"><label for="proposal-recipient-kind">Send to</label><select id="proposal-recipient-kind" name="recipientKind"><option value="address">Another wallet address</option><option value="tag">A Tera tag</option></select></div>' : ""}<div class="field"><label for="proposal-recipient">Recipient</label><input id="proposal-recipient" name="recipient" placeholder="Required for transfers" autocomplete="off"></div><p id="proposal-tag-status" class="micro" role="status"></p><p id="proposal-help" class="micro"></p><p class="live-form-error" role="alert"></p><button class="btn primary">Run the checks ↗</button></form>`,
   );
   const form = document.getElementById("proposal-form");
   // A draft read out of a message fills the same fields the owner would type
@@ -2212,8 +2373,15 @@ function createProposal(symbol, draft = null) {
   if (draft && form) {
     const amount = form.querySelector('[name="amount"]');
     const recipient = form.querySelector('[name="recipient"]');
+    const kind = form.querySelector('[name="recipientKind"]');
     if (amount && draft.amount) amount.value = draft.amount;
     if (recipient && draft.recipient) recipient.value = draft.recipient;
+    // A tag read out of a message is filled in as a tag, not as a resolved
+    // address: the owner should see the name they wrote and watch it resolve.
+    if (recipient && draft.recipientTag) {
+      if (kind) kind.value = "tag";
+      recipient.value = displayTag(draft.recipientTag);
+    }
   }
   const updateProposalFields = () => {
     const data = new FormData(form);
@@ -2236,9 +2404,65 @@ function createProposal(symbol, draft = null) {
           : "Prepared as token input. Signing stays disabled until the quote service returns a verified output amount.";
       recipient.placeholder = action === "TRANSFER" ? "Required for transfers" : "Optional";
     }
+    // A tag is typed differently from an address and fails differently, so the
+    // field stops autocorrecting and says what it wants.
+    if ((data.get("recipientKind") || "address") === "tag") {
+      recipient.placeholder = "@astra";
+      recipient.setAttribute("autocapitalize", "none");
+      recipient.setAttribute("spellcheck", "false");
+    }
   };
   form.addEventListener("change", updateProposalFields);
   updateProposalFields();
+
+  // The live lookup. It resolves against the chain and prints the address it
+  // found, because the address is the thing being agreed to — a screen that
+  // showed only a green tick beside a name would be asking the owner to trust
+  // the lookup instead of reading the result.
+  const tagStatus = document.getElementById("proposal-tag-status");
+  const recipientField = document.getElementById("proposal-recipient");
+  let lookup = 0;
+  const clearTagStatus = () => {
+    if (tagStatus) tagStatus.textContent = "";
+  };
+  const runLookup = async () => {
+    if (!tagsAvailable() || !tagStatus || !recipientField) return;
+    if ((new FormData(form).get("recipientKind") || "address") !== "tag") {
+      clearTagStatus();
+      return;
+    }
+    const typed = recipientField.value.trim();
+    if (!typed) {
+      clearTagStatus();
+      return;
+    }
+    const parsed = parseTag(typed);
+    if (!parsed.ok) {
+      tagStatus.textContent = parsed.reason;
+      return;
+    }
+    // Keystrokes outrun lookups. Only the newest one may write the line.
+    const token = (lookup += 1);
+    tagStatus.textContent = `Looking up ${displayTag(parsed.tag)}…`;
+    try {
+      const found = await resolveTagForSend(parsed.tag);
+      if (token !== lookup) return;
+      tagStatus.textContent = `${displayTag(found.tag)} is ${found.address} — read the address, it is what gets signed.`;
+    } catch (error) {
+      if (token !== lookup) return;
+      tagStatus.textContent = errorMessage(error);
+    }
+  };
+  let lookupTimer;
+  form.addEventListener("input", () => {
+    clearTimeout(lookupTimer);
+    lookupTimer = setTimeout(() => void runLookup(), 350);
+  });
+  form.addEventListener("change", () => {
+    clearTagStatus();
+    void runLookup();
+  });
+  if (draft?.recipientTag) void runLookup();
   form.onsubmit = async (event) => {
     event.preventDefault();
     const submit = form.querySelector("button");
@@ -2247,10 +2471,22 @@ function createProposal(symbol, draft = null) {
       const data = new FormData(form),
         asset = assets.find((a) => a.symbol === data.get("asset"));
       if (!asset) throw new Error("Select a valid asset.");
-      const actionType = data.get("action"),
-        recipient = data.get("recipient").trim();
+      const actionType = data.get("action");
+      const recipientKind = data.get("recipientKind") || "address";
+      let recipient = String(data.get("recipient") || "").trim();
+      if (actionType === "TRANSFER" && recipientKind === "tag") {
+        // Resolved again here rather than trusting the line printed a moment
+        // ago. A tag can be released and re-claimed, and what gets signed must
+        // be the address the registry holds now, not the one it held while the
+        // owner was still typing.
+        recipient = (await resolveTagForSend(recipient)).address;
+      }
       if (actionType === "TRANSFER" && !isAddress(recipient))
-        throw new Error("Enter a valid recipient address.");
+        throw new Error(
+          recipientKind === "tag"
+            ? "That tag did not resolve to an address."
+            : "Enter a valid recipient address.",
+        );
       const rawAmount = data.get("amount").trim();
       const amount =
         actionType === "BUY" ? parseUnits(rawAmount, 6) : parseUnits(rawAmount, asset.decimals);
@@ -2934,6 +3170,16 @@ function composeTransfer(slots) {
   const asset = state.assets.find(
     (entry) => entry.symbol.toUpperCase() === slots.symbol.toUpperCase(),
   );
+  if (slots.recipientTag && !tagsAvailable()) {
+    state.chat.push({
+      role: "assistant",
+      text: `This wallet has no tag registry configured, so ${displayTag(slots.recipientTag)} could not be looked up and nothing was filled in. Paste the recipient's address instead.`,
+      local: true,
+      note: "Read from your message on this device. No model ran and no request was made.",
+    });
+    render();
+    return;
+  }
   if (slots.symbol && state.assetsLoaded && !asset) {
     state.chat.push({
       role: "assistant",
@@ -2947,10 +3193,19 @@ function composeTransfer(slots) {
   try {
     // The same dialog the owner opens from the registry, with the parts of
     // their sentence already in it.
-    createProposal(asset?.symbol, { amount: slots.amount, recipient: slots.recipient });
+    createProposal(asset?.symbol, {
+      amount: slots.amount,
+      recipient: slots.recipient,
+      recipientTag: slots.recipientTag,
+    });
+    const destination = slots.recipientTag ? displayTag(slots.recipientTag) : slots.recipient;
     state.chat.push({
       role: "assistant",
-      text: `Opened the prepare form with **${slots.amount}${asset ? ` ${asset.symbol}` : ""}** to \`${slots.recipient}\` filled in.
+      text: `Opened the prepare form with **${slots.amount}${asset ? ` ${asset.symbol}` : ""}** to \`${destination}\` filled in.${
+        slots.recipientTag
+          ? "\n\nThe tag has not been resolved yet. The form looks it up against the registry and shows you the address before anything is prepared."
+          : ""
+      }
 
 Nothing has been prepared or sent. Check it, run the five checks, and approve in your own wallet.`,
       local: true,
@@ -3300,6 +3555,7 @@ document.addEventListener("click", async (event) => {
       await refreshAccount();
     }
     if (action === "assets-retry") await loadAssets();
+    if (action === "tag-claim") claimTagDialog();
     if (action === "policy-refresh") {
       state.policyError = "";
       await loadPolicyBundle(true);

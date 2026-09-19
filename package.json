@@ -20,7 +20,8 @@
     "verify:receipt": "node scripts/verify-receipt.mjs",
     "build:model": "node scripts/build-model.mjs",
     "build:wordlist": "node scripts/build-wordlist.mjs",
-    "build:registry": "node scripts/build-registry.mjs"
+    "build:registry": "node scripts/build-registry.mjs",
+    "build:reserved-tags": "node scripts/build-reserved-tags.mjs"
   },
   "overrides": {
     "rolldown": "1.2.1"
