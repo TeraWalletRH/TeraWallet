@@ -389,6 +389,7 @@ const state = {
   owner: "",
   // The owner's own tag. `undefined` means not checked, `null` means none.
   myTag: undefined,
+  tagPromptDismissed: false,
   provider: null,
   chain: null,
   assets: [],
@@ -757,12 +758,19 @@ function render() {
     <main id="wallet-content"><div class="page-heading"><div><div class="eyebrow">Private authorization / Your authority</div><h1 tabindex="-1">${titles[key] || "Overview"}${key === "dashboard" ? "." : ""}</h1></div><p>The agent proposes. You review the checks and approve in your wallet.</p></div>
     ${state.integrity?.status === "modified" ? `<div class="live-notice integrity-alarm" role="alert"><span><b>This page does not match the published release.</b> ${esc(state.integrity.matched)} of ${esc(state.integrity.checked)} modules match. Do not approve a transaction from this page until you know why. <a href="${href("settings")}">See which files ↗</a></span></div>` : ""}
     ${state.notice ? `<div class="live-notice" role="alert"><span>${esc(state.notice)}</span>${button("Dismiss", "notice-dismiss")}</div>` : ""}
+    ${tagClaimPrompt()}
     ${state.owner && state.chain !== chainId ? `<div class="live-notice" role="status">Your wallet is on a different network. ${button("Switch network", "switch")}</div>` : ""}
     ${guidePanel()}
     ${state.loading ? '<p class="micro" role="status">Refreshing your account…</p>' : ""}${view()}</main>
     <footer class="wallet-footer"><div>© ${new Date().getFullYear()} Tera Wallet<br>Owner signs · Owner pays network fees</div><div class="actions"><a href="/">Website ↗</a><a href="/roadmap/">Roadmap</a>${button("Refresh", "refresh", state.loading ? "disabled" : "")}</div></footer>
   </div>`;
   bindForms();
+}
+
+function tagClaimPrompt() {
+  if (!tagsAvailable() || !state.owner || state.demo) return "";
+  if (state.myTag !== null || state.tagPromptDismissed) return "";
+  return `<div class="live-notice" role="status"><span><b>Claim your Tera tag.</b> People can pay a name instead of your address. It is public, and it points at the wallet you have connected now.</span>${button("Claim a tag", "tag-claim")}${button("Not now", "tag-prompt-dismiss")}</div>`;
 }
 
 function guidePanel() {
@@ -3556,6 +3564,10 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "assets-retry") await loadAssets();
     if (action === "tag-claim") claimTagDialog();
+    if (action === "tag-prompt-dismiss") {
+      state.tagPromptDismissed = true;
+      render();
+    }
     if (action === "policy-refresh") {
       state.policyError = "";
       await loadPolicyBundle(true);
