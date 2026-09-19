@@ -16,7 +16,46 @@
 // produced the binary rather than from whatever this server later downloaded.
 
 import { Router, type Response } from "express";
-import { parseManifest } from "../../../public/tera/core/update.js";
+
+export class UpdateError extends Error {}
+const isCount = (value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0;
+const isSha256 = (value: unknown): value is string => typeof value === "string" && /^[\da-f]{64}$/i.test(value);
+
+function safeParse(text: string) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new UpdateError("This is not a readable manifest.");
+  }
+}
+
+export function parseManifest(input: unknown) {
+  const doc = typeof input === "string" ? safeParse(input) : (input as any);
+  if (!doc || typeof doc !== "object") throw new UpdateError("This is not a readable manifest.");
+  if (doc.platform !== "android") throw new UpdateError("This manifest is not for Android.");
+  if (!isCount(doc.versionCode)) throw new UpdateError("The manifest has no version code.");
+  if (!isCount(doc.minSupportedVersionCode))
+    throw new UpdateError("The manifest has no supported floor.");
+  if (doc.minSupportedVersionCode > doc.versionCode)
+    throw new UpdateError("The manifest requires a version newer than the one it publishes.");
+  if (typeof doc.versionName !== "string" || !doc.versionName)
+    throw new UpdateError("The manifest has no version name.");
+  if (!isSha256(doc.sha256))
+    throw new UpdateError("The manifest does not say what the download should hash to.");
+  if (typeof doc.downloadUrl !== "string" || !/^https:\/\//.test(doc.downloadUrl))
+    throw new UpdateError("The manifest has no https download.");
+  return {
+    platform: "android" as const,
+    versionCode: doc.versionCode,
+    versionName: doc.versionName,
+    minSupportedVersionCode: doc.minSupportedVersionCode,
+    sha256: String(doc.sha256).toLowerCase(),
+    downloadUrl: doc.downloadUrl,
+    sizeBytes: isCount(doc.sizeBytes) ? doc.sizeBytes : null,
+    publishedAt: typeof doc.publishedAt === "string" ? doc.publishedAt : "",
+    notes: typeof doc.notes === "string" ? doc.notes : "",
+  };
+}
 
 const router = Router();
 const repository = "TeraWalletRH/TeraWallet";
