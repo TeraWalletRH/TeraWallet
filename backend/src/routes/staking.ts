@@ -245,8 +245,14 @@ router.post("/api/staking/deposits", async (req: Request, res: Response) => {
       const row = epochResult.rows[0];
       if (!row || row.status !== "active") throw new Error("Epoch is not active.");
       const epoch: StakingEpoch = { startsAt: Math.floor(new Date(row.starts_at).getTime() / 1000), endsAt: Math.floor(new Date(row.ends_at).getTime() / 1000), lastUpdatedAt: Math.floor(new Date(row.last_updated_at).getTime() / 1000), rewardRatePerSecond: BigInt(row.reward_rate_per_second), totalActiveStake: BigInt(row.total_active_stake), rewardPerToken: BigInt(row.reward_per_token), distributedRewards: BigInt(row.distributed_rewards) };
-      if (transfer.blockTimestamp < epoch.lastUpdatedAt) throw new Error("Transfer predates the current settlement; reconcile this deposit manually.");
-      const advanced = advanceEpoch(epoch, transfer.blockTimestamp);
+      let chainNow: number;
+      try {
+        chainNow = Number((await client.getBlock()).timestamp);
+      } catch {
+        chainNow = transfer.blockTimestamp;
+      }
+      const settleTimestamp = Math.max(transfer.blockTimestamp, epoch.lastUpdatedAt, chainNow);
+      const advanced = advanceEpoch(epoch, settleTimestamp);
       const positionResult = await db.query("SELECT * FROM staking_positions WHERE epoch_id = $1 AND LOWER(wallet_address) = LOWER($2) FOR UPDATE", [epochId, walletAddress]);
       const prior = positionResult.rows[0];
       const position: StakingPosition = prior ? { activeStake: BigInt(prior.active_stake), accruedRewards: BigInt(prior.accrued_rewards), rewardDebt: BigInt(prior.reward_debt) } : { activeStake: 0n, accruedRewards: 0n, rewardDebt: advanced.rewardPerToken };
