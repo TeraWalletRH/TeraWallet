@@ -3,7 +3,6 @@ import app from "./app";
 import { migrate } from "./db/migrate";
 import { startStakingPayoutExecutor } from "./staking-executor";
 import { startPrivateSendExecutor } from "./private-send";
-import { startTagIndexer } from "./tags";
 
 const PORT = Number(process.env.PORT) || 3001;
 
@@ -21,7 +20,6 @@ async function bootstrap() {
       console.log(`Tera Wallet backend listening on port ${PORT}`);
       startStakingPayoutExecutor();
       startPrivateSendExecutor();
-      startTagIndexer();
     });
   } catch (error) {
     console.error("Failed to start server:", error);

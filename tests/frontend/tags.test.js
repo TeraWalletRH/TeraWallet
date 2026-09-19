@@ -1,48 +1,21 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import {
-  CLAIM_TYPES,
-  DOMAIN_NAME,
-  DOMAIN_VERSION,
   LIMITS,
-  RELEASE_TYPES,
   RESERVED,
   SCOPE,
   TagError,
-  claimTypedData,
-  eip712Payload,
+  claimMessage,
   display,
   isTag,
   looksLikeTag,
   normalise,
   parseTag,
-  releaseTypedData,
+  releaseMessage,
   skeleton,
 } from "../../public/tera/core/tags.js";
 
 const ADDRESS = "0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05";
-const REGISTRY = "0x1111111111111111111111111111111111111111";
-const CHAIN_ID = 4663;
-const DEADLINE = 1_758_268_800;
-
-const signable = (overrides = {}) => ({
-  tag: "@Astra",
-  owner: ADDRESS,
-  nonce: 0,
-  deadline: DEADLINE,
-  chainId: CHAIN_ID,
-  registry: REGISTRY,
-  ...overrides,
-});
-
-/** The EIP-712 encodeType string, which is what the contract's typehash hashes. */
-const encodeType = (types) => {
-  const [name, fields] = Object.entries(types)[0];
-  return `${name}(${fields.map((field) => `${field.type} ${field.name}`).join(",")})`;
-};
-
 test("a plain tag is accepted with or without the leading @", () => {
   assert.deepEqual(parseTag("astra"), { ok: true, tag: "astra", reason: "" });
   assert.equal(parseTag("@astra").tag, "astra");
@@ -108,63 +81,33 @@ test("an address is never mistaken for a tag", () => {
   assert.equal(looksLikeTag("astra"), true);
 });
 
-test("the claim payload normalises the tag and carries the domain", () => {
-  const typed = claimTypedData(signable());
-  assert.equal(typed.primaryType, "Claim");
-  assert.deepEqual(typed.domain, {
-    name: DOMAIN_NAME,
-    version: DOMAIN_VERSION,
-    chainId: CHAIN_ID,
-    verifyingContract: REGISTRY,
-  });
-  assert.equal(typed.message.tag, "astra");
-  assert.equal(typed.message.owner, ADDRESS);
-  assert.equal(typed.message.nonce, 0n);
-  assert.equal(typed.message.deadline, BigInt(DEADLINE));
-});
-
-test("a claim struct is not a release struct", () => {
-  const claim = claimTypedData(signable());
-  const release = releaseTypedData(signable());
-  assert.equal(release.primaryType, "Release");
-  assert.notDeepEqual(claim.types, release.types);
-  // A release carries no tag, so a signature over one cannot name a name.
-  assert.equal("tag" in release.message, false);
-});
-
-test("the typed-data structs are the preimages of the contract's typehashes", async () => {
-  // Read rather than recomputed: the point is that TagRegistry.sol and this
-  // module describe the same struct, and a hash computed from this file would
-  // agree with itself no matter what the contract says.
-  const solidity = await readFile(
-    fileURLToPath(new URL("../../contracts/src/registry/TagRegistry.sol", import.meta.url)),
-    "utf8",
-  );
+test("the claim message commits to the normalised tag and the lowercased address", () => {
+  const message = claimMessage({ tag: "@Astra", address: ADDRESS, timestamp: 1758268800000 });
   assert.equal(
-    encodeType(CLAIM_TYPES),
-    "Claim(string tag,address owner,uint256 nonce,uint256 deadline)",
+    message,
+    "Tera Wallet tag claim\nTag: @astra\nWallet: 0x5b2759f9620f54a5e1651a567ebd8381f07f9f05\nTimestamp: 1758268800000",
   );
-  assert.ok(solidity.includes(`keccak256("${encodeType(CLAIM_TYPES)}")`), "claim typehash drifted");
-  assert.ok(
-    solidity.includes(`keccak256("${encodeType(RELEASE_TYPES)}")`),
-    "release typehash drifted",
+  // The same claim typed differently signs the same bytes, so the service
+  // cannot be handed a variant the owner never saw.
+  assert.equal(
+    message,
+    claimMessage({ tag: "astra", address: ADDRESS.toLowerCase(), timestamp: 1758268800000 }),
   );
-  assert.ok(solidity.includes(`EIP712("${DOMAIN_NAME}", "${DOMAIN_VERSION}")`), "domain drifted");
 });
 
-test("the deadline must be in seconds, because the contract compares block.timestamp", () => {
-  // Date.now() here would sign a claim good for fifty thousand years.
-  assert.throws(() => claimTypedData(signable({ deadline: Date.now() })), TagError);
-  assert.throws(() => releaseTypedData(signable({ deadline: Date.now() })), TagError);
+test("a release cannot be signed by someone who was shown a claim", () => {
+  const fields = { tag: "astra", address: ADDRESS, timestamp: 1758268800000 };
+  assert.notEqual(claimMessage(fields), releaseMessage(fields));
+  assert.match(releaseMessage(fields), /^Tera Wallet tag release\n/);
 });
 
 test("an incomplete claim is refused rather than signed as a blank", () => {
-  assert.throws(() => claimTypedData(signable({ owner: "not-an-address" })), TagError);
-  assert.throws(() => claimTypedData(signable({ registry: "0x00" })), TagError);
-  assert.throws(() => claimTypedData(signable({ chainId: 0 })), TagError);
-  assert.throws(() => claimTypedData(signable({ nonce: -1 })), TagError);
-  assert.throws(() => claimTypedData(signable({ deadline: 0 })), TagError);
-  assert.throws(() => claimTypedData(signable({ tag: ".." })), TagError);
+  assert.throws(
+    () => claimMessage({ tag: "astra", address: "not-an-address", timestamp: 1 }),
+    TagError,
+  );
+  assert.throws(() => claimMessage({ tag: "astra", address: ADDRESS, timestamp: 0 }), TagError);
+  assert.throws(() => claimMessage({ tag: "..", address: ADDRESS, timestamp: 1 }), TagError);
 });
 
 test("tags are not offered as bridge destinations", () => {
@@ -175,21 +118,10 @@ test("tags are not offered as bridge destinations", () => {
   assert.equal(SCOPE.privateSend, true);
 });
 
-test("the browser payload carries the domain type and stringified numbers", () => {
-  // A browser wallet is handed JSON over JSON-RPC: BigInt does not survive
-  // JSON.stringify, and it needs EIP712Domain spelled out. viem adds both for
-  // the Android app, so this is what keeps the two surfaces signing the same
-  // struct rather than nearly the same one.
-  const payload = eip712Payload(claimTypedData(signable()));
-  assert.equal(payload.primaryType, "Claim");
-  assert.deepEqual(
-    payload.types.EIP712Domain.map((field) => field.name),
-    ["name", "version", "chainId", "verifyingContract"],
-  );
-  assert.deepEqual(payload.types.Claim, CLAIM_TYPES.Claim);
-  assert.equal(payload.message.nonce, "0");
-  assert.equal(payload.message.deadline, String(DEADLINE));
-  assert.equal(payload.message.tag, "astra");
-  // It must survive the trip through JSON-RPC unchanged.
-  assert.deepEqual(JSON.parse(JSON.stringify(payload)), payload);
+test("tags are not offered as bridge destinations", () => {
+  // A tag resolves to a Robinhood Chain address. The bridge sends to Base,
+  // Solana or Arc, where that address is a different account or none at all.
+  assert.equal(SCOPE.bridge, false);
+  assert.equal(SCOPE.transfer, true);
+  assert.equal(SCOPE.privateSend, true);
 });
