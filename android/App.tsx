@@ -530,6 +530,7 @@ function Wallet() {
             title: r.title,
             recipient: r.recipient,
             reference: record.step === record.totalSteps ? r.reference : undefined,
+            bridgeInput: record.step === record.totalSteps ? r.bridgeInput : undefined,
             actionHash: record.step === record.totalSteps ? r.actionHash : undefined,
           };
           await store({
@@ -1639,58 +1640,100 @@ function Wallet() {
               {t("Your signed transactions will appear here.", "已签名的交易将显示在这里。")}
             </Text>
           )}
-          {data.history.map((r) => (
-            <View key={r.hash} style={s.panel}>
-              <Text style={s.text}>{r.title}</Text>
-              <Text style={s.eyebrow}>
-                {r.status} · {r.step}/{r.totalSteps}
-              </Text>
-              <Text selectable style={s.mono}>
-                {r.hash}
-              </Text>
-              {r.reference && (
-                <Text selectable style={s.small}>
-                  Relay: {r.reference}
+          {data.history.map((r) => {
+            const isBridge = Boolean(
+              r.bridgeInput || (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)),
+            );
+            return (
+              <View key={r.hash} style={s.panel}>
+                <Text style={s.text}>{r.title}</Text>
+                <Text style={s.eyebrow}>
+                  {r.status} · {r.step}/{r.totalSteps}
                 </Text>
-              )}
-              {action(
-                "Check status",
-                "检查状态",
-                async (g) => {
-                  const sourceStatus = await transactionStatus(r.hash);
-                  g();
-                  let delivery = r.delivery;
-                  if (r.reference && sourceStatus === "confirmed") {
-                    const result = await api(`/api/bridge/status/${r.reference}`);
+                <Text selectable style={s.mono}>
+                  {r.hash}
+                </Text>
+                {r.reference && (
+                  <Text selectable style={s.small}>
+                    {isBridge ? `Relay: ${r.reference}` : `Route: ${r.reference}`}
+                  </Text>
+                )}
+                {action(
+                  "Check status",
+                  "检查状态",
+                  async (g) => {
+                    const sourceStatus = await transactionStatus(r.hash);
                     g();
-                    delivery = result.status.status;
-                  }
-                  await store({
-                    ...dataRef.current,
-                    history: dataRef.current.history.map((h) =>
-                      h.hash === r.hash ? { ...h, status: sourceStatus, delivery } : h,
-                    ),
-                  });
-                  if (r.actionHash && sourceStatus === "confirmed") {
-                    await api("/api/intent/receipt", {
-                      actionHash: r.actionHash,
-                      txHash: r.hash,
-                      recipient: r.recipient,
+                    let delivery = r.delivery;
+                    let payoutHash = r.payoutHash;
+                    if (r.reference && sourceStatus === "confirmed") {
+                      if (isBridge) {
+                        const result = await api(`/api/bridge/status/${r.reference}`);
+                        g();
+                        delivery = result.status?.status ?? result.status;
+                      } else {
+                        const result = await api(`/api/private-send/jobs/${r.reference}`);
+                        g();
+                        delivery =
+                          result.job?.status === "confirmed"
+                            ? "delivered"
+                            : (result.job?.status ?? "pending");
+                        if (result.job?.payout_tx_hash) {
+                          payoutHash = result.job.payout_tx_hash;
+                        }
+                      }
+                    }
+                    await store({
+                      ...dataRef.current,
+                      history: dataRef.current.history.map((h) =>
+                        h.hash === r.hash
+                          ? { ...h, status: sourceStatus, delivery, payoutHash }
+                          : h,
+                      ),
                     });
+                    if (r.actionHash && sourceStatus === "confirmed") {
+                      await api("/api/intent/receipt", {
+                        actionHash: r.actionHash,
+                        txHash: r.hash,
+                        recipient: r.recipient,
+                      });
+                    }
+                    setNotice({
+                      title: t("Status updated", "状态已更新"),
+                      body: t(
+                        `Source: ${sourceStatus}${delivery ? ` · Delivery: ${delivery}` : ""}`,
+                        `源交易: ${sourceStatus}${delivery ? ` · 到账: ${delivery}` : ""}`,
+                      ),
+                      tone: "success",
+                    });
+                  },
+                  false,
+                )}
+                {r.delivery && (
+                  <Row
+                    label={isBridge ? t("Relay delivery", "Relay 到账") : t("Route delivery", "路由到账")}
+                    value={r.delivery}
+                  />
+                )}
+                {r.payoutHash && (
+                  <Button
+                    onPress={() =>
+                      void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.payoutHash}`)
+                    }
+                  >
+                    {t("View payout tx", "查看出资交易")}
+                  </Button>
+                )}
+                <Button
+                  onPress={() =>
+                    void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.hash}`)
                   }
-                },
-                false,
-              )}
-              {r.delivery && <Row label={t("Relay delivery", "Relay 到账")} value={r.delivery} />}
-              <Button
-                onPress={() =>
-                  void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.hash}`)
-                }
-              >
-                {t("View on explorer", "在浏览器查看")}
-              </Button>
-            </View>
-          ))}
+                >
+                  {t("View on explorer", "在浏览器查看")}
+                </Button>
+              </View>
+            );
+          })}
         </>
       );
     if (settingsSection === "root")
