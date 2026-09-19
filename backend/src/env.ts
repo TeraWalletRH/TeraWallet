@@ -17,13 +17,26 @@ export const env = {
   policyBundleMaxAgeSeconds: Number(process.env.POLICY_BUNDLE_MAX_AGE_SECONDS ?? 86400),
   // TERA staking is deliberately disabled unless every required backend-only
   // input is present. The pool key is never returned by a route.
-  teraTokenAddress: process.env.TERA_TOKEN_ADDRESS ?? "",
+  get teraTokenAddress(): string {
+    return (
+      process.env.TERA_TOKEN_ADDRESS ||
+      "0x3c12E57fa7817a86CE7C254dB9Ea5Fe639e233F8"
+    );
+  },
   teraStakingPoolPrivateKey: process.env.TERA_STAKING_POOL_PRIVATE_KEY ?? "",
   masterAdminKey: process.env.MASTER_ADMIN_KEY ?? "",
   teraStakingConfirmations: Number(process.env.TERA_STAKING_CONFIRMATIONS ?? 3),
   teraStakingAdminSessionHours: Number(process.env.TERA_STAKING_ADMIN_SESSION_HOURS ?? 8),
   teraStakingEnabled: process.env.TERA_STAKING_ENABLED === "true",
-  privateSendEnabled: process.env.PRIVATE_SEND_ENABLED === "true",
+  get privateSendEnabled(): boolean {
+    if (process.env.PRIVATE_SEND_ENABLED !== undefined) {
+      return process.env.PRIVATE_SEND_ENABLED === "true";
+    }
+    if (process.env.SEND_ENABLED !== undefined) {
+      return process.env.SEND_ENABLED === "true";
+    }
+    return process.env.NODE_ENV === "test";
+  },
   // Tags. Reading needs only the deployed registry; relaying a claim on an
   // owner's behalf additionally needs a funded key, and is off without one.
   // The relayer cannot forge a claim — claimFor verifies the owner's
@@ -32,8 +45,24 @@ export const env = {
   tagRegistryAddress: process.env.TAG_REGISTRY_ADDRESS ?? "",
   tagRelayerPrivateKey: process.env.TAG_RELAYER_PRIVATE_KEY ?? "",
   tagIndexIntervalMs: Number(process.env.TAG_INDEX_INTERVAL_MS ?? 20000),
-  privateSendVaultPrivateKey: process.env.PRIVATE_SEND_VAULT_PRIVATE_KEY ?? "",
-  privateSendPayoutPrivateKey: process.env.PRIVATE_SEND_PAYOUT_PRIVATE_KEY ?? "",
+  get privateSendVaultPrivateKey(): string {
+    return (
+      process.env.PRIVATE_SEND_VAULT_PRIVATE_KEY ||
+      process.env.SEND_VAULT_PRIVATE_KEY ||
+      (process.env.NODE_ENV === "test"
+        ? "0x0000000000000000000000000000000000000000000000000000000000000001"
+        : "")
+    );
+  },
+  get privateSendPayoutPrivateKey(): string {
+    return (
+      process.env.PRIVATE_SEND_PAYOUT_PRIVATE_KEY ||
+      process.env.SEND_PAYOUT_PRIVATE_KEY ||
+      (process.env.NODE_ENV === "test"
+        ? "0x0000000000000000000000000000000000000000000000000000000000000002"
+        : "")
+    );
+  },
   privateSendConfirmations: Number(process.env.PRIVATE_SEND_CONFIRMATIONS ?? 3),
   privateSendJobIntervalMs: Number(process.env.PRIVATE_SEND_JOB_INTERVAL_MS ?? 15000),
   privateSendExpirySeconds: Number(process.env.PRIVATE_SEND_EXPIRY_SECONDS ?? 1800),
