@@ -6,18 +6,18 @@ import { env } from "./env";
 const NATIVE = "0x0000000000000000000000000000000000000000";
 const client = createPublicClient({ transport: http(env.rhcRpcUrl, { timeout: 10_000, retryCount: 1 }) });
 const transfer = parseAbiItem("event Transfer(address indexed from, address indexed to, uint256 value)");
-type Job = { id:string; asset_address:string|null; asset_symbol:"ETH"|"TERA"; decimals:number; sender_address:string; recipient_address:string; amount:string; intake_address:string; payout_address:string; status:string; deposit_tx_hash:Hex|null; sweep_tx_hash:Hex|null; payout_tx_hash:Hex|null; sweep_serialized_tx:Hex|null; payout_serialized_tx:Hex|null; expires_at:string };
+type Job = { id:string; asset_address:string|null; asset_symbol:string; decimals:number; sender_address:string; recipient_address:string; amount:string; intake_address:string; payout_address:string; status:string; deposit_tx_hash:Hex|null; sweep_tx_hash:Hex|null; payout_tx_hash:Hex|null; sweep_serialized_tx:Hex|null; payout_serialized_tx:Hex|null; expires_at:string };
 let running=false;
 const validKey=(key:string)=>/^0x[\da-fA-F]{64}$/.test(key);
-export const enabled=()=>Boolean(pool&&env.privateSendEnabled&&validKey(env.privateSendVaultPrivateKey)&&validKey(env.privateSendPayoutPrivateKey)&&/^0x[\da-fA-F]{40}$/.test(env.teraTokenAddress));
+export const enabled=()=>Boolean(env.privateSendEnabled&&validKey(env.privateSendVaultPrivateKey)&&validKey(env.privateSendPayoutPrivateKey)&&/^0x[\da-fA-F]{40}$/.test(env.teraTokenAddress));
 const intake=()=>privateKeyToAccount(env.privateSendVaultPrivateKey as Hex);
 const payout=()=>privateKeyToAccount(env.privateSendPayoutPrivateKey as Hex);
 const known=(e:unknown)=>/already known|known transaction|nonce too low/i.test(e instanceof Error?e.message:String(e));
 
 async function receipt(hash:Hex){try{return await client.getTransactionReceipt({hash})}catch{return null}}
 async function confirmed(hash:Hex){const r=await receipt(hash);if(!r)return null;if(r.status!=="success")throw Error("Routing transaction reverted on chain.");const head=await client.getBlockNumber();return head-r.blockNumber+1n>=BigInt(env.privateSendConfirmations)?r:null}
-function token(job:Job){return job.asset_symbol==="TERA"?getAddress(env.teraTokenAddress):null}
-function signedTx(job:Job, from:Address,to:Address){const amount=BigInt(job.amount);return job.asset_symbol==="ETH"?{to,value:amount,data:"0x" as Hex}:{to:getAddress(env.teraTokenAddress),value:0n,data:encodeFunctionData({abi:erc20Abi,functionName:"transfer",args:[to,amount]})}}
+function token(job:Job){return job.asset_address?getAddress(job.asset_address):(job.asset_symbol==="TERA"?getAddress(env.teraTokenAddress):null)}
+function signedTx(job:Job, from:Address,to:Address){const amount=BigInt(job.amount);const t=token(job);return job.asset_symbol==="ETH"?{to,value:amount,data:"0x" as Hex}:{to:t!,value:0n,data:encodeFunctionData({abi:erc20Abi,functionName:"transfer",args:[to,amount]})}}
 async function matches(job:Job, hash:Hex, from:Address, to:Address){const r=await confirmed(hash);if(!r)return false;const amount=BigInt(job.amount);if(job.asset_symbol==="ETH")throw Error("Native transfers must be verified separately.");
 const t=token(job)!;return r.logs.some(log=>{if(getAddress(log.address)!==t)return false;try{const a=decodeEventLog({abi:[transfer],data:log.data,topics:log.topics}).args as {from:Address;to:Address;value:bigint};return getAddress(a.from)===from&&getAddress(a.to)===to&&a.value===amount}catch{return false}})}
 async function nativeMatches(hash:Hex, from:Address,to:Address, amount:bigint){const r=await confirmed(hash);if(!r||getAddress(r.from)!==from||getAddress(r.to!)!==to)return false;const tx=await client.getTransaction({hash});return tx.value===amount}
