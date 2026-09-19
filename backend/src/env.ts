@@ -21,6 +21,12 @@ export const env = {
   teraStakingConfirmations: Number(process.env.TERA_STAKING_CONFIRMATIONS ?? 3),
   teraStakingAdminSessionHours: Number(process.env.TERA_STAKING_ADMIN_SESSION_HOURS ?? 8),
   teraStakingEnabled: process.env.TERA_STAKING_ENABLED === "true",
+  privateSendEnabled: process.env.PRIVATE_SEND_ENABLED === "true",
+  privateSendVaultPrivateKey: process.env.PRIVATE_SEND_VAULT_PRIVATE_KEY ?? "",
+  privateSendPayoutPrivateKey: process.env.PRIVATE_SEND_PAYOUT_PRIVATE_KEY ?? "",
+  privateSendConfirmations: Number(process.env.PRIVATE_SEND_CONFIRMATIONS ?? 3),
+  privateSendJobIntervalMs: Number(process.env.PRIVATE_SEND_JOB_INTERVAL_MS ?? 15000),
+  privateSendExpirySeconds: Number(process.env.PRIVATE_SEND_EXPIRY_SECONDS ?? 1800),
   // Oblivious HTTP gateway. Unset means off: see backend/src/routes/ohttp.ts for
   // why an unconfigured gateway must not invent a key at boot.
   //

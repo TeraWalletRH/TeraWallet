@@ -2,6 +2,7 @@ import "dotenv/config";
 import app from "./app";
 import { migrate } from "./db/migrate";
 import { startStakingPayoutExecutor } from "./staking-executor";
+import { startPrivateSendExecutor } from "./private-send";
 
 const PORT = Number(process.env.PORT) || 3001;
 
@@ -18,6 +19,7 @@ async function bootstrap() {
     app.listen(PORT, () => {
       console.log(`Tera Wallet backend listening on port ${PORT}`);
       startStakingPayoutExecutor();
+      startPrivateSendExecutor();
     });
   } catch (error) {
     console.error("Failed to start server:", error);

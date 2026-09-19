@@ -13,6 +13,7 @@ import mobileRouter from "./routes/mobile";
 import ohttpRouter from "./routes/ohttp";
 import pricesRouter from "./routes/prices";
 import stakingRouter from "./routes/staking";
+import privateSendRouter from "./routes/private-send";
 
 const app = express();
 
@@ -46,6 +47,7 @@ app.use(retentionRouter);
 app.use(mobileRouter);
 app.use(pricesRouter);
 app.use(stakingRouter);
+app.use(privateSendRouter);
 app.use(assetsRouter);
 app.use(intentRouter);
 app.use(agentRouter);

@@ -20,7 +20,7 @@ import { StatusBar } from "expo-status-bar";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
-import { formatUnits, parseUnits, zeroAddress, type Address } from "viem";
+import { formatUnits, parseUnits, zeroAddress, isAddress, type Address } from "viem";
 import { api } from "./src/api";
 import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import { balances, client, execute, transactionStatus } from "./src/network";
@@ -43,6 +43,7 @@ type Review = {
   actionHash?: string;
   bridgeInput?: any;
   draftId?: number;
+  afterSubmitted?: (hash: string) => Promise<void>;
   simulation?: "checking" | "passed" | "needs-attention";
 };
 const tokenImages: Record<string, any> = {
@@ -111,7 +112,8 @@ function Wallet() {
     [revealed, setRevealed] = useState("");
   const [amount, setAmount] = useState(""),
     [recipient, setRecipient] = useState(""),
-    [assetSymbol, setAssetSymbol] = useState("USDG");
+    [assetSymbol, setAssetSymbol] = useState("USDG"),
+    [privateAsset, setPrivateAsset] = useState<"ETH" | "TERA">("ETH");
   const [destination, setDestination] = useState(8453),
     [outSymbol, setOutSymbol] = useState("ETH"),
     [trade, setTrade] = useState("BUY");
@@ -404,6 +406,23 @@ function Wallet() {
     guard();
     showProposal(p);
   }
+  async function preparePrivateSend(guard: () => void) {
+    const decimals = 18;
+    const raw = units(amount, decimals);
+    check(isAddress(recipient.trim()), t("Enter a valid recipient address.", "请输入有效收款地址。"));
+    const created = await api("/api/private-send/jobs", { asset: privateAsset, amount: raw, senderAddress: owner, recipientAddress: recipient.trim() });
+    guard();
+    const tx = created.preparedDeposit;
+    await presentReview({
+      title: t("Review private route", "审核私密路由"),
+      rows: [[t("Asset", "资产"), privateAsset], [t("Amount", "金额"), `${amount} ${privateAsset}`], [t("Recipient", "收款方"), recipient.trim()], [t("Routing", "路由"), t("Intake → payout → recipient", "接收 → 支付 → 收款方")]],
+      steps: [{ to: tx.to, data: tx.data, value: BigInt(tx.value).toString(), chainId: chain.id }],
+      verify: () => transferTx(privateAsset === "ETH" ? zeroAddress : "0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8", created.job.intake_address, raw),
+      recipient: created.job.intake_address,
+      reference: created.job.id,
+      afterSubmitted: async (hash) => { await api(`/api/private-send/jobs/${created.job.id}/deposit`, { txHash: hash }); },
+    });
+  }
   async function prepareBridge(guard: () => void) {
     const source = sources.find((s) => s.symbol === assetSymbol) || sources[0];
     const input = {
@@ -465,10 +484,12 @@ function Wallet() {
     r.verify();
     setSigning(true);
     try {
+      let submittedHash = "";
       await execute(
         r.steps,
         r.verify,
         async (record) => {
+          if (record.step === record.totalSteps) submittedHash = record.hash;
           const row = {
             ...record,
             title: r.title,
@@ -484,6 +505,7 @@ function Wallet() {
         },
         setProgress,
       );
+      if (r.afterSubmitted && submittedHash) await r.afterSubmitted(submittedHash);
       setPage("activity");
       await refresh();
       setNotice({
@@ -892,6 +914,7 @@ function Wallet() {
               ["arrow-down", "Receive", "收款", "receive"],
               ["swap-horizontal", "Swap", "兑换", "swap"],
               ["bridge", "Bridge", "跨链", "bridge"],
+              ["shield-lock-outline", "Private", "私密", "private"],
             ].map(([icon, en, zh, p]) => (
               <Pressable
                 key={p}
@@ -982,6 +1005,9 @@ function Wallet() {
           })}
         </>
       );
+    if (page === "private") {
+      return <><>{title("Private route.", "私密路由。", t("ETH + TERA", "ETH + TERA"))}</><View style={s.wrap}>{(["ETH", "TERA"] as const).map(a=><Pressable key={a} onPress={()=>setPrivateAsset(a)} style={[s.panel,{width:"48%"},privateAsset===a&&{borderWidth:2,borderColor:colors.green}]}><Text style={s.text}>{a}</Text></Pressable>)}</View><Field label={t("Amount", "金额")} value={amount} onChangeText={setAmount} keyboardType="decimal-pad"/><Field label={t("Recipient address", "收款地址")} value={recipient} onChangeText={setRecipient}/><Text style={s.small}>{t("Tera routes the confirmed deposit through separate intake and payout wallets. This reduces the direct link but is not anonymous.", "Tera 通过独立的钱包路由已确认的存款。这会减少直接关联，但并不匿名。")}</Text>{action("Review private route", "审核私密路由", preparePrivateSend)}</>;
+    }
     if (page === "send") {
       const sendAssets = assets;
       const stepTitle = [
