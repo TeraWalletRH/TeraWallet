@@ -70,12 +70,22 @@ jobs:
           trap 'rm -f "$TERA_KEYSTORE_PATH"' EXIT
           node -e '
             const fs = require("fs");
-            let b64 = (process.env.ANDROID_KEYSTORE_BASE64 || "").replace(/[^A-Za-z0-9+/=]/g, "");
-            if (b64.length !== 3704 && fs.existsSync("scripts/release-keystore.b64")) {
-              console.log("Using committed release-keystore.b64 fallback...");
-              b64 = fs.readFileSync("scripts/release-keystore.b64", "utf8").trim();
+            const path = require("path");
+            const gw = process.env.GITHUB_WORKSPACE || ".";
+            const f1 = path.join(gw, "android/scripts/release-keystore.b64");
+            const f2 = path.join(gw, "scripts/release-keystore.b64");
+            let b64 = "";
+            if (fs.existsSync(f1)) {
+              console.log("Restoring keystore from android/scripts/release-keystore.b64...");
+              b64 = fs.readFileSync(f1, "utf8").trim();
+            } else if (fs.existsSync(f2)) {
+              console.log("Restoring keystore from scripts/release-keystore.b64...");
+              b64 = fs.readFileSync(f2, "utf8").trim();
+            } else {
+              console.log("Restoring keystore from env var...");
+              b64 = (process.env.ANDROID_KEYSTORE_BASE64 || "").replace(/[^A-Za-z0-9+/=]/g, "");
             }
-            const buf = Buffer.from(b64, "base64");
+            const buf = Buffer.from(b64.replace(/[^A-Za-z0-9+/=]/g, ""), "base64");
             fs.writeFileSync(process.env.TERA_KEYSTORE_PATH, buf);
             console.log("Restored keystore size:", buf.length);
           '
