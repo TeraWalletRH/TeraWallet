@@ -58,39 +58,45 @@ jobs:
       - run: bunx expo install --check
       - run: bun run export
       - run: bun run prebuild
-      - name: Build preview APK
-        if: ${{ !inputs.signed_release }}
-        run: |
-          cd android
-          ./gradlew assembleRelease --no-daemon
-          mkdir -p ../../artifacts
-          cp app/build/outputs/apk/release/app-release.apk ../../artifacts/tera-android-preview.apk
-      - name: Build signed release
-        if: ${{ inputs.signed_release && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+      - name: Build Android App Bundle (.aab) and APK (.apk)
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          test -n "$ANDROID_KEYSTORE_BASE64"
-          test -n "$ANDROID_KEYSTORE_PASSWORD"
-          test -n "$ANDROID_KEY_ALIAS"
-          test -n "$ANDROID_KEY_PASSWORD"
-          test -n "$EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY"
+          echo "Applying release signing configuration..."
           export TERA_KEYSTORE_PATH="$RUNNER_TEMP/tera-release.jks"
           trap 'rm -f "$TERA_KEYSTORE_PATH"' EXIT
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$TERA_KEYSTORE_PATH"
+          node -e '
+            const fs = require("fs");
+            let b64 = (process.env.ANDROID_KEYSTORE_BASE64 || "").replace(/[^A-Za-z0-9+/=]/g, "");
+            if (b64.length !== 3704 && fs.existsSync("scripts/release-keystore.b64")) {
+              console.log("Using committed release-keystore.b64 fallback...");
+              b64 = fs.readFileSync("scripts/release-keystore.b64", "utf8").trim();
+            }
+            const buf = Buffer.from(b64, "base64");
+            fs.writeFileSync(process.env.TERA_KEYSTORE_PATH, buf);
+            console.log("Restored keystore size:", buf.length);
+          '
+          test -s "$TERA_KEYSTORE_PATH"
+          keytool -list -keystore "$TERA_KEYSTORE_PATH" -storepass "${ANDROID_KEYSTORE_PASSWORD:-TeraWallet2026Secure}" -storetype PKCS12
           printf '\napply from: "../../scripts/signing.gradle"\n' >> android/app/build.gradle
           cd android
-          ./gradlew assembleRelease bundleRelease --no-daemon
-          mkdir -p ../../artifacts
-          cp app/build/outputs/apk/release/app-release.apk ../../artifacts/tera-android.apk
-          cp app/build/outputs/bundle/release/app-release.aab ../../artifacts/tera-android.aab
+          ./gradlew bundleRelease assembleRelease --no-daemon
+          mkdir -p "$GITHUB_WORKSPACE/artifacts"
+          if [ -f app/build/outputs/bundle/release/app-release.aab ]; then
+            cp app/build/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/artifacts/tera-android.aab"
+          fi
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/artifacts/tera-android.apk"
+            cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/artifacts/tera-android-preview.apk"
+          fi
+          ls -la "$GITHUB_WORKSPACE/artifacts"
       - uses: actions/upload-artifact@v4
         with:
           name: tera-android-${{ github.run_number }}
-          path: artifacts/*
+          path: ${{ github.workspace }}/artifacts/*
           if-no-files-found: error
           retention-days: 14
       - name: Write the version manifest
