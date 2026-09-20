@@ -27,7 +27,7 @@ jobs:
     env:
       CI: "1"
       EXPO_NO_TELEMETRY: "1"
-      TERA_SIGNED_RELEASE: ${{ inputs.signed_release && 'true' || 'false' }}
+      TERA_SIGNED_RELEASE: "true"
       EXPO_PUBLIC_API_URL: https://api.terawallet.app
       EXPO_PUBLIC_RPC_URL: https://rpc.mainnet.chain.robinhood.com
       EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY: ${{ vars.EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY || '0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05' }}
