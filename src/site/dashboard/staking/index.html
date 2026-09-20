@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>TERA Staking Dashboard — Fixed & Epoch Staking</title><link rel="icon" href="/tera/favicon.png">
+  <title>TERA Staking Dashboard — Fixed &amp; Flexible Staking</title><link rel="icon" href="/tera/favicon.png">
   <style>
     :root{font-family:Arial,sans-serif;background:#f6f5f2;color:#18251e;--green:#1d4330;--lime:#b9eb85;--line:#c9d0bf;--muted:#697461;--wash:#e8ecdf;--amber:#b45309;--amber-bg:#fef3c7}
     *{box-sizing:border-box}body{margin:0}.wrap{max-width:1080px;margin:auto;padding:28px}
@@ -10,9 +10,9 @@
     .nav a{color:inherit;text-decoration:none}
     .hero{padding:54px 0 25px}.hero h1{font-size:clamp(46px,9vw,82px);font-weight:400;letter-spacing:-.07em;line-height:.9;margin:12px 0}
     .eyebrow,.label{font:11px monospace;color:#74803c;text-transform:uppercase;letter-spacing:.06em}
-    .grid{display:grid;grid-template-columns:repeat(3,1fr);border:1px solid var(--line)}
-    .card{padding:22px;border-right:1px solid var(--line)}.card:last-child{border:0}
-    .value{font-size:28px;margin-top:9px;word-break:break-word}
+    .grid{display:grid;grid-template-columns:repeat(4,1fr);border:1px solid var(--line)}
+    .card{padding:20px;border-right:1px solid var(--line)}.card:last-child{border:0}
+    .value{font-size:24px;margin-top:9px;word-break:break-word;font-weight:600}
     .panel{margin-top:22px;border:1px solid var(--line);padding:24px;background:#fff}
     .panel h2{margin:0 0 11px;font-size:23px;font-weight:400}
     .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
@@ -60,29 +60,31 @@
     .modal-card h2{font-size:clamp(34px,7vw,58px);line-height:.92;letter-spacing:-.06em;font-weight:400;margin:11px 0 16px}
     .modal-card p{color:var(--muted);line-height:1.55;margin:0 0 22px}
     .footer{margin-top:60px;border-top:1px solid var(--line);padding:22px 0;font:11px monospace;color:var(--muted)}
-    @media(max-width:650px){.wrap{padding:20px}.grid{grid-template-columns:1fr}.card{border-right:0;border-bottom:1px solid var(--line)}.card:last-child{border-bottom:0}.lock-item{grid-template-columns:1fr}}
+    @media(max-width:768px){.wrap{padding:20px}.grid{grid-template-columns:1fr 1fr}.card{border-right:1px solid var(--line);border-bottom:1px solid var(--line)}.card:nth-child(2n){border-right:0}.card:last-child{border-bottom:0}.lock-item{grid-template-columns:1fr}}
+    @media(max-width:480px){.grid{grid-template-columns:1fr}.card{border-right:0}}
   </style>
 </head>
 <body><main class="wrap">
   <nav class="nav"><a href="/">TERA WALLET</a><a href="/staking/">← STAKING EXPLAINER</a></nav>
   <section class="hero">
     <div class="eyebrow">TERA staking / fixed &amp; flexible</div>
-    <h1>Lock TERA.<br>Guaranteed Returns.</h1>
+    <h1>Your stake.<br>Your return.</h1>
     <div class="row">
       <button class="btn" id="connect">Connect wallet</button>
-      <span id="status">Connect to load your fixed locks and position.</span>
+      <span id="status">Connect to load your staking balances and active locks.</span>
     </div>
   </section>
 
   <section class="grid">
-    <div class="card"><div class="label">Total Locked TERA</div><div class="value" id="totalLocked">—</div></div>
-    <div class="card"><div class="label">Guaranteed Rewards</div><div class="value" id="totalRewards">—</div></div>
-    <div class="card"><div class="label">Active Locks</div><div class="value" id="locksCount">—</div></div>
+    <div class="card"><div class="label">Flexible Stake</div><div class="value" id="flexStake">—</div></div>
+    <div class="card"><div class="label">Total Fixed Locked</div><div class="value" id="totalLocked">—</div></div>
+    <div class="card"><div class="label">Claimable / Rewards</div><div class="value" id="totalRewards">—</div></div>
+    <div class="card"><div class="label">Epoch Status</div><div class="value" id="epochStatus">—</div></div>
   </section>
 
   <!-- FIXED STAKING PANEL -->
   <section class="panel">
-    <h2>Fixed Staking (Strict Maturity Lock)</h2>
+    <h2>Fixed Staking (30, 45, 90 Days)</h2>
     <p class="note">Select a duration tier. Rewards are calculated deterministically and locked from treasury reserves. Tokens cannot be withdrawn early.</p>
     
     <div class="tier-selector">
@@ -114,7 +116,7 @@
     </div>
 
     <div class="lock-warning">
-      🔒 <strong>STRICT LOCK POLICY:</strong> Deposits are locked completely for the full duration. No early withdrawals or claims before the maturity date.
+      🔒 <strong>STRICT LOCK POLICY:</strong> Deposits are locked completely for the full duration. Early withdrawal is disabled until the maturity timestamp.
     </div>
   </section>
 
@@ -125,18 +127,34 @@
     <div id="locksList" class="locks-list">Connect wallet to view your fixed locks.</div>
   </section>
 
-  <!-- RECOVER PENDING LOCK -->
+  <!-- FLEXIBLE EPOCH STAKING PANEL -->
   <section class="panel">
-    <h2>Recover Pending Lock</h2>
-    <p class="note">If an on-chain transfer was submitted but not credited, enter the transaction hash and selected tier to reconcile it safely.</p>
+    <h2>Flexible Epoch Staking</h2>
+    <p class="note">Earn pro-rata rewards from the current funded epoch. Flexible stakes can be increased or unstaked at any time.</p>
+    <div class="row" style="margin-bottom:14px">
+      <input class="input" id="flexDeposit" inputmode="decimal" autocomplete="off" placeholder="0.00 TERA">
+      <button class="btn" id="flexStakeBtn">Stake TERA (Flexible)</button>
+    </div>
     <div class="row">
-      <select id="recoverTier" class="input" style="max-width:180px">
-        <option value="30">30 Days (6.0% APY)</option>
-        <option value="45">45 Days (9.0% APY)</option>
-        <option value="90">90 Days (14.0% APY)</option>
+      <button class="btn alt" id="flexClaimBtn">Claim Settled Rewards</button>
+      <input class="input" id="flexUnstakeAmount" inputmode="decimal" autocomplete="off" placeholder="0.00 TERA">
+      <button class="btn alt" id="flexUnstakeBtn">Unstake TERA</button>
+    </div>
+  </section>
+
+  <!-- RECOVER PENDING DEPOSIT / LOCK -->
+  <section class="panel">
+    <h2>Recover Pending Transaction</h2>
+    <p class="note">If an on-chain transfer was submitted to the pool but not yet credited, enter the transaction hash to reconcile it safely.</p>
+    <div class="row">
+      <select id="recoverType" class="input" style="max-width:200px">
+        <option value="30">Fixed Lock: 30 Days</option>
+        <option value="45">Fixed Lock: 45 Days</option>
+        <option value="90">Fixed Lock: 90 Days</option>
+        <option value="flexible">Flexible Epoch Stake</option>
       </select>
       <input class="input" id="recoverTx" autocomplete="off" placeholder="0x transaction hash">
-      <button class="btn alt" id="recoverBtn">Recover Lock</button>
+      <button class="btn alt" id="recoverBtn">Recover Stake</button>
     </div>
   </section>
 
@@ -151,16 +169,18 @@
 
 <div class="modal" id="successModal" role="dialog" aria-modal="true" aria-labelledby="successTitle">
   <div class="modal-card">
-    <div class="eyebrow">TERA fixed staking</div>
-    <h2 id="successTitle">Lock Successful.</h2>
-    <p id="successCopy">Your TERA stake has been confirmed and locked for the selected term.</p>
+    <div class="eyebrow">TERA staking</div>
+    <h2 id="successTitle">Transaction Confirmed</h2>
+    <p id="successCopy">Your TERA stake has been confirmed and recorded.</p>
     <button class="btn" id="successClose">Continue</button>
   </div>
 </div>
 
 <script>
-const api = window.TERA_API_BASE || '', q = s => document.querySelector(s), qa = s => document.querySelectorAll(s), DECIMALS = 18n, SCALE = 10n**DECIMALS;
-let wallet = '', selectedTier = 30, selectedBps = 600, userLocks = [];
+const api = window.TERA_API_BASE || 'https://api.terawallet.app';
+const q = s => document.querySelector(s), qa = s => document.querySelectorAll(s), DECIMALS = 18n, SCALE = 10n**DECIMALS;
+let wallet = '', activeEpoch = null, activeEpochId = '', flexiblePosition = null, userLocks = [];
+let selectedTier = 30, selectedBps = 600;
 
 const TIERS = {
   30: { days: 30, apy: 6.0, bps: 600 },
@@ -169,8 +189,20 @@ const TIERS = {
 };
 
 const f = async (p, o = {}) => {
-  let r = await fetch(api + p, { headers: { 'content-type': 'application/json' }, ...o }), j = await r.json();
-  if (!r.ok) throw Error(j.error || 'Request failed');
+  let r;
+  try {
+    r = await fetch(api + p, { headers: { 'content-type': 'application/json' }, ...o });
+  } catch (err) {
+    throw Error('Network error reaching staking service: ' + err.message);
+  }
+  const text = await r.text();
+  let j;
+  try {
+    j = JSON.parse(text);
+  } catch {
+    throw Error(`Invalid response from API (${r.status})`);
+  }
+  if (!r.ok) throw Error(j?.error || `Request failed with status ${r.status}`);
   return j;
 };
 
@@ -233,21 +265,18 @@ q('#depositAmount').addEventListener('input', updateProjection);
 function renderLocks(locks) {
   const host = q('#locksList');
   host.replaceChildren();
-  if (!locks.length) {
+  if (!locks || !locks.length) {
     host.textContent = 'You have no fixed staking locks yet.';
     q('#totalLocked').textContent = '0 TERA';
-    q('#totalRewards').textContent = '0 TERA';
-    q('#locksCount').textContent = '0';
     return;
   }
 
-  let totalPrincipal = 0n, totalRewards = 0n, activeCount = 0;
+  let totalPrincipal = 0n, totalMaturedRewards = 0n;
   for (const lock of locks) {
-    const p = BigInt(lock.principal_amount), r = BigInt(lock.reward_amount);
+    const p = BigInt(lock.principal_amount || 0), r = BigInt(lock.reward_amount || 0);
     if (lock.status === 'locked' || lock.effectiveStatus === 'matured') {
       totalPrincipal += p;
-      totalRewards += r;
-      activeCount++;
+      if (lock.effectiveStatus === 'matured') totalMaturedRewards += r;
     }
 
     const card = document.createElement('article');
@@ -259,7 +288,7 @@ function renderLocks(locks) {
 
     const amounts = document.createElement('div');
     amounts.className = 'lock-amounts';
-    amounts.innerHTML = `<span class="lock-principal">${tera(p)}</span> <span class="lock-reward">+${tera(r)} reward</span>`;
+    amounts.innerHTML = `<span class="lock-principal">${tera(p)}</span> <span class="lock-reward">+${tera(r)} guaranteed</span>`;
 
     const meta = document.createElement('div');
     meta.className = 'lock-meta';
@@ -272,30 +301,30 @@ function renderLocks(locks) {
       tx.textContent = `Tx: ${short(lock.deposit_tx_hash)}`;
       meta.append(tx);
     }
-
     left.append(title, amounts, meta);
 
     const right = document.createElement('div');
     right.style.textAlign = 'right';
 
+    const statusPill = lock.effectiveStatus || lock.status;
     const pill = document.createElement('div');
-    pill.className = `pill ${lock.effectiveStatus}`;
-    pill.textContent = lock.effectiveStatus.toUpperCase();
+    pill.className = `pill ${statusPill}`;
+    pill.textContent = statusPill.toUpperCase();
     right.append(pill);
 
-    if (lock.effectiveStatus === 'matured') {
+    if (statusPill === 'matured') {
       const claimBtn = document.createElement('button');
       claimBtn.className = 'btn claim-btn';
       claimBtn.style.marginTop = '10px';
       claimBtn.textContent = 'Unlock & Claim';
       claimBtn.onclick = () => unlockLock(lock.id);
       right.append(claimBtn);
-    } else if (lock.effectiveStatus === 'locked') {
+    } else if (statusPill === 'locked') {
       const timer = document.createElement('div');
       timer.style.font = '11px monospace';
       timer.style.color = 'var(--muted)';
       timer.style.marginTop = '8px';
-      const daysLeft = Math.ceil(lock.secondsRemaining / 86400);
+      const daysLeft = Math.ceil((lock.secondsRemaining || 0) / 86400);
       timer.textContent = `${daysLeft} day${daysLeft === 1 ? '' : 's'} remaining`;
       right.append(timer);
     }
@@ -305,14 +334,19 @@ function renderLocks(locks) {
   }
 
   q('#totalLocked').textContent = tera(totalPrincipal);
-  q('#totalRewards').textContent = tera(totalRewards);
-  q('#locksCount').textContent = activeCount.toString();
+  updateRewardsDisplay(totalMaturedRewards);
+}
+
+function updateRewardsDisplay(maturedFixedRewards = 0n) {
+  const flexRewards = flexiblePosition ? BigInt(flexiblePosition.accrued_rewards || 0) : 0n;
+  const total = flexRewards + maturedFixedRewards;
+  q('#totalRewards').textContent = tera(total);
 }
 
 function renderHistory(payouts) {
   const host = q('#history');
   host.replaceChildren();
-  if (!payouts.length) {
+  if (!payouts || !payouts.length) {
     host.textContent = 'No payouts yet.';
     return;
   }
@@ -322,7 +356,7 @@ function renderHistory(payouts) {
     title.className = 'payout-title';
     title.textContent = item.kind.toUpperCase();
     amount.className = 'payout-amount';
-    amount.textContent = tera(BigInt(item.principal_amount) + BigInt(item.reward_amount));
+    amount.textContent = tera(BigInt(item.principal_amount || 0) + BigInt(item.reward_amount || 0));
     pill.className = `pill ${item.status}`;
     pill.textContent = item.status.toUpperCase();
     meta.className = 'payout-meta';
@@ -348,16 +382,45 @@ function renderHistory(payouts) {
 
 async function load() {
   if (!wallet) return;
+
+  // 1. Fetch active epoch
   try {
-    const [locksRes, payoutsRes] = await Promise.all([
-      f(`/api/staking/locks/${wallet}`),
-      f(`/api/staking/payouts/${wallet}`)
-    ]);
-    userLocks = locksRes.locks || [];
-    renderLocks(userLocks);
-    renderHistory(payoutsRes.payouts || []);
+    const e = await f('/api/staking/epochs');
+    activeEpoch = e.epochs?.find(x => x.status === 'active') || null;
+    activeEpochId = activeEpoch?.id || '';
+    q('#epochStatus').textContent = activeEpoch ? 'LIVE' : 'INACTIVE';
   } catch (err) {
-    msg(err.message);
+    q('#epochStatus').textContent = '—';
+  }
+
+  // 2. Fetch flexible position (so user's existing tokens/position are always visible!)
+  try {
+    const p = await f('/api/staking/position/' + wallet);
+    flexiblePosition = p.positions?.find(x => x.epoch_id === activeEpochId) || p.positions?.[0] || null;
+    q('#flexStake').textContent = tera(flexiblePosition?.active_stake);
+    updateRewardsDisplay();
+  } catch (err) {
+    console.warn('Flexible position read:', err);
+    q('#flexStake').textContent = '—';
+  }
+
+  // 3. Fetch fixed locks
+  try {
+    const l = await f('/api/staking/locks/' + wallet);
+    userLocks = l.locks || [];
+    renderLocks(userLocks);
+  } catch (err) {
+    console.warn('Fixed locks read:', err);
+    renderLocks([]);
+  }
+
+  // 4. Fetch payout history
+  try {
+    const h = await f('/api/staking/payouts/' + wallet);
+    renderHistory(h.payouts || []);
+  } catch (err) {
+    console.warn('Payout history read:', err);
+    renderHistory([]);
   }
 }
 
@@ -369,26 +432,52 @@ async function reconcileLock(txHash, termDays, amount) {
       body: JSON.stringify({ walletAddress: wallet, txHash, termDays })
     });
     if (out.status === 'awaiting_confirmations') {
-      msg('Lock submitted. Awaiting block confirmations...');
+      msg('Lock submitted. Awaiting blockchain confirmations...');
       setTimeout(() => reconcileLock(txHash, termDays, amount), 12000);
       return;
     }
     localStorage.removeItem(`tera.pending.lock.${wallet.toLowerCase()}`);
     await load();
-    msg('Lock confirmed and recorded.');
-    showSuccess('Fixed Stake Locked', `${tera(amount)} is strictly locked for ${termDays} days with guaranteed rewards.`);
+    msg('Lock confirmed and credited.');
+    showSuccess('Fixed Stake Locked', `${tera(amount)} is strictly locked for ${termDays} days with guaranteed returns.`);
   } catch (error) {
     msg('Lock verification pending: ' + error.message);
   }
 }
 
-function resumePendingLock() {
+async function reconcileFlexible(txHash, amount) {
+  if (!wallet || !activeEpochId) return;
+  try {
+    const out = await f('/api/staking/deposits', {
+      method: 'POST',
+      body: JSON.stringify({ epochId: activeEpochId, walletAddress: wallet, txHash })
+    });
+    if (out.status === 'awaiting_confirmations') {
+      msg('Stake submitted. Awaiting block confirmations...');
+      setTimeout(() => reconcileFlexible(txHash, amount), 12000);
+      return;
+    }
+    localStorage.removeItem(`tera.pending.flex.${wallet.toLowerCase()}`);
+    await load();
+    msg('Flexible stake confirmed and credited.');
+    showSuccess('Stake Successful', `${tera(out.creditedAmount || amount)} credited to active stake.`);
+  } catch (error) {
+    msg('Stake pending: ' + error.message);
+  }
+}
+
+function resumePending() {
   if (!wallet) return;
   try {
-    const item = JSON.parse(localStorage.getItem(`tera.pending.lock.${wallet.toLowerCase()}`) || 'null');
-    if (item && item.txHash) {
-      msg('Resuming verification of pending lock...');
-      void reconcileLock(item.txHash, item.termDays, item.amount);
+    const lockItem = JSON.parse(localStorage.getItem(`tera.pending.lock.${wallet.toLowerCase()}`) || 'null');
+    if (lockItem && lockItem.txHash) {
+      msg('Resuming verification of pending fixed lock...');
+      void reconcileLock(lockItem.txHash, lockItem.termDays, lockItem.amount);
+    }
+    const flexItem = JSON.parse(localStorage.getItem(`tera.pending.flex.${wallet.toLowerCase()}`) || 'null');
+    if (flexItem && flexItem.txHash) {
+      msg('Resuming verification of pending flexible stake...');
+      void reconcileFlexible(flexItem.txHash, flexItem.amount);
     }
   } catch {}
 }
@@ -400,12 +489,13 @@ q('#connect').onclick = async () => {
     q('#connect').textContent = wallet.slice(0, 6) + '…' + wallet.slice(-4);
     msg('Wallet connected.');
     await load();
-    resumePendingLock();
+    resumePending();
   } catch (e) {
     msg(e.message);
   }
 };
 
+// Lock TERA (Fixed Staking)
 q('#lockStakeBtn').onclick = async () => {
   try {
     if (!wallet) throw Error('Connect wallet first.');
@@ -423,26 +513,79 @@ q('#lockStakeBtn').onclick = async () => {
     });
 
     localStorage.setItem(`tera.pending.lock.${wallet.toLowerCase()}`, JSON.stringify({ txHash: tx, termDays: selectedTier, amount }));
-    msg('Transaction broadcasted. Awaiting chain confirmations...');
+    msg('Transaction broadcasted. Awaiting confirmations...');
     void reconcileLock(tx, selectedTier, amount);
   } catch (e) {
     msg(e.message);
   }
 };
 
-q('#recoverBtn').onclick = async () => {
+// Flexible Stake
+q('#flexStakeBtn').onclick = async () => {
   try {
-    if (!wallet) throw Error('Connect wallet first.');
-    const tx = q('#recoverTx').value.trim();
-    const term = Number(q('#recoverTier').value);
-    if (!/^0x[0-9a-fA-F]{64}$/.test(tx)) throw Error('Enter a valid 0x transaction hash.');
-    msg('Verifying and recovering lock...');
-    void reconcileLock(tx, term, '0');
+    if (!wallet || !activeEpochId) throw Error('Connect wallet and wait for an active epoch.');
+    const amount = parseTera(q('#flexDeposit').value);
+    if (BigInt(amount) <= 0n) throw Error('Enter an amount above zero.');
+
+    const p = await f('/api/staking/prepare-deposit', {
+      method: 'POST',
+      body: JSON.stringify({ amount })
+    });
+
+    const tx = await ethereum.request({
+      method: 'eth_sendTransaction',
+      params: [{ from: wallet, to: p.preparedTransaction.to, data: p.preparedTransaction.data, value: '0x0' }]
+    });
+
+    localStorage.setItem(`tera.pending.flex.${wallet.toLowerCase()}`, JSON.stringify({ txHash: tx, amount }));
+    msg('Stake submitted. Awaiting confirmations...');
+    void reconcileFlexible(tx, amount);
   } catch (e) {
     msg(e.message);
   }
 };
 
+// Flexible Claim & Unstake
+async function flexiblePayout(kind) {
+  try {
+    if (!wallet || !activeEpochId) throw Error('Connect wallet and wait for an active epoch.');
+    const amount = kind === 'unstake' ? parseTera(q('#flexUnstakeAmount').value) : '0';
+    const id = crypto.randomUUID();
+    const a = { kind, walletAddress: wallet, epochId: activeEpochId, amount, idempotencyKey: id };
+    if (kind === 'unstake' && BigInt(amount) <= 0n) throw Error('Enter an amount above zero.');
+
+    const auth = await f('/api/staking/payout-authorization', { method: 'POST', body: JSON.stringify(a) });
+    const signature = await ethereum.request({ method: 'personal_sign', params: [auth.message, wallet] });
+    const out = await f('/api/staking/payouts', { method: 'POST', body: JSON.stringify({ ...a, signature }) });
+    msg(`Payout ${out.payout.status}. Reference: ${short(out.payout.id)}.`);
+    showSuccess('Payout Created', `Your ${kind} request is being processed by the treasury executor.`);
+    await load();
+  } catch (e) {
+    msg(e.message);
+  }
+}
+q('#flexClaimBtn').onclick = () => flexiblePayout('claim');
+q('#flexUnstakeBtn').onclick = () => flexiblePayout('unstake');
+
+// Recover pending transaction
+q('#recoverBtn').onclick = async () => {
+  try {
+    if (!wallet) throw Error('Connect wallet first.');
+    const tx = q('#recoverTx').value.trim();
+    const type = q('#recoverType').value;
+    if (!/^0x[0-9a-fA-F]{64}$/.test(tx)) throw Error('Enter a valid 0x transaction hash.');
+    msg('Verifying and recovering transaction...');
+    if (type === 'flexible') {
+      void reconcileFlexible(tx, '0');
+    } else {
+      void reconcileLock(tx, Number(type), '0');
+    }
+  } catch (e) {
+    msg(e.message);
+  }
+};
+
+// Unlock matured fixed lock
 async function unlockLock(lockId) {
   try {
     if (!wallet) throw Error('Connect wallet first.');
@@ -462,8 +605,8 @@ async function unlockLock(lockId) {
       body: JSON.stringify({ walletAddress: wallet, lockId, idempotencyKey, signature })
     });
 
-    msg(`Unlock requested! Reference: ${short(out.payout.id)}. Treasury executor will send principal + rewards automatically.`);
-    showSuccess('Unlock Requested', 'Your matured lock has been unlocked. The payout executor is broadcasting your principal and rewards.');
+    msg(`Unlock requested! Reference: ${short(out.payout.id)}. Treasury executor will send principal + rewards.`);
+    showSuccess('Unlock Requested', 'Your matured lock has been unlocked. The treasury payout executor is broadcasting your principal and rewards.');
     await load();
   } catch (e) {
     msg(e.message);
