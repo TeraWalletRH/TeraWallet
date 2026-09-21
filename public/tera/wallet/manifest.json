@@ -1,12 +1,17 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-84b83f4cdd75",
-  "builtAt": "2026-09-19T16:48:10.577Z",
+  "release": "r-beada74f2dc2",
+  "builtAt": "2026-09-21T15:55:16.262Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
   "files": [
+    {
+      "path": "core/anchor.js",
+      "hash": "sha256-j60CByer+ns4WNsoy+uyvJn4GqjcQY8T3IVTWNg19ng=",
+      "bytes": 14655
+    },
     {
       "path": "core/ingress.js",
       "hash": "sha256-dSyimOuvviIdzrDfHEYNMWZI8Fx6xzzfMm+FGlHUR9w=",
@@ -19,18 +24,18 @@
     },
     {
       "path": "core/parse.js",
-      "hash": "sha256-04F+RPPxK6AJrihdwb+UkeDIshFq1hHWPJWcsJqNDuw=",
-      "bytes": 16509
+      "hash": "sha256-4Qp0473FuayVjkUuCjbXbgM0DTTqXs3VxyHBofdaTpE=",
+      "bytes": 17113
     },
     {
       "path": "core/receipt.js",
-      "hash": "sha256-QsTIOKc2/YbzKYjJpwJ23oXO/sb5VFWuYAN7Nlb/6/U=",
-      "bytes": 20385
+      "hash": "sha256-aFXprCZor5itlhDe0A33NmWWFGdnMk8konACNuVCu2I=",
+      "bytes": 21014
     },
     {
       "path": "core/registry.js",
-      "hash": "sha256-k8NGzHRK0Pa2/tPWmloOMSKwIy7tsVlrralu3sjPvaU=",
-      "bytes": 10424
+      "hash": "sha256-EQmWbrWhRIC7/VJPtzERETi8vDHTWc1wKLSB/6DZN50=",
+      "bytes": 10715
     },
     {
       "path": "core/report.js",
@@ -64,8 +69,8 @@
     },
     {
       "path": "wallet/app.js",
-      "hash": "sha256-4ktlojuz49hEvvGII4skvQ+XkfWvHojScEYebRRG3as=",
-      "bytes": 196761
+      "hash": "sha256-9CUUxEHUJ8TLZQGY5BrJg2gPqO+yZUAdzElkSvNPuhM=",
+      "bytes": 202969
     },
     {
       "path": "wallet/boundary.js",
@@ -79,8 +84,8 @@
     },
     {
       "path": "wallet/checks.js",
-      "hash": "sha256-a+33TWBYCzU/ASNr3pAlkMGATN7R0ClkI8sHYSJudLY=",
-      "bytes": 8416
+      "hash": "sha256-fhgfQRrsb5yHw0I935QS0wyFVSjCEL08nfwHgVvhyjo=",
+      "bytes": 10266
     },
     {
       "path": "wallet/core.js",
@@ -178,5 +183,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-hLg/TN11UiuRb+xXPUbxRTK8pZSZN6QG93jnKqpiQZE="
+  "filesHash": "sha256-vq2nTy3CT7anj5h5yL12rz5IksZ67QfC28iCLXOLfLc="
 }

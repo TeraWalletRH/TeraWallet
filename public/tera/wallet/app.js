@@ -87,9 +87,18 @@ import {
   GATE_LABELS,
   GATE_EXPLANATIONS,
   explainGate,
+  explainBuildGate,
   localChecks,
   localSummary,
 } from "./checks.js";
+import {
+  buildGate,
+  verifyReceiptCall,
+  latestAnchoredAtCall,
+  decodeVerifyReceipt,
+  decodeLatestAnchoredAt,
+  LIMITS as ANCHOR_LIMITS,
+} from "../core/anchor.js";
 import {
   PASS as VERDICT_PASS,
   UNVERIFIABLE as VERDICT_UNVERIFIABLE,
@@ -436,6 +445,11 @@ const state = {
   // accounts, which is the thing this feature exists to avoid creating.
   rpcReads: {},
   integrity: null,
+  // What the build anchor said about the release this page reports running, and the
+  // timestamp of the most recent anchoring. Null until the read finishes or fails; a
+  // failed read stays null, which gate zero reports as unproven rather than as a pass.
+  anchor: null,
+  anchorLatestAt: 0,
   keyInfo: null,
   vaultKeyEpoch: 1,
   recovery: null,
@@ -928,6 +942,15 @@ async function openReceipt(index) {
     registry: await loadRegistry(),
     registryOrigin: FROM_PAGE,
     registryAuthentic: false,
+    // Looked up for the release this receipt names, which is not always the one this page
+    // is running: a receipt kept from last month names last month's build, and answering
+    // about the current one would be a check on the wrong thing that reads exactly like a
+    // check on the right one. Offered with the same caveat as the registry — this page
+    // chose the endpoint it asked, so an anchored release reports as unproven. What it
+    // settles from here is the negative, because no page volunteers one about itself.
+    anchor: await anchorFor(receipt.release),
+    anchorOrigin: FROM_PAGE,
+    anchorLatestAt: state.anchorLatestAt,
   });
   const counts = receiptTally(result.checks);
   const mark = { pass: "PASS", fail: "FAILED", unverifiable: "UNPROVEN", skipped: "N/A" };
@@ -943,7 +966,7 @@ async function openReceipt(index) {
        )
        .join("")}</tbody></table></div>
      <div class="note"><strong>What this receipt does not establish</strong><ul class="micro">${RECEIPT_CLAIMS.cannot.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div>
-     <div class="note"><strong>Checking the build elsewhere</strong>The release above can be compared against the approved-build registry this site publishes — but not usefully from here, because this page fetched both. Run <code>node scripts/verify-receipt.mjs receipt.json --registry registry.json</code>, or open <a href="/tera/verify.html">the offline verifier ↗</a> with a registry you fetched yourself.<ul class="micro">${REGISTRY_LIMITS.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div>
+     <div class="note"><strong>Checking the build elsewhere</strong>The release above can be compared against the approved-build registry this site publishes and against the on-chain anchor — but not usefully from here, because this page fetched both and chose the endpoint it asked. Run <code>node scripts/verify-receipt.mjs receipt.json --registry registry.json --anchor https://your-endpoint</code>, or open <a href="/tera/verify.html">the offline verifier ↗</a> with a registry you fetched yourself.<ul class="micro">${[...REGISTRY_LIMITS, ...ANCHOR_LIMITS].map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div>
      <p class="micro">${esc(EXPORT_WARNING)}</p>
      <div class="actions">${receipt.signature ? "" : button("Sign this receipt", "receipt-sign", `data-index="${Number(index)}" ${state.owner ? "" : "disabled"}`)}${button("Export receipt", "receipt-export", `data-index="${Number(index)}"`)}${button("Close", "close")}</div>
      ${receipt.signature ? "" : `<p class="micro">Signing asks your wallet for a signature over a short piece of readable text. It moves nothing and cannot authorise a transaction — the first line of what you will be shown is <code>${esc(DOMAIN)}</code>, which is what keeps it from being usable as anything else this wallet asks you to sign.</p>`}`,
@@ -1065,6 +1088,27 @@ function gateSummaryBlock(proposal) {
           .join("")}</ul>`
       : ""
   }</div>`;
+}
+
+/**
+ * The row above the five, drawn in the same list and numbered 00.
+ *
+ * Numbering it zero rather than adding a sixth is the whole point of where it sits: the
+ * five are checks on the action, evaluated by a service, and this is a check on the
+ * wallet that is about to prepare one. An owner reading down the list should reach the
+ * service's checks having already been told whether the page asking them is a build Tera
+ * still stands behind.
+ */
+function gateZeroRow() {
+  const gate = currentBuildGate();
+  const detail = explainBuildGate(gate);
+  return `<li class="gate-${esc(detail.status)}${gate.blocking ? " blocked" : ""}"><details class="gate-detail"><summary><span class="audit-num">00</span><span class="gate-name">${esc(detail.label)}${state.integrity?.release ? `<small>${esc(state.integrity.release)}</small>` : ""}</span><b>${detail.result}</b></summary>
+    <div class="gate-body">
+      ${pair("Rule evaluated", detail.rule)}${pair("Evaluated by", detail.evaluatedBy)}${pair("Inputs it received", detail.inputs.join(" · "))}${pair("Withheld from the assistant", detail.withheld.join(" · "))}
+      ${detail.nuance ? `<p class="micro gate-nuance">${esc(detail.nuance)}</p>` : ""}
+      <p class="micro">${esc(detail.meaning)}</p>
+      <ul class="micro">${ANCHOR_LIMITS.map((line) => `<li>${esc(line)}</li>`).join("")}</ul>
+    </div></details></li>`;
 }
 
 function chatBubble(message) {
@@ -1275,7 +1319,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
     intent?.actionType === "BUY"
       ? state.assets.find((candidate) => candidate.symbol === "USDG")
       : asset;
-  const issue = p.error || executionIssue(p, state.owner, chainId);
+  const issue = buildBlock() || p.error || executionIssue(p, state.owner, chainId);
   const submitted = Boolean(p.txHash);
   let amount = intent?.amount ?? "—";
   try {
@@ -1286,7 +1330,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
   }
   return `<article class="proposal"><div class="proposal-top"><span class="eyebrow">${esc(intent?.actionType || "Proposal")}</span>${chip(submitted ? "Submitted" : issue ? "Needs attention" : "Awaiting owner", !submitted && !!issue)}</div><h2>${esc(asset?.name || "Action review")}</h2>${p.explanation ? `<p class="lead">${esc(p.explanation)}</p>` : ""}
     ${gateSummaryBlock(p)}
-    <ul class="status-list">${GATES.map((name, i) => {
+    <ul class="status-list">${gateZeroRow()}${GATES.map((name, i) => {
       const g = p.gates?.find((g) => g.gate === name);
       const detail = explainGate(name, g);
       const status =
@@ -2286,8 +2330,7 @@ async function loadMyTag() {
 }
 
 function tagPanel() {
-  if (!tagsAvailable())
-    return "<p>Tags aren't available right now. Please try again shortly.</p>";
+  if (!tagsAvailable()) return "<p>Tags aren't available right now. Please try again shortly.</p>";
   if (!state.owner) return "<p>Connect your wallet to see or claim a tag.</p>";
   const held =
     state.myTag === undefined
@@ -2558,6 +2601,82 @@ async function checkIntegrity() {
     };
   }
   render();
+  void checkAnchor();
+}
+
+/**
+ * Read the build anchor for the release this page reports running.
+ *
+ * It runs after `checkIntegrity` because it needs that release id, and it needs the one
+ * the manifest check settled on rather than a string this file makes up.
+ *
+ * Two reads, both `eth_call`, both through the endpoint the owner configured when they
+ * have one — the same treatment every other chain read gets, and for the same reason: a
+ * read this page routes to Tera by default is a read Tera can answer however it likes.
+ * The second read is what lets absence be told apart from an anchor that has not caught
+ * up yet, which is the difference between "this build was never published" and "this
+ * build was published an hour ago".
+ *
+ * A failure leaves `state.anchor` null and is not surfaced as an error. Gate zero then
+ * says the chain could not be read, which is true, and does not block: an unreachable
+ * endpoint must not be able to stop a wallet working.
+ */
+async function checkAnchor() {
+  const release = state.integrity?.release || "";
+  state.anchor = await anchorFor(release);
+  render();
+}
+
+/**
+ * The anchor record for one release, or null when nothing could be read.
+ *
+ * Kept per release rather than per page, because a receipt from last month names last
+ * month's build: answering about the release this page happens to be running would be a
+ * check on the wrong thing, phrased exactly like a check on the right one.
+ *
+ * `state.anchorLatestAt` is not per release — it is one fact about the contract, and it
+ * is what separates a build that was never anchored from a record that has not caught up.
+ */
+const anchorCache = new Map();
+async function anchorFor(release) {
+  if (!release || state.demo) return null;
+  if (anchorCache.has(release)) return anchorCache.get(release);
+  const contract = config.buildAnchorAddress || "";
+  const url = state.rpcEndpoints[0] || config.buildAnchorRpcUrl || config.rpcUrl || "";
+  if (!isAddress(contract) || !url) return null;
+  let anchor = null;
+  try {
+    const rpc = createRpc(url);
+    const call = (data) => rpc({ method: "eth_call", params: [{ to: contract, data }, "latest"] });
+    const [verified, latest] = await Promise.all([
+      call(verifyReceiptCall(release)),
+      call(latestAnchoredAtCall()),
+    ]);
+    anchor = decodeVerifyReceipt(verified);
+    state.anchorLatestAt = decodeLatestAnchoredAt(latest);
+  } catch {
+    // Deliberately silent, and deliberately not cached: the absence of an answer is what
+    // gate zero reports, and an endpoint that was down once should be asked again.
+    return null;
+  }
+  anchorCache.set(release, anchor);
+  return anchor;
+}
+
+/** Gate zero for the release this page is running, or an unrun gate before the read. */
+function currentBuildGate() {
+  return buildGate(state.anchor, {
+    release: state.integrity?.release || "",
+    latestAnchoredAt: state.anchorLatestAt,
+  });
+}
+
+/** What gate zero stops, as the sentence the owner is shown, or "" when it stops nothing. */
+function buildBlock() {
+  const gate = currentBuildGate();
+  return gate.blocking
+    ? `${gate.detail} Nothing will be prepared or approved from this page until you load a build that is still anchored.`
+    : "";
 }
 
 async function loadPolicyBundle(force = false) {
@@ -2588,6 +2707,11 @@ async function loadPolicyBundle(force = false) {
 // starts its own.
 async function prepare(intent, lineage = "") {
   connected();
+  // Gate zero, before the request that runs the other five. It stops only on a definite
+  // negative — a build anchored against different code, or one Tera has withdrawn — so an
+  // unreachable endpoint cannot strand an owner here.
+  const blocked = buildBlock();
+  if (blocked) throw new Error(blocked);
   if (state.busy) throw new Error("Wait for the current request to finish.");
   const version = generation;
   state.busy = true;

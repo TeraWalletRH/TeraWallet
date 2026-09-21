@@ -27,11 +27,16 @@
 // establishes that a release was published, never that the page in front of you
 // is running it. Only hashes checked from outside the browser do that.
 //
-// On-chain anchoring is deliberately not here. Publishing these entries to a
-// contract would stop them being rewritten quietly, which is a real gain over a
-// file Tera serves — but it is a different build with a deployment behind it,
-// and shipping the file first is what makes the on-chain version checkable
-// against something rather than being the only copy.
+// On-chain anchoring is no longer absent, and it lives next door in `anchor.js`
+// rather than here. The file shipped first on purpose — an anchor that was the
+// only copy would be checkable against nothing — and now that both exist they
+// are read as two checks, not one.
+//
+// Keeping them apart is the point. This file establishes what Tera says; the
+// anchor establishes what Tera said and cannot now unsay. A release listed here
+// and missing from the anchor, or listed here after being withdrawn there, is a
+// finding — and a single merged check would be the place that finding went to
+// die, because a merge has to choose which answer wins.
 
 import { PASS, FAIL, UNVERIFIABLE, SKIPPED } from "./verdict.js";
 
