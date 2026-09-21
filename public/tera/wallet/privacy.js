@@ -61,6 +61,16 @@ export const LOCAL_ONLY = [
       "The price list covers every asset in the registry and is fetched without an address, so it cannot say which of them are yours. Multiplying it by your balances happens in this page. No total, no holding and no list of symbols is ever sent to be valued — which is how the same figure is produced everywhere else.",
   },
   {
+    label: "Which of your accounts have been joined up, and by whom",
+    detail:
+      "Switching accounts does not separate them: a party that reads for two of them holds the fact that they are one person. That is counted in this page, per pair, for this session only — never the vault, never browser storage. A stored list of your accounts with a note of who saw each would be the same record the count exists to warn you about. A reload empties it, which does not mean the operators forgot.",
+  },
+  {
+    label: "A request that would name two of your accounts",
+    detail:
+      "Refused before it is built, so it is not sent and does not appear in the log below — a row saying which two accounts were nearly joined is a smaller version of the same record. Allowing one is a switch in Settings that starts off and goes back off when the page reloads.",
+  },
+  {
     label: "Balance visibility and filters",
     detail: "Interface state that stays in the page and is never transmitted.",
   },

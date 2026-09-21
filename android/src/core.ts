@@ -19,6 +19,18 @@ export * as tags from "../../public/tera/core/tags.js";
 // surfaces, or one of them shows a confident figure that quietly counts it as nothing.
 export * as value from "../../public/tera/core/value.js";
 
+// Which of the owner's accounts a party has been able to join up, and the guard
+// that stops one request naming two of them.
+//
+// Shared rather than left to the browser because the rule is the same on both
+// surfaces and only the arithmetic of it is hard. This app holds exactly one
+// account — one phrase in the keystore — so the pairing half has nothing to
+// compare and correctly answers that there is nothing to separate. That is the
+// honest answer arriving from the shared vocabulary rather than the phone
+// silently not having the concept, and it stops being the answer the day this
+// app grows a second account.
+export * as linkage from "../../public/tera/core/linkage.js";
+
 // Re-exported by name because validation.ts and App.tsx use these directly and
 // a namespace would read worse at every call site.
 export {

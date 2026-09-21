@@ -162,6 +162,23 @@ import {
   PRICE_SOURCES,
 } from "../core/value.js";
 import {
+  LINKED as PAIR_LINKED,
+  WOULD_LINK as PAIR_WOULD_LINK,
+  LABELS as PAIR_LABELS,
+  STRUCTURAL as LINK_STRUCTURAL,
+  LIMITS as LINKAGE_LIMITS,
+  SPAN_CONSENT,
+  emptyLedger,
+  noteAccount,
+  noteRead,
+  pairings,
+  separationSummary,
+  describePair,
+  capacity,
+  spanOf,
+  shortAccount,
+} from "../core/linkage.js";
+import {
   parseTag,
   display as displayTag,
   claimMessage,
@@ -229,6 +246,22 @@ const request = (path, body, options) =>
 // Every service request is recorded for the privacy status centre before it is
 // sent. Field names only: no address, amount or message text enters the log.
 const api = async (path, body, options = {}) => {
+  // Before anything is recorded and before anything is built. A request that
+  // names two of this owner's accounts joins them for whoever receives it, in
+  // one step and permanently, and no endpoint arrangement is even consulted —
+  // so it stops here unless the owner has said otherwise in Settings.
+  //
+  // Checked against the path as well as the body: a GET carries its address in
+  // the path, and a guard that only read bodies would miss the whole shape of
+  // request this wallet makes most often.
+  const span = state.spanAllowed
+    ? { spans: false }
+    : spanOf({ path, body }, state.linkage.accounts);
+  if (span.spans) {
+    state.spanRefusal = { named: span.named, reason: span.reason, at: Date.now() };
+    render();
+    throw new ApiError(span.reason, { success: false }, 0);
+  }
   // `privacy` records what this device did to the body before it was built —
   // counts and flags only, never a value.
   const { privacy, ...rest } = options;
@@ -445,6 +478,22 @@ const state = {
   // operator answered for which account would be a record of the owner's
   // accounts, which is the thing this feature exists to avoid creating.
   rpcReads: {},
+  // Which parties have answered for which accounts, in this page session only,
+  // and in page memory only. The same reasoning as the tally above, one step
+  // further: this one is per account, so writing it anywhere durable would be
+  // writing down the owner's set of accounts with a note of who saw each — the
+  // exact artefact the separation panel exists to stop other people holding. A
+  // reload empties it, and the panel says so rather than implying the operators
+  // forgot too.
+  linkage: emptyLedger(),
+  // Off until the owner turns it on, and off again on reload. Until then a
+  // request that names two of their accounts is refused rather than sent.
+  spanAllowed: false,
+  // The last refusal, shown until it is dismissed or superseded. Short forms
+  // only: it is rendered in the page and never written to the request log,
+  // because a log line saying which two accounts were nearly joined is a
+  // smaller version of the same record.
+  spanRefusal: null,
   integrity: null,
   // The price map for every asset in the registry, and when it was read. Not per holding:
   // the request that fetches it carries nothing, so it is the same request whatever this
@@ -774,6 +823,7 @@ function render() {
     <main id="wallet-content"><div class="page-heading"><div><div class="eyebrow">Private authorization / Your authority</div><h1 tabindex="-1">${titles[key] || "Overview"}${key === "dashboard" ? "." : ""}</h1></div><p>The agent proposes. You review the checks and approve in your wallet.</p></div>
     ${state.integrity?.status === "modified" ? `<div class="live-notice integrity-alarm" role="alert"><span><b>This page does not match the published release.</b> ${esc(state.integrity.matched)} of ${esc(state.integrity.checked)} modules match. Do not approve a transaction from this page until you know why. <a href="${href("settings")}">See which files ↗</a></span></div>` : ""}
     ${state.notice ? `<div class="live-notice" role="alert"><span>${esc(state.notice)}</span>${button("Dismiss", "notice-dismiss")}</div>` : ""}
+    ${spanBanner()}
     ${tagClaimPrompt()}
     ${state.owner && state.chain !== chainId ? `<div class="live-notice" role="status">Your wallet is on a different network. ${button("Switch network", "switch")}</div>` : ""}
     ${guidePanel()}
@@ -781,6 +831,22 @@ function render() {
     <footer class="wallet-footer"><div>© ${new Date().getFullYear()} Tera Wallet<br>Owner signs · Owner pays network fees</div><div class="actions"><a href="/">Website ↗</a><a href="/roadmap/">Roadmap</a>${button("Refresh", "refresh", state.loading ? "disabled" : "")}</div></footer>
   </div>`;
   bindForms();
+}
+
+// A request that would have joined two of this owner's accounts, shown where
+// they were working rather than buried in Settings. It is not an error about
+// the network: nothing failed, and nothing was sent.
+//
+// Shown in the page and nowhere else. The request log below it records what
+// left this device, and this request did not leave it — putting a row there
+// saying which two accounts were nearly joined would create a small copy of the
+// record the refusal just prevented.
+function spanBanner() {
+  const refusal = state.spanRefusal;
+  if (!refusal) return "";
+  return `<div class="note note-refused" id="span-refusal" role="alert"><strong>Two accounts in one request — not sent</strong>${esc(refusal.reason)}
+    <p class="micro">Send it from the account that is paying, with the destination typed as an address, and the request carries one account like every other one here. If you meant to make the link, turn it on in Settings and try again.</p>
+    <div class="actions">${button("Account separation ↗", "settings-separation")}${button("Dismiss", "span-dismiss")}</div></div>`;
 }
 
 function tagClaimPrompt() {
@@ -2034,6 +2100,9 @@ function forgetEverything() {
   state.rpcChecked = null;
   state.rpcError = "";
   state.rpcReads = {};
+  state.linkage = emptyLedger();
+  state.spanAllowed = false;
+  state.spanRefusal = null;
   state.query = "";
   state.category = "all";
   recoveryState.shares = [];
@@ -2043,6 +2112,56 @@ function forgetEverything() {
   } catch {
     /* The wallet connection is the extension's to keep; the wipe does not depend on it. */
   }
+}
+
+// Which of this owner's accounts have been joined up, by whom, and which pair is
+// about to be.
+//
+// The account switcher is a screen every wallet has. What none of them show is
+// the consequence of using it: accounts are separate until one party answers for
+// two of them, and then they are one person's, for that party, permanently. This
+// panel is that reading — and the honest half of it is the row at the bottom
+// naming the parties that see every pair no matter what is arranged here.
+function separationPanel() {
+  const ledger = state.linkage;
+  const pairs = pairings(ledger, readerAhead);
+  const summary = separationSummary(ledger, readerAhead);
+  // Counted in operators, not endpoints, because two endpoints at one company
+  // add no capacity — `createPool` already collapses them for the same reason.
+  const room = capacity(
+    summary.accounts,
+    ownEndpointActive() ? poolSummary(endpointPool()).parties : 0,
+  );
+  const structural = `<details class="gate-detail"><summary><span class="gate-name">Who sees every pair regardless</span></summary><div class="gate-body"><ul class="micro">${LINK_STRUCTURAL.map(
+    (row) => `<li><b>${esc(row.party)}</b> — ${esc(row.why)}</li>`,
+  ).join(
+    "",
+  )}</ul><p class="micro">Nothing on this panel changes any of those. What it tracks is the layer below them — the operators that read your balances — because that is the layer an arrangement can still move.</p></div></details>`;
+  const spanSwitch = `<label class="share-toggle"><input type="checkbox" data-action="span-toggle" ${state.spanAllowed ? "checked" : ""}> Allow a request to name two of my accounts</label>
+    <p class="micro">${esc(SPAN_CONSENT)}</p>`;
+  const limits = `<details class="gate-detail"><summary><span class="gate-name">What this panel does not establish</span></summary><div class="gate-body"><ul class="micro">${LINKAGE_LIMITS.map(
+    (limit) => `<li>${esc(limit)}</li>`,
+  ).join("")}</ul></div></details>`;
+
+  if (summary.accounts < 2)
+    return `<p>Switching accounts in your wallet does not separate them. Whichever party reads for both — an RPC operator, an indexer, a price API — holds the fact that they are one person, and no switcher has ever said so. This panel counts that as it happens.</p>
+      ${pair("Accounts seen this session", summary.accounts || "None yet")}
+      <p class="micro">${summary.accounts ? "One account so far. Switch to another in your wallet extension and the pair appears here, with who would read it, before anything reads it." : "Connect a wallet to start counting."}</p>
+      ${structural}${spanSwitch}${limits}`;
+
+  return `<p>Switching accounts in your wallet does not separate them. Whichever party reads for both holds the fact that they are one person. Every pair you have used in this page session is below, worst first.</p>
+    ${pair("Accounts seen this session", `${summary.accounts} · ${summary.pairs} ${summary.pairs === 1 ? "pair" : "pairs"}`)}
+    ${pair("Already joined", `${summary.linked} of ${summary.pairs}`)}
+    ${summary.wouldLink ? pair("Joins on the next read", `${summary.wouldLink} of ${summary.pairs}`) : ""}
+    <div class="table-scroll"><table><thead><tr><th>Pair</th><th>Status</th><th>Seen by both</th></tr></thead><tbody>${pairs
+      .map(
+        (entry) =>
+          `<tr><td><b>${esc(shortAccount(entry.accounts[0]))} · ${esc(shortAccount(entry.accounts[1]))}</b><small>${esc(describePair(entry))}</small></td><td>${chip(PAIR_LABELS[entry.state], entry.state === PAIR_LINKED || entry.state === PAIR_WOULD_LINK)}</td><td class="privacy-wrap">${esc(entry.shared.join(" · ") || entry.pending || "—")}</td></tr>`,
+      )
+      .join("")}</tbody></table></div>
+    ${room.note ? `<p class="micro">${room.enough ? "" : "<b>Not enough operators.</b> "}${esc(room.note)}</p>` : ""}
+    <p class="micro">A pair only moves the wrong way. An operator that has answered for two of your accounts keeps that, so changing the pool in Balance reads fixes what has not happened yet and nothing that has.</p>
+    ${structural}${spanSwitch}${limits}`;
 }
 
 function balanceReadsPanel() {
@@ -2119,7 +2238,7 @@ async function saveBalanceEndpoint() {
 }
 
 function settings() {
-  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel"><h2>Your tag</h2>${tagPanel()}</section><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
+  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel" id="account-separation"><h2>Account separation</h2>${separationPanel()}</section><section class="panel"><h2>Your tag</h2>${tagPanel()}</section><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
 /**
@@ -2226,6 +2345,19 @@ function ownEndpointActive() {
 function readerFor(owner) {
   return assignEndpoint(endpointPool(), owner);
 }
+// What the separation ledger calls the party that read an account.
+//
+// The operator's registrable domain rather than its host, because that is the
+// unit that learns something: two endpoints at one company are one party, and a
+// ledger keyed by host would report a pair as separated when one company holds
+// both.
+const WALLET_PROVIDER = "your wallet extension's provider";
+const readerName = (assigned) => (assigned ? assigned.party : WALLET_PROVIDER);
+// Who would read an account next, for a pair that has not been read yet. Fixed
+// per account by `assignEndpoint`, which is what makes a forecast possible at
+// all — a pool that picked at random per read could not be predicted, and would
+// walk every account across every operator anyway.
+const readerAhead = (account) => readerName(ownEndpointActive() ? readerFor(account) : null);
 async function loadBalances(version = generation) {
   if (!state.provider || state.chain !== chainId) return;
   const provider = state.provider,
@@ -2258,6 +2390,12 @@ async function loadBalances(version = generation) {
       ...state.rpcReads,
       [assigned.party]: (state.rpcReads[assigned.party] || 0) + valid.length,
     };
+  // Recorded whether or not a pool is set. With one, the assigned operator now
+  // holds this account; without one, the party that holds it is the wallet
+  // extension's provider, which holds every account there has ever been on this
+  // page. Leaving the second case out would make the default arrangement — the
+  // one almost everybody is on — look like the separated one.
+  state.linkage = noteRead(state.linkage, owner, readerName(assigned));
   state.balances = Object.fromEntries(
     results.filter((r) => r.status === "fulfilled").map((r) => r.value),
   );
@@ -2310,6 +2448,11 @@ async function setAccount(accounts) {
   }
   const version = generation;
   state.owner = accounts[0];
+  // Noted on connection rather than on the first read, because the pair state
+  // worth seeing — two accounts assigned to the same operator, not yet joined —
+  // only exists before a read happens. Waiting for one would show it after the
+  // only moment the owner could have acted on it.
+  state.linkage = noteAccount(state.linkage, accounts[0]);
   try {
     const chain = Number(await state.provider.request({ method: "eth_chainId" }));
     if (version !== generation) return;
@@ -3842,6 +3985,26 @@ document.addEventListener("click", async (event) => {
     if (action === "ingress-dismiss") {
       state.ingress = null;
       render();
+    }
+    if (action === "span-dismiss") {
+      state.spanRefusal = null;
+      render();
+    }
+    if (action === "settings-separation") {
+      state.spanRefusal = null;
+      navigate("settings");
+      document.getElementById("account-separation")?.scrollIntoView({ block: "start" });
+    }
+    if (action === "span-toggle") {
+      // Session only, and deliberately not written to the vault. A setting that
+      // survived a reload would be one an owner turned on for a single transfer
+      // months ago and has not thought about since, quietly permitting every
+      // request that names two accounts from then on.
+      state.spanAllowed = target.checked;
+      state.spanRefusal = null;
+      // Not a full render: this switch lives beside the endpoint textarea, and
+      // redrawing the panel would discard whatever the owner had typed into it.
+      document.getElementById("span-refusal")?.remove();
     }
     if (action === "minimise-review-toggle") state.minimiseReview = target.checked;
     if (action === "minimise-send" || action === "minimise-send-raw") {
