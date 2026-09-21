@@ -331,3 +331,21 @@ test("the export lists every operator separately", () => {
     [false, true],
   );
 });
+
+test("the parties that see every account pair are parties the egress panel names", () => {
+  // `linkage.js` tells an owner that Tera's service, their network address and
+  // their wallet extension see every pair of their accounts regardless of how
+  // the endpoint pool is arranged. That is only credible while those are the
+  // same three the egress panel lists as seeing this browser directly. If a row
+  // here is renamed or dropped, the separation panel starts naming a party that
+  // this wallet no longer says exists.
+  const list = parties(config);
+  assert.ok(row(list, "tera-service"), "the separation panel names Tera's service");
+  assert.ok(row(list, "page-host"), "the separation panel names the network address");
+  assert.ok(row(list, "wallet-rpc"), "the separation panel names the wallet extension");
+  for (const id of ["tera-service", "page-host", "wallet-rpc"])
+    assert.ok(
+      ["direct", "wallet"].includes(row(list, id).reach),
+      `${id} no longer sees this browser directly, so it cannot see every pair`,
+    );
+});
