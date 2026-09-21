@@ -31,7 +31,6 @@
 //   An unsigned receipt says these hashes were computed in some browser.
 
 import { releaseCheck, FROM_PAGE, INDEPENDENT } from "./registry.js";
-import { anchorCheck } from "./anchor.js";
 
 export const FORMAT = "tera-receipt/1";
 
@@ -311,15 +310,7 @@ const check = (id, label, status, detail) => ({ id, label, status, detail });
  */
 export async function verify(
   input,
-  {
-    recover,
-    registry = null,
-    registryOrigin = FROM_PAGE,
-    registryAuthentic = false,
-    anchor = null,
-    anchorOrigin = FROM_PAGE,
-    anchorLatestAt = 0,
-  } = {},
+  { recover, registry = null, registryOrigin = FROM_PAGE, registryAuthentic = false } = {},
 ) {
   const data = typeof input === "string" ? safeParse(input) : input;
   if (!data || typeof data !== "object")
@@ -387,12 +378,6 @@ export async function verify(
     // list and on who fetched that list. Passing no registry reproduces exactly
     // what this check used to say.
     releaseCheck(data, registry, { origin: registryOrigin, authentic: registryAuthentic }),
-    // The same question asked of a chain rather than of Tera. It is a separate row
-    // because the two answers are worth different things and can disagree: the registry
-    // is a file Tera serves, the anchor is a record Tera cannot rewrite quietly, and a
-    // release present in one and absent from the other is exactly the finding that would
-    // be lost by folding them into a single check.
-    anchorCheck(data, anchor, { origin: anchorOrigin, latestAnchoredAt: anchorLatestAt }),
   );
   if (data.answeredBy === DEVICE)
     checks.push(

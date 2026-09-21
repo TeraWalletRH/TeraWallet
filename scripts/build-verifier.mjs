@@ -33,8 +33,6 @@ const bundle = join(root, "build", "verify", "verifier.js");
 const SOURCES = [
   ["core/receipt.js", join(core, "receipt.js")],
   ["core/verdict.js", join(core, "verdict.js")],
-  ["core/registry.js", join(core, "registry.js")],
-  ["core/anchor.js", join(core, "anchor.js")],
   ["core/report.js", join(core, "report.js")],
   ["src/verify/verifier.js", join(root, "src", "verify", "verifier.js")],
 ];

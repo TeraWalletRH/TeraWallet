@@ -453,46 +453,6 @@ test("a registry can settle the release check, and only from outside the page", 
   assert.equal(miss.status, FAIL);
 });
 
-test("the anchor is its own check, and the two can disagree", async () => {
-  // Build 8b. The registry is a file Tera serves; the anchor is a record Tera cannot
-  // rewrite quietly. A release listed in one and withdrawn in the other is exactly the
-  // finding that a single merged check would have had to throw away.
-  const receipt = await made({ release: "r-ffd0e45a1b2c" });
-  const registry = {
-    registry: "Tera approved builds",
-    version: 1,
-    algorithm: "sha256",
-    publishedAt: new Date(Date.now() + 60_000).toISOString(),
-    builds: [{ release: "r-ffd0e45a1b2c", filesHash: "sha256-AAAA", publishedAt: "2026-09-18" }],
-  };
-  const withdrawn = {
-    status: 3,
-    anchoredAt: Math.floor((Date.now() - 86_400_000) / 1000),
-    withdrawnAt: Math.floor(Date.now() / 1000),
-  };
-  const checks = (
-    await verify(bundle(receipt, TURN), {
-      registry,
-      registryOrigin: INDEPENDENT,
-      registryAuthentic: true,
-      anchor: withdrawn,
-      anchorOrigin: INDEPENDENT,
-      anchorLatestAt: Math.floor(Date.now() / 1000),
-    })
-  ).checks;
-  assert.equal(checks.find((entry) => entry.id === "release").status, PASS);
-  assert.equal(checks.find((entry) => entry.id === "anchor").status, FAIL);
-});
-
-test("a receipt checked without a chain reports that, rather than passing it", async () => {
-  const receipt = await made({ release: "r-ffd0e45a1b2c" });
-  const check = (await verify(bundle(receipt, TURN), {})).checks.find(
-    (entry) => entry.id === "anchor",
-  );
-  assert.equal(check.status, SKIPPED);
-  assert.match(check.detail, /No chain was read/i);
-});
-
 test("a registry older than the receipt cannot call its release a forgery", async () => {
   // Build 10. The reader who fetched a registry last week holds a list that
   // predates this receipt. Absence from it says nothing about the build, and

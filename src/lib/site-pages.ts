@@ -29,11 +29,6 @@ export async function serveSitePage(pathname: string): Promise<Response> {
       walletConnectProjectId: import.meta.env["VITE_WALLETCONNECT_PROJECT_ID"] || "",
       explorerUrl: import.meta.env["VITE_EXPLORER_URL"] || "https://robinhoodchain.blockscout.com",
       policySignerAddress: import.meta.env["VITE_POLICY_SIGNER_ADDRESS"] || "",
-      // The on-chain approved-build registry. Unset means the wallet checks its release
-      // against the registry file only, which is what it did before the anchor existed —
-      // gate zero then reports that the chain could not be read, and blocks nothing.
-      buildAnchorAddress: import.meta.env["VITE_BUILD_ANCHOR_ADDRESS"] || "",
-      buildAnchorRpcUrl: import.meta.env["VITE_BUILD_ANCHOR_RPC_URL"] || "",
       policyBundleUrl: import.meta.env["VITE_POLICY_BUNDLE_URL"] || "",
       policyBundleMaxAgeSeconds: Number(
         import.meta.env["VITE_POLICY_BUNDLE_MAX_AGE_SECONDS"] || 86400,

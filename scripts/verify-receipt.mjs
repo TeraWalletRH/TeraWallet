@@ -21,20 +21,13 @@ import { webcrypto } from "node:crypto";
 import { argv, exit, stdout, stderr } from "node:process";
 import { verify, INDEPENDENT } from "../public/tera/core/receipt.js";
 import { parseRegistry, verifyRegistry } from "../public/tera/core/registry.js";
-import {
-  verifyReceiptCall,
-  latestAnchoredAtCall,
-  decodeVerifyReceipt,
-  decodeLatestAnchoredAt,
-} from "../public/tera/core/anchor.js";
 import { text, exitCode } from "../public/tera/core/report.js";
 
 globalThis.crypto ??= webcrypto;
 
 const USAGE = `Check a Tera receipt file.
 
-  node scripts/verify-receipt.mjs <receipt.json> [--registry <file>] [--anchor <rpc-url>]
-                                  [--json] [--no-recover]
+  node scripts/verify-receipt.mjs <receipt.json> [--registry <file>] [--json] [--no-recover]
 
   --registry     An approved-build registry you fetched yourself, to check the
                  receipt's release against. Fetched by you and read here, this
@@ -44,12 +37,6 @@ const USAGE = `Check a Tera receipt file.
                  was published, so absence from a stale copy reports as unproven
                  rather than as a forgery. Fetch a current one before reading
                  absence as evidence.
-  --anchor       A JSON-RPC endpoint to read the on-chain approved-build registry
-                 through. The registry file is served by Tera and can be rewritten;
-                 the anchor records when each build was published, in a place where
-                 taking one back is announced days in advance and nothing is ever
-                 deleted. Set TERA_BUILD_ANCHOR_ADDRESS to the contract. Pick the
-                 endpoint yourself — one Tera chose for you answers to Tera.
   --json         Print the raw result instead of a report.
   --no-recover   Skip signature recovery. The signature check then reports as
                  unproven, which is what it should say when nothing is able to
@@ -80,9 +67,7 @@ async function main() {
   const positional = args.filter((arg) => !arg.startsWith("--"));
   const registryAt = args.indexOf("--registry");
   const registryPath = registryAt >= 0 ? args[registryAt + 1] : "";
-  const anchorAt = args.indexOf("--anchor");
-  const anchorRpc = anchorAt >= 0 ? args[anchorAt + 1] : "";
-  const [path] = positional.filter((arg) => arg !== registryPath && arg !== anchorRpc);
+  const [path] = positional.filter((arg) => arg !== registryPath);
 
   if (!path || flags.has("--help") || flags.has("-h")) {
     stdout.write(USAGE);
@@ -149,58 +134,11 @@ async function main() {
         "published. Fetch a current registry for a conclusive answer.\n\n",
     );
 
-  // The anchor, read through an endpoint the reader named. This is the origin where an
-  // anchored release means something: the wallet asking its own chosen endpoint is not a
-  // second opinion, and `anchor.js` refuses to report one as though it were.
-  let anchor = null;
-  let anchorLatestAt = 0;
-  if (anchorRpc) {
-    const contract = process.env.TERA_BUILD_ANCHOR_ADDRESS || "";
-    if (!/^0x[\da-fA-F]{40}$/.test(contract)) {
-      stderr.write(
-        "Set TERA_BUILD_ANCHOR_ADDRESS to the build anchor contract before using --anchor.\n" +
-          "Without it there is nothing to call, and the anchor check stays unproven.\n\n",
-      );
-    } else if (!receipt?.release) {
-      stderr.write("This receipt records no release, so there was nothing to look up.\n\n");
-    } else {
-      try {
-        const call = async (data) => {
-          const response = await fetch(anchorRpc, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              jsonrpc: "2.0",
-              id: 1,
-              method: "eth_call",
-              params: [{ to: contract, data }, "latest"],
-            }),
-            signal: AbortSignal.timeout(15000),
-          });
-          const payload = await response.json();
-          if (payload?.error) throw new Error(payload.error.message || "the endpoint refused it");
-          return payload.result;
-        };
-        anchor = decodeVerifyReceipt(await call(verifyReceiptCall(receipt.release)));
-        anchorLatestAt = decodeLatestAnchoredAt(await call(latestAnchoredAtCall()));
-      } catch (error) {
-        anchor = null;
-        stderr.write(
-          `The build anchor could not be read: ${error.message}\n` +
-            "The anchor check reports that, rather than treating an unread chain as an answer.\n\n",
-        );
-      }
-    }
-  }
-
   const result = await verify(raw, {
     ...(recover ? { recover } : {}),
     registry,
     registryOrigin: INDEPENDENT,
     registryAuthentic,
-    anchor,
-    anchorOrigin: INDEPENDENT,
-    anchorLatestAt,
   });
 
   if (flags.has("--json")) stdout.write(`${JSON.stringify(result, null, 2)}\n`);
