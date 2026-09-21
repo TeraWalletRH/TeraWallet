@@ -14,6 +14,11 @@ export * as receipt from "../../public/tera/core/receipt.js";
 export * as parse from "../../public/tera/core/parse.js";
 export * as tags from "../../public/tera/core/tags.js";
 
+// What holdings are worth. Shared because the honest part of a valuation is arithmetic,
+// not presentation: an unpriced holding must be left out of the total and named, on both
+// surfaces, or one of them shows a confident figure that quietly counts it as nothing.
+export * as value from "../../public/tera/core/value.js";
+
 // Re-exported by name because validation.ts and App.tsx use these directly and
 // a namespace would read worse at every call site.
 export {

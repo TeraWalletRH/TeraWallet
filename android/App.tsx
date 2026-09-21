@@ -29,7 +29,7 @@ import * as upd from "./src/update";
 import { balances, client, execute, transactionStatus } from "./src/network";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
-import { UNVERIFIABLE } from "./src/core";
+import { UNVERIFIABLE, value as valueCore } from "./src/core";
 import { check, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { normalizePhrase, walletFromPhrase } from "./src/crypto";
@@ -357,15 +357,20 @@ function Wallet() {
       setRefreshing(false);
     }
   }
-  const totalUsd = balance
-    ? assets.reduce(
-        (total, asset) =>
-          total +
-          Number(formatUnits(BigInt(balance[asset.symbol] || "0"), asset.decimals)) *
-            (prices[asset.symbol] || 0),
-        0,
-      )
-    : 0;
+  // Through the shared core rather than summed here. The version this replaced multiplied
+  // by `prices[symbol] || 0`, so a holding whose price could not be read was counted as
+  // worth nothing and the total still rendered as a complete figure. `totalValue` leaves
+  // it out and names it instead, and `valuation.coverage` is what the screen has to read
+  // before it can show the number as a total.
+  const valuation = valueCore.totalValue(
+    balance
+      ? assets.map((asset) => ({
+          symbol: asset.symbol,
+          amount: formatUnits(BigInt(balance[asset.symbol] || "0"), asset.decimals),
+        }))
+      : [],
+    prices,
+  );
   const selectedAsset = assets.find((a) => a.symbol === assetSymbol) || sources[0];
   const dest = destinations.find((d) => d.id === destination)!;
   const output = dest.tokens.find((a) => a.symbol === outSymbol) || dest.tokens[0];
@@ -1298,12 +1303,18 @@ function Wallet() {
                   letterSpacing: -1.8,
                 }}
               >
-                $
-                {totalUsd.toLocaleString(undefined, {
-                  maximumFractionDigits: 2,
-                  minimumFractionDigits: 2,
-                })}
+                {valueCore.format(valuation.total)}
               </Text>
+              {valuation.coverage !== valueCore.COMPLETE ? (
+                <Text style={[s.small, { color: "#b9c9bd", marginTop: 4 }]}>
+                  {valuation.coverage === valueCore.PARTIAL
+                    ? t(
+                        `Subtotal — no price for ${valuation.unpriced.map((entry) => entry.symbol).join(", ")}`,
+                        `小计 — 缺少价格：${valuation.unpriced.map((entry) => entry.symbol).join("、")}`,
+                      )
+                    : t("No prices could be read.", "无法读取价格。")}
+                </Text>
+              ) : null}
             </View>
             <View
               style={{
