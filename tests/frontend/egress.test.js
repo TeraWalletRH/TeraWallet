@@ -115,9 +115,13 @@ test("the explorer is only reached when a link is opened", () => {
 test("the summary counts parties rather than asserting a number", () => {
   const log = [describeRequest("/api/agent/chat", { message: "hello" })];
   const totals = egressSummary(rows(log, { owner, records: 1 }));
-  assert.equal(totals.parties, 9);
+  // Ten since the price source was named. These numbers are asserted precisely so that
+  // adding a party has to be a decision: a new row that nobody counted is how a panel
+  // that promises to list everyone quietly stops doing so.
+  assert.equal(totals.parties, 10);
   assert.equal(totals.direct, 5);
-  assert.equal(totals.relayed, 2);
+  // Tera reaches the price source from its own server, like the model provider.
+  assert.equal(totals.relayed, 3);
   // The chain RPC and the sequencer are both reachable and both uncountable.
   assert.equal(totals.uncounted, 3);
   // Page host, Tera, the model provider, the wallet's provider and the ledger.

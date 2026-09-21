@@ -152,6 +152,16 @@ import {
 } from "../core/receipt.js";
 import { parseRegistry, LIMITS as REGISTRY_LIMITS } from "../core/registry.js";
 import {
+  NONE as VALUE_NONE,
+  PARTIAL as VALUE_PARTIAL,
+  totalValue,
+  summarise as summariseValue,
+  format as formatValue,
+  valueOf,
+  LIMITS as VALUE_LIMITS,
+  PRICE_SOURCES,
+} from "../core/value.js";
+import {
   parseTag,
   display as displayTag,
   claimMessage,
@@ -436,6 +446,13 @@ const state = {
   // accounts, which is the thing this feature exists to avoid creating.
   rpcReads: {},
   integrity: null,
+  // The price map for every asset in the registry, and when it was read. Not per holding:
+  // the request that fetches it carries nothing, so it is the same request whatever this
+  // owner holds. Empty until it loads, and left empty on a failure — `value.js` reports
+  // that as nothing valued rather than as a portfolio worth zero.
+  prices: {},
+  pricesAt: "",
+  pricesError: "",
   keyInfo: null,
   vaultKeyEpoch: 1,
   recovery: null,
@@ -816,19 +833,68 @@ function exitDemo() {
     state.notice = "Guided demo closed. Sample data and simulated requests were cleared.";
   render();
   void loadAssets();
+  void loadPrices();
 }
 function accountPrompt() {
   return `<div class="panel"><h2>Your wallet. Your authority.</h2><p>Connect a browser wallet to load your balances, prepare proposals, and review account activity.</p><p class="micro">Or walk the whole privacy boundary first with sample data. The guided demo sends nothing and signs nothing.</p><div class="actions">${button("Connect wallet ↗", "connect")}${button("Start guided demo", "demo-start")}</div></div>`;
 }
+/**
+ * The holdings that have a balance, as the shared core wants them.
+ *
+ * `state.balances` is keyed by address and already formatted to each asset's precision;
+ * `value.js` works in symbols, because that is what a price map is keyed by. Converting
+ * in one place means the two spellings never get compared to each other by mistake.
+ */
+function heldAssets() {
+  return state.assets.filter((asset) => state.balances[asset.address] !== undefined);
+}
+
+function holdingsValue() {
+  return totalValue(
+    heldAssets().map((asset) => ({ symbol: asset.symbol, amount: state.balances[asset.address] })),
+    state.prices,
+  );
+}
+
+/**
+ * The valuation block under the holdings.
+ *
+ * Three states, and none of them is a bare figure. A total that left something out is
+ * chipped as a subtotal beside the number itself, because a caveat an owner has to go
+ * looking for is a caveat that was not made.
+ *
+ * Drawn as a `.metric`, which is the existing style for the one large number on a column
+ * — and, on a narrow screen, the only part of this column the stylesheet keeps: the asset
+ * rows are hidden under 750px. So this is the figure a phone shows, which is another
+ * reason it must never be a total that quietly left a holding out.
+ */
+function valueBlock() {
+  if (state.hide)
+    return `<div class="metric"><strong>••••</strong><small>Balances are hidden. The total is hidden with them.</small></div>`;
+  const result = holdingsValue();
+  const when = state.pricesAt ? new Date(state.pricesAt).toLocaleTimeString() : "";
+  if (result.coverage === VALUE_NONE)
+    return `<div class="metric"><strong>${esc(formatValue(null))}</strong><small>${esc(
+      state.pricesError
+        ? `No prices could be read: ${state.pricesError} Your balances above come from the chain and are unaffected.`
+        : summariseValue(result),
+    )}</small></div>`;
+  return `<div class="metric"><strong>${esc(formatValue(result.total))}</strong>${
+    result.coverage === VALUE_PARTIAL ? chip("Subtotal", true) : ""
+  }<small>${esc(summariseValue(result, { asOf: when }))}</small></div>`;
+}
+
 function overview() {
-  const balanceRows = state.assets
-    .filter((a) => state.balances[a.address] !== undefined)
-    .map(
-      (a) =>
-        `<div class="asset-mini"><span class="asset-symbol">${esc(a.symbol.slice(0, 2))}</span><div><b>${esc(a.symbol)}</b><small>${esc(a.category)}</small></div><div class="val">${state.hide ? "••••" : esc(state.balances[a.address])}</div></div>`,
-    )
+  const balanceRows = heldAssets()
+    .map((a) => {
+      // Per row as well as in the total, because this is where an unpriced holding stops
+      // being invisible. A holding that contributes nothing to the total shows a dash
+      // next to its balance rather than being silently folded in at zero.
+      const value = valueOf(state.balances[a.address], state.prices[a.symbol]);
+      return `<div class="asset-mini"><span class="asset-symbol">${esc(a.symbol.slice(0, 2))}</span><div><b>${esc(a.symbol)}</b><small>${esc(a.category)}</small></div><div class="val">${state.hide ? "••••" : esc(state.balances[a.address])}${state.hide ? "" : `<small>${esc(formatValue(value))}</small>`}</div></div>`;
+    })
     .join("");
-  return `${!state.owner ? accountPrompt() : ""}<div class="workspace"><aside class="column"><div class="section-label"><span>Your holdings</span>${button(state.hide ? "Show" : "Hide", "privacy")}</div>${balanceRows || empty(state.owner ? "Balances load on the selected network." : "Connect to view your holdings.")}${state.errors.balances ? `<p class="micro">${esc(state.errors.balances)}</p>` : ""}<p class="micro">Token balances in native units. Market valuations are unavailable.</p><img class="portfolio-art" src="/tera/art/02-case-stairway.jpg" alt="Architectural stairway collage"></aside><section class="column"><div class="section-label"><span>Action inbox</span>${button("+ New proposal", "create")}</div>${state.drafts.length ? state.drafts.map(proposalCard).join("") : empty("No proposals in this session. Prepare an action to review it here.")}</section><aside class="column">${chat()}</aside></div><div class="lower-row"><section><div class="section-label"><span>Account activity</span><a href="${href("receipts")}">View history ↗</a></div>${state.errors.account ? empty(state.errors.account) : pair("Confirmed intents reported by Tera", state.account?.stats?.intents?.confirmed_intents ?? "—")}${pair("Transactions tracked on this device", state.records.length)}</section><section><div class="section-label">Your control surface</div><div class="quick-grid"><a href="${href("approvals")}">Approvals ↗</a><a href="${href("sessions")}">Agent sessions ↗</a><a href="${href("policy")}">Private policy ↗</a><a href="/dashboard/private-send/">Private routing ↗</a><a href="${href("assets")}">Asset registry ↗</a></div></section></div>`;
+  return `${!state.owner ? accountPrompt() : ""}<div class="workspace"><aside class="column"><div class="section-label"><span>Your holdings</span>${button(state.hide ? "Show" : "Hide", "privacy")}</div>${state.owner ? valueBlock() : ""}${balanceRows || empty(state.owner ? "Balances load on the selected network." : "Connect to view your holdings.")}${state.errors.balances ? `<p class="micro">${esc(state.errors.balances)}</p>` : ""}<details class="gate-detail"><summary><span class="gate-name">How this is valued</span></summary><div class="gate-body"><ul class="micro">${PRICE_SOURCES.map((source) => `<li><b>${esc(source.label)}</b> — ${esc(source.detail)}</li>`).join("")}</ul><p class="micro">What a valuation does not establish:</p><ul class="micro">${VALUE_LIMITS.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div></details><img class="portfolio-art" src="/tera/art/02-case-stairway.jpg" alt="Architectural stairway collage"></aside><section class="column"><div class="section-label"><span>Action inbox</span>${button("+ New proposal", "create")}</div>${state.drafts.length ? state.drafts.map(proposalCard).join("") : empty("No proposals in this session. Prepare an action to review it here.")}</section><aside class="column">${chat()}</aside></div><div class="lower-row"><section><div class="section-label"><span>Account activity</span><a href="${href("receipts")}">View history ↗</a></div>${state.errors.account ? empty(state.errors.account) : pair("Confirmed intents reported by Tera", state.account?.stats?.intents?.confirmed_intents ?? "—")}${pair("Transactions tracked on this device", state.records.length)}</section><section><div class="section-label">Your control surface</div><div class="quick-grid"><a href="${href("approvals")}">Approvals ↗</a><a href="${href("sessions")}">Agent sessions ↗</a><a href="${href("policy")}">Private policy ↗</a><a href="/dashboard/private-send/">Private routing ↗</a><a href="${href("assets")}">Asset registry ↗</a></div></section></div>`;
 }
 function registry() {
   if (state.assetError)
@@ -2056,6 +2122,38 @@ function settings() {
   return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel"><h2>Your tag</h2>${tagPanel()}</section><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
+/**
+ * Load the price of every asset in the registry.
+ *
+ * Deliberately not "the price of what this owner holds". The request carries no address,
+ * no balances and no session — it is byte-for-byte the same request whoever makes it, so
+ * it cannot say which of these assets are yours, and the multiplication happens on this
+ * device against balances that never leave it. That is the whole privacy argument for
+ * this feature, and it rests on the request staying shaped this way: anything that made
+ * it per-holding would quietly hand Tera the portfolio.
+ *
+ * A failure is recorded and not thrown. Balances come from the chain and are unaffected
+ * by a price outage; `value.js` reports nothing valued, which is the true statement, and
+ * an owner who cannot see a dollar figure can still see what they hold.
+ */
+async function loadPrices() {
+  try {
+    const result = await api("/api/assets/prices");
+    const prices = result?.prices;
+    if (!prices || typeof prices !== "object") throw new Error("No prices were returned.");
+    state.prices = prices;
+    state.pricesAt = typeof result.asOf === "string" ? result.asOf : "";
+    state.pricesError = "";
+  } catch (error) {
+    // Cleared rather than left stale. A price from ten minutes ago shown as if it were
+    // current is worse than no price, because nothing on screen would say which it was.
+    state.prices = {};
+    state.pricesAt = "";
+    state.pricesError = errorMessage(error);
+  }
+  render();
+}
+
 async function loadAssets() {
   state.assetError = "";
   try {
@@ -2286,8 +2384,7 @@ async function loadMyTag() {
 }
 
 function tagPanel() {
-  if (!tagsAvailable())
-    return "<p>Tags aren't available right now. Please try again shortly.</p>";
+  if (!tagsAvailable()) return "<p>Tags aren't available right now. Please try again shortly.</p>";
   if (!state.owner) return "<p>Connect your wallet to see or claim a tag.</p>";
   const held =
     state.myTag === undefined
@@ -3996,5 +4093,6 @@ setInterval(() => {
 }, 1000);
 render();
 void loadAssets();
+void loadPrices();
 void loadTagConfig();
 void checkIntegrity();

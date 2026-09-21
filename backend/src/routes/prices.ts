@@ -4,7 +4,7 @@ import { quoteSwap } from "../chain/swapQuote";
 
 const router = Router();
 const TTL_MS = 30_000;
-let cached: { expiresAt: number; prices: Record<string, number> } | undefined;
+let cached: { expiresAt: number; readAt: number; prices: Record<string, number> } | undefined;
 
 async function ethUsd() {
   const response = await fetch(
@@ -29,7 +29,7 @@ async function coinbaseEthUsd() {
 }
 
 async function currentPrices() {
-  if (cached && cached.expiresAt > Date.now()) return cached.prices;
+  if (cached && cached.expiresAt > Date.now()) return cached;
   const prices: Record<string, number> = { USDG: 1 };
   const [eth, ...rwa] = await Promise.allSettled([
     // CoinGecko is the primary ETH/USD source. If it rate-limits or has a
@@ -42,27 +42,36 @@ async function currentPrices() {
         if (!quote) throw new Error("No ETH/USDG fallback route.");
         return Number(quote.amountOut);
       }),
-    ...SUPPORTED_RWA_ASSETS.filter((asset) => ![USDG.symbol, ETH.symbol, "WETH"].includes(asset.symbol)).map(
-      async (asset) => {
-        const quote = await quoteSwap(asset.symbol, USDG.symbol, "1");
-        if (!quote) throw new Error(`No USDG route for ${asset.symbol}.`);
-        return [asset.symbol, Number(quote.amountOut)] as const;
-      },
-    ),
+    ...SUPPORTED_RWA_ASSETS.filter(
+      (asset) => ![USDG.symbol, ETH.symbol, "WETH"].includes(asset.symbol),
+    ).map(async (asset) => {
+      const quote = await quoteSwap(asset.symbol, USDG.symbol, "1");
+      if (!quote) throw new Error(`No USDG route for ${asset.symbol}.`);
+      return [asset.symbol, Number(quote.amountOut)] as const;
+    }),
   ]);
   if (eth.status === "fulfilled") prices.ETH = eth.value;
   for (const result of rwa) {
     if (result.status === "fulfilled" && Number.isFinite(result.value[1]))
       prices[result.value[0]] = result.value[1];
   }
-  cached = { prices, expiresAt: Date.now() + TTL_MS };
-  return prices;
+  cached = { prices, readAt: Date.now(), expiresAt: Date.now() + TTL_MS };
+  return cached;
 }
 
 router.get("/api/assets/prices", async (_req: Request, res: Response) => {
   try {
-    const prices = await currentPrices();
-    res.json({ success: true, prices, cachedForSeconds: 30 });
+    const { prices, readAt } = await currentPrices();
+    // When these prices were actually read, not when this response was built. A wallet
+    // that shows a valuation owes the owner the age of it, and without this the client
+    // can only assume the worst case of the cache window and describe every price as
+    // thirty seconds old — including the one it just missed the refresh of.
+    res.json({
+      success: true,
+      prices,
+      asOf: new Date(readAt).toISOString(),
+      cachedForSeconds: Math.round(TTL_MS / 1000),
+    });
   } catch {
     // A transient market-data failure must not prevent the wallet from showing on-chain balances.
     res.status(503).json({ success: false, error: "Live prices are temporarily unavailable." });

@@ -212,6 +212,31 @@ export function parties(config = {}) {
       unobservable: true,
     },
     {
+      // Named because the panel promises to name everyone, and a party reached on your
+      // behalf is still a party. This is the weakest row here and it is worth saying why
+      // rather than leaving it out and being asked: the request is for the price of one
+      // asset pair, Tera makes it from its own server, and one answer is cached and
+      // served to every owner for thirty seconds. So this party sees Tera asking about
+      // ETH twice a minute, in a request that is identical whoever is looking at a
+      // wallet, and has nothing that could be attributed to a person.
+      id: "price-source",
+      name: "Public market data API, for the ETH price",
+      host: "api.coingecko.com · api.coinbase.com",
+      reach: "relayed",
+      learns: [
+        "That Tera asked for the ETH price, at most twice a minute for everybody at once",
+        "Tera's network address, not yours",
+      ],
+      withheld: [
+        "That you exist",
+        "Your wallet address",
+        "Your balances, or which assets you hold",
+        "Any figure this wallet displays",
+      ],
+      control:
+        "Nothing here is per-owner, so there is nothing to turn off for privacy's sake. Tokenised asset prices do not go this way at all: they are read from the chain's own swap routes. This is the one price with an outside source, and if it cannot be read the wallet reports that rather than valuing ETH at zero.",
+    },
+    {
       id: "chain-rpc",
       name: "Robinhood Chain public RPC",
       host: rpcHost,
