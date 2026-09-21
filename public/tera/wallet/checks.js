@@ -3,13 +3,9 @@
 // itself, independently of anything the service reports.
 
 import { GATES, ZERO_ADDRESS, sameAddress, isAddress, isHash } from "./core.js";
-import { gateVerdict, labelFor, SKIPPED } from "../core/verdict.js";
-import { GATE_ZERO } from "../core/anchor.js";
-
-export { GATE_ZERO };
+import { gateVerdict, labelFor } from "../core/verdict.js";
 
 export const GATE_LABELS = {
-  [GATE_ZERO]: "Build anchor",
   asset_registry: "Asset registry",
   eligibility_preflight: "Eligibility preflight",
   policy_vault: "Policy check",
@@ -18,19 +14,6 @@ export const GATE_LABELS = {
 };
 
 export const GATE_EXPLANATIONS = {
-  // Gate zero is not one of the service's five. It is the check on the wallet doing the
-  // asking, and it runs first because a build Tera has withdrawn should not be assembling
-  // proposals however well the other five go. `evaluatedBy` says "your wallet" for the
-  // same reason `approval_controller` does: nothing is sent for it, and a service that
-  // wanted to hide a withdrawal would be the wrong party to ask about one.
-  [GATE_ZERO]: {
-    rule: "The release this page is running is anchored on chain and has not been withdrawn.",
-    evaluatedBy: "Your wallet",
-    inputs: ["The release id this page reports", "Nothing about your action"],
-    withheld: ["Everything — this check is about the wallet, not the transaction"],
-    meaning:
-      "The anchor records which builds Tera published, where the record cannot be rewritten quietly. This page read it through an endpoint this page chose, so it is a catch for a stale build that has since been withdrawn, not a defence against a modified one.",
-  },
   asset_registry: {
     rule: "The asset address appears in Tera's approved registry and is not suspended.",
     evaluatedBy: "Tera service",
@@ -103,28 +86,6 @@ export function explainGate(name, gate) {
     reason: gate?.reason || "",
     nuance: verdict.hollow ? verdict.detail : gateNuance(gate),
     ...explanation,
-  };
-}
-
-/**
- * Gate zero, in the shape the five are drawn in.
- *
- * `buildGate` in `anchor.js` decides the outcome; this only dresses it, so the row an
- * owner reads comes from the same function the Android review sheet calls. A gate that
- * was never run reports as not run rather than as a pass, which is the rule everywhere
- * else in this file and matters most for the check nobody is watching.
- */
-export function explainBuildGate(gate) {
-  const status = gate?.status || SKIPPED;
-  return {
-    gate: GATE_ZERO,
-    label: GATE_LABELS[GATE_ZERO],
-    status,
-    result: labelFor(status, "gate").toUpperCase(),
-    hollow: "",
-    reason: "",
-    nuance: gate?.detail || "",
-    ...GATE_EXPLANATIONS[GATE_ZERO],
   };
 }
 

@@ -67,8 +67,8 @@ export const TOPICS = [
     // Resolved to a specific gate by `gateFor` below, so a question about one
     // check is not answered with the summary of all five.
     patterns: [
-      /\b(?:what|how)\b.{0,40}\b(?:build anchor|asset registry|eligibility|preflight|policy check|policy gate|risk check|risk engine|owner approval|approval controller)\b/i,
-      /\b(?:build anchor|asset registry|eligibility preflight|policy check|risk check|owner approval)\b.{0,20}\b(?:do|does|mean|check|evaluate)/i,
+      /\b(?:what|how)\b.{0,40}\b(?:asset registry|eligibility|preflight|policy check|policy gate|risk check|risk engine|owner approval|approval controller)\b/i,
+      /\b(?:asset registry|eligibility preflight|policy check|risk check|owner approval)\b.{0,20}\b(?:do|does|mean|check|evaluate)/i,
     ],
     build: ({ gateLabels, gateExplanations }, slots) => {
       const gate = slots.gate;
@@ -236,14 +236,6 @@ export const DESTINATIONS = [
 ];
 
 const GATE_WORDS = [
-  // Gate zero first. It is the check on the wallet rather than on the action, and it is
-  // the one whose name shares words with the summary question — the specific check has to
-  // win over the general one, or "what does the build anchor check?" is answered with a
-  // list of five other things.
-  // The name is spelled out rather than imported, as the five below are: this module
-  // answers from whatever `gateExplanations` it is handed and deliberately imports
-  // nothing. `anchor.js` exports the same string as GATE_ZERO.
-  [/\bbuild anchor\b/i, "build_anchor"],
   [/\basset registry\b/i, "asset_registry"],
   [/\b(?:eligibility|preflight)\b/i, "eligibility_preflight"],
   [/\bpolicy\b/i, "policy_vault"],
