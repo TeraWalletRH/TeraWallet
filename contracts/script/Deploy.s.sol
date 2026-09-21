@@ -5,6 +5,7 @@ import { Script, console } from "forge-std/Script.sol";
 import { SessionManager } from "../src/session/SessionManager.sol";
 import { TerraAccountFactory } from "../src/account/TerraAccountFactory.sol";
 import { RwaAssetRegistry } from "../src/registry/RwaAssetRegistry.sol";
+import { BuildAnchor } from "../src/registry/BuildAnchor.sol";
 import { V4Venue } from "../src/venue/V4Venue.sol";
 import { MockERC3643 } from "../src/token/MockERC3643.sol";
 
@@ -32,6 +33,9 @@ contract DeployScript is Script {
             bytes32(0)
         );
         console.log("RwaAssetRegistry deployed at:", address(registry));
+
+        BuildAnchor buildAnchor = new BuildAnchor(deployer);
+        console.log("BuildAnchor deployed at:", address(buildAnchor));
 
         V4Venue venue = new V4Venue();
         console.log("V4Venue deployed at:", address(venue));
