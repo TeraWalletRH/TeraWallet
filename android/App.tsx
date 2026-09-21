@@ -110,8 +110,15 @@ function Wallet() {
     [flowStep, setFlowStep] = useState(0),
     [amountInvalid, setAmountInvalid] = useState(false),
     [settingsSection, setSettingsSection] = useState<
-      "root" | "security" | "privacy" | "sessions" | "device"
+      "root" | "security" | "privacy" | "sessions" | "device" | "accounts"
     >("root"),
+    // Every account on this wallet, derived on unlock and after each change.
+    // Addresses only live here while the wallet is open; locking clears them,
+    // the same as the ledger that records who has read them.
+    [accounts, setAccounts] = useState<
+      Array<{ index: number; address: string; name: string; active: boolean }>
+    >([]),
+    [nameInput, setNameInput] = useState(""),
     [notice, setNotice] = useState<null | {
       title: string;
       body: string;
@@ -157,9 +164,9 @@ function Wallet() {
     // check has not run or could not be made — never "you are up to date",
     // which would be a claim this app did not verify.
     [update, setUpdate] = useState<upd.UpdateDecision | null>(null),
-    [updateStage, setUpdateStage] = useState<
-      "idle" | "downloading" | "verifying" | "installing"
-    >("idle"),
+    [updateStage, setUpdateStage] = useState<"idle" | "downloading" | "verifying" | "installing">(
+      "idle",
+    ),
     [updateProgress, setUpdateProgress] = useState(0),
     [assetSymbol, setAssetSymbol] = useState("USDG"),
     [privateAsset, setPrivateAsset] = useState<"ETH" | "TERA">("ETH"),
@@ -207,6 +214,8 @@ function Wallet() {
     setBridgeStep(0);
     setSettingsSection("root");
     setSetup("start");
+    setAccounts([]);
+    setNameInput("");
     void vault.usesPin().then(setPinWallet);
     void vault.hasWallet().then(async (present) => {
       setExists(present);
@@ -292,6 +301,67 @@ function Wallet() {
     dataRef.current = next;
     setData(next);
   }
+  /**
+   * A wallet's display name, and the fallback when it has none.
+   *
+   * Numbered from 1 because the derivation index is an implementation detail —
+   * "Wallet 1" is what an owner sees for index 0, which is the wallet they have
+   * had all along.
+   */
+  const defaultName = (index: number) => t(`Wallet ${index + 1}`, `钱包 ${index + 1}`);
+  const walletName = (entry: { index: number; name: string }) =>
+    entry.name || defaultName(entry.index);
+  /** `0x1234…cdef`. Enough to tell two wallets apart at a glance. */
+  const short = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
+
+  /** Re-derive the wallet list from the keystore. */
+  function syncAccounts() {
+    try {
+      const list = vault.listAccounts();
+      setAccounts(list);
+      const active = list.find((entry) => entry.active);
+      setNameInput(active?.name || "");
+      return list;
+    } catch {
+      // Locked. The list belongs to an open wallet and nothing else needs it.
+      setAccounts([]);
+      setNameInput("");
+      return [];
+    }
+  }
+
+  /**
+   * Point the app at a wallet that is already open in the keystore.
+   *
+   * Balances, drafts and the tag are dropped before the new address is set
+   * rather than after. They belong to the wallet being left, and leaving them on
+   * screen for the moment it takes to load would be showing one wallet's
+   * holdings under another wallet's name.
+   */
+  async function adopt(address: Address) {
+    setBalance(null);
+    setChat([]);
+    setMyTag(null);
+    setClaimDismissed(false);
+    setError("");
+    setOwner(address);
+    syncAccounts();
+    const version = vault.sessionVersion();
+    const saved = await vault.loadData().catch(() => null);
+    if (saved && version === vault.sessionVersion()) {
+      setData(saved);
+      dataRef.current = saved;
+      setLanguage(saved.language);
+    }
+    void refresh(address);
+    return address;
+  }
+
+  /** Switch to another wallet on this device. */
+  async function switchTo(index: number) {
+    return adopt((await vault.selectAccount(index)) as Address);
+  }
+
   async function opened(address: Address, guard: () => void) {
     setOwner(address);
     setExists(true);
@@ -299,6 +369,7 @@ function Wallet() {
     setMnemonic("");
     setRepeat("");
     setSetup("start");
+    syncAccounts();
     void refresh(address);
     void vault
       .loadData()
@@ -523,7 +594,10 @@ function Wallet() {
           body:
             dest.id === 792703809
               ? t("Enter a valid Solana wallet address.", "请输入有效的 Solana 钱包地址。")
-              : t("Enter a valid EVM (0x...) wallet address.", "请输入有效的 EVM (0x...) 钱包地址。"),
+              : t(
+                  "Enter a valid EVM (0x...) wallet address.",
+                  "请输入有效的 EVM (0x...) 钱包地址。",
+                ),
           tone: "error",
         });
         return;
@@ -716,16 +790,11 @@ function Wallet() {
     const source = sources.find((s) => s.symbol === assetSymbol) || sources[0];
     check(
       ["ETH", "USDG"].includes(source.symbol),
-      t(
-        "Private bridge currently supports ETH and USDG.",
-        "私密跨链当前支持 ETH 和 USDG。",
-      ),
+      t("Private bridge currently supports ETH and USDG.", "私密跨链当前支持 ETH 和 USDG。"),
     );
     const destAddr = recipient.trim();
     check(
-      dest.id === 792703809
-        ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(destAddr)
-        : isAddress(destAddr),
+      dest.id === 792703809 ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(destAddr) : isAddress(destAddr),
       t("Enter a valid destination wallet address.", "请输入有效目标钱包地址。"),
     );
     const raw = units(amount, source.decimals);
@@ -762,10 +831,7 @@ function Wallet() {
         [t("Send", "发送"), `${amount} ${source.symbol}`],
         [t("Destination", "目标网络"), `${dest.name} · ${output.symbol}`],
         [t("Recipient", "收款地址"), destAddr],
-        [
-          t("Routing", "路由"),
-          t("Bridge vault → Relay → recipient", "跨链金库 → Relay → 收款方"),
-        ],
+        [t("Routing", "路由"), t("Bridge vault → Relay → recipient", "跨链金库 → Relay → 收款方")],
         [
           t("Expected, after Relay fees", "扣除 Relay 费用后预计收到"),
           `${formatUnits(BigInt(quote.amountOut), output.decimals)} ${output.symbol}`,
@@ -1291,6 +1357,29 @@ function Wallet() {
             }}
           >
             <View>
+              {/*
+                The wallet this total belongs to, named above the figure rather
+                than tucked into Settings. With more than one wallet on the
+                device a bare number is ambiguous, and the ambiguity is the
+                expensive kind: it is the figure someone checks before deciding
+                whether a transfer leaves them enough.
+              */}
+              {accounts.length > 1 ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t("Switch wallet", "切换钱包")}
+                  onPress={() => {
+                    setSettingsSection("accounts");
+                    setPage("settings");
+                  }}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 6 }}
+                >
+                  <Text style={[s.small, { color: "#ffffff", fontWeight: "700" }]}>
+                    {walletName(accounts.find((entry) => entry.active) || { index: 0, name: "" })}
+                  </Text>
+                  <MaterialCommunityIcons name="chevron-down" size={16} color="#b9c9bd" />
+                </Pressable>
+              ) : null}
               <Text style={[s.small, { color: "#b9c9bd" }]}>
                 {t("Portfolio value", "资产总值")}
               </Text>
@@ -1404,7 +1493,10 @@ function Wallet() {
             update ? `${update.manifest.versionName} · ${update.reason}` : "",
           )}
           <View style={s.panel}>
-            <Row label={t("Installed", "已安装")} value={String(upd.installedVersionCode() ?? "—")} />
+            <Row
+              label={t("Installed", "已安装")}
+              value={String(upd.installedVersionCode() ?? "—")}
+            />
             <Row
               label={t("Published", "已发布")}
               value={String(update?.manifest.versionCode ?? "—")}
@@ -1831,16 +1923,11 @@ function Wallet() {
               <Row
                 label={t("Route", "路由方式")}
                 value={
-                  isPrivate
-                    ? t("Private Route", "私密路由")
-                    : t("Public (Direct)", "公开（直接）")
+                  isPrivate ? t("Private Route", "私密路由") : t("Public (Direct)", "公开（直接）")
                 }
               />
               <Row label={t("Asset", "资产")} value={selectedAsset.symbol} />
-              <Row
-                label={t("Amount", "金额")}
-                value={`${amount || "0"} ${selectedAsset.symbol}`}
-              />
+              <Row label={t("Amount", "金额")} value={`${amount || "0"} ${selectedAsset.symbol}`} />
               {tagLookup.state === "found" && (
                 <Row label={t("Tag", "标签")} value={tags.display(tagLookup.tag)} />
               )}
@@ -2103,9 +2190,7 @@ function Wallet() {
                           <Text style={{ fontSize: 16, fontWeight: "700", color: colors.ink }}>
                             {d.name}
                           </Text>
-                          <Text style={s.small}>
-                            {d.tokens.map((t) => t.symbol).join(" · ")}
-                          </Text>
+                          <Text style={s.small}>{d.tokens.map((t) => t.symbol).join(" · ")}</Text>
                         </View>
                         {isSelected && (
                           <MaterialCommunityIcons
@@ -2145,7 +2230,9 @@ function Wallet() {
                         ]}
                       >
                         <TokenIcon symbol={token.symbol} size={28} />
-                        <Text style={[s.text, isSelected && { fontWeight: "800", color: colors.green }]}>
+                        <Text
+                          style={[s.text, isSelected && { fontWeight: "800", color: colors.green }]}
+                        >
                           {token.symbol}
                         </Text>
                       </Pressable>
@@ -2159,7 +2246,9 @@ function Wallet() {
           {bridgeStep === 2 && (
             <View style={{ gap: 16 }}>
               <View style={[s.panel, { backgroundColor: "#ffffff" }]}>
-                <Text style={s.eyebrow}>{t("PAY FROM ROBINHOOD CHAIN", "支付源（ROBINHOOD CHAIN）")}</Text>
+                <Text style={s.eyebrow}>
+                  {t("PAY FROM ROBINHOOD CHAIN", "支付源（ROBINHOOD CHAIN）")}
+                </Text>
                 <View style={s.wrap}>
                   {bridgeSourceAssets.map((asset) => (
                     <Pressable
@@ -2213,7 +2302,10 @@ function Wallet() {
                     ? t("Amount exceeds your on-chain balance", "金额超过链上余额")
                     : `${t("Available:", "可用:")} ${
                         balance?.[selectedSource.symbol]
-                          ? formatUnits(BigInt(balance[selectedSource.symbol]), selectedSource.decimals)
+                          ? formatUnits(
+                              BigInt(balance[selectedSource.symbol]),
+                              selectedSource.decimals,
+                            )
                           : "0"
                       } ${selectedSource.symbol}`}
                 </Text>
@@ -2223,7 +2315,9 @@ function Wallet() {
 
           {bridgeStep === 3 && (
             <View style={{ gap: 12 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 4 }}>
+              <View
+                style={{ flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 4 }}
+              >
                 <ChainIcon name={dest.name} size={28} />
                 <Text style={{ fontSize: 16, fontWeight: "700", color: colors.ink }}>
                   {t(`${dest.name} recipient`, `${dest.name} 收款地址`)}
@@ -2275,28 +2369,47 @@ function Wallet() {
                 label={t("Route", "路由方式")}
                 value={isPrivate ? t("Private Bridge", "私密跨链") : t("Public Bridge", "公开跨链")}
               />
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, borderBottomWidth: 1, borderColor: colors.line }}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  paddingVertical: 10,
+                  borderBottomWidth: 1,
+                  borderColor: colors.line,
+                }}
+              >
                 <Text style={s.small}>{t("Destination", "目标网络")}</Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                   <ChainIcon name={dest.name} size={20} />
-                  <Text style={[s.small, { fontWeight: "700", color: colors.ink }]}>{dest.name}</Text>
+                  <Text style={[s.small, { fontWeight: "700", color: colors.ink }]}>
+                    {dest.name}
+                  </Text>
                 </View>
               </View>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10, borderBottomWidth: 1, borderColor: colors.line }}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  paddingVertical: 10,
+                  borderBottomWidth: 1,
+                  borderColor: colors.line,
+                }}
+              >
                 <Text style={s.small}>{t("Receiving Token", "接收代币")}</Text>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
                   <TokenIcon symbol={output.symbol} size={20} />
-                  <Text style={[s.small, { fontWeight: "700", color: colors.ink }]}>{output.symbol}</Text>
+                  <Text style={[s.small, { fontWeight: "700", color: colors.ink }]}>
+                    {output.symbol}
+                  </Text>
                 </View>
               </View>
               <Row
                 label={t("Pay amount", "支付金额")}
                 value={`${amount || "0"} ${selectedSource.symbol}`}
               />
-              <Row
-                label={t("Recipient", "收款地址")}
-                value={recipient || "—"}
-              />
+              <Row label={t("Recipient", "收款地址")} value={recipient || "—"} />
               {isPrivate && (
                 <>
                   <Row
@@ -2521,8 +2634,8 @@ function Wallet() {
           {data.history.map((r) => {
             const isBridge = Boolean(
               r.bridgeInput ||
-                (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) ||
-                r.isPrivateBridge,
+              (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) ||
+              r.isPrivateBridge,
             );
             return (
               <View key={r.hash} style={s.panel}>
@@ -2538,8 +2651,8 @@ function Wallet() {
                     {r.isPrivateBridge
                       ? `Private Bridge: ${r.reference}`
                       : isBridge
-                      ? `Relay: ${r.reference}`
-                      : `Route: ${r.reference}`}
+                        ? `Relay: ${r.reference}`
+                        : `Route: ${r.reference}`}
                   </Text>
                 )}
                 {action(
@@ -2558,8 +2671,8 @@ function Wallet() {
                           result.job?.status === "confirmed"
                             ? "delivered"
                             : result.job?.status === "refunded"
-                            ? "refunded"
-                            : (result.job?.status ?? "pending");
+                              ? "refunded"
+                              : (result.job?.status ?? "pending");
                         if (result.job?.relay_deposit_tx_hash) {
                           payoutHash = result.job.relay_deposit_tx_hash;
                         }
@@ -2607,14 +2720,18 @@ function Wallet() {
                 )}
                 {r.delivery && (
                   <Row
-                    label={isBridge ? t("Relay delivery", "Relay 到账") : t("Route delivery", "路由到账")}
+                    label={
+                      isBridge ? t("Relay delivery", "Relay 到账") : t("Route delivery", "路由到账")
+                    }
                     value={r.delivery}
                   />
                 )}
                 {r.payoutHash && (
                   <Button
                     onPress={() =>
-                      void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.payoutHash}`)
+                      void Linking.openURL(
+                        `https://robinhoodchain.blockscout.com/tx/${r.payoutHash}`,
+                      )
                     }
                   >
                     {t("View payout tx", "查看出资交易")}
@@ -2641,6 +2758,7 @@ function Wallet() {
             t("Manage your wallet one area at a time.", "按类别管理你的钱包。"),
           )}
           {[
+            ["accounts", "Wallets", "钱包", "Add, name and switch between wallets"],
             ["security", "Security", "安全", "Recovery phrase, biometrics and lock"],
             ["privacy", "Privacy & data", "隐私与数据", "Retention and deletion controls"],
             ["sessions", "Agent sessions", "代理会话", "Connect, create and revoke scoped tokens"],
@@ -2666,6 +2784,105 @@ function Wallet() {
               <MaterialCommunityIcons name="chevron-right" size={24} color={colors.green} />
             </Pressable>
           ))}
+        </>
+      );
+    if (settingsSection === "accounts")
+      return (
+        <>
+          <Button onPress={() => setSettingsSection("root")}>{t("Settings", "设置")}</Button>
+          {title(
+            "Your wallets.",
+            "你的钱包。",
+            t(
+              "Every wallet here comes from the one recovery phrase you already backed up. Adding one does not give you another phrase to keep safe.",
+              "这里的每个钱包都由你已备份的同一组助记词派生，新增钱包不会产生需要另外保管的助记词。",
+            ),
+          )}
+          {accounts.map((entry) => (
+            <Pressable
+              key={entry.index}
+              accessibilityRole="button"
+              accessibilityState={{ selected: entry.active }}
+              accessibilityLabel={`${walletName(entry)} ${entry.address}`}
+              disabled={busy || entry.active}
+              onPress={() =>
+                void run(async () => {
+                  await switchTo(entry.index);
+                })
+              }
+              style={[
+                s.panel,
+                {
+                  backgroundColor: entry.active ? "#2b4235" : "#ffffff",
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 12,
+                },
+              ]}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[s.text, entry.active ? { color: colors.paper } : null]}>
+                  {walletName(entry)}
+                </Text>
+                <Text style={[s.mono, entry.active ? { color: colors.paper } : null]}>
+                  {short(entry.address)}
+                </Text>
+              </View>
+              {entry.active ? (
+                <MaterialCommunityIcons name="check" size={22} color={colors.paper} />
+              ) : null}
+            </Pressable>
+          ))}
+          {action(
+            "Add a wallet",
+            "新增钱包",
+            async () => {
+              const address = (await vault.addAccount()) as Address;
+              await adopt(address);
+              setNotice({
+                title: t("Wallet added", "已新增钱包"),
+                body: t(
+                  "It is derived from your existing recovery phrase at the standard path, so any wallet app restores it from that phrase alone. There is nothing new to write down.",
+                  "该钱包由你现有的助记词按标准路径派生，任何钱包应用仅凭这组助记词即可恢复，无需另外抄写任何内容。",
+                ),
+                tone: "success",
+              });
+            },
+            false,
+          )}
+          <Text style={s.eyebrow}>{t("RENAME THE OPEN WALLET", "重命名当前钱包")}</Text>
+          <Field
+            label={t("Name", "名称")}
+            value={nameInput}
+            onChangeText={setNameInput}
+            placeholder={defaultName(vault.selectedIndex())}
+            maxLength={vault.MAX_NAME}
+          />
+          {action(
+            "Save name",
+            "保存名称",
+            async () => {
+              await vault.renameAccount(vault.selectedIndex(), nameInput);
+              syncAccounts();
+            },
+            false,
+          )}
+          <Text style={s.small}>
+            {t(
+              "Names are stored on this device only. They are never sent anywhere and do not travel with your recovery phrase — restoring on another device gives you the accounts back without them.",
+              "名称仅保存在本设备，不会发送到任何地方，也不随助记词一同迁移——在其他设备恢复时会取回账户，但不会带回名称。",
+            )}
+          </Text>
+          <Text style={s.eyebrow}>
+            {t("WHAT A SECOND WALLET DOES NOT DO", "第二个钱包无法做到的事")}
+          </Text>
+          <Text style={s.small}>
+            {t(
+              "It does not make you a different person to this app's network. Balances for every wallet here are read over the same connection, from the same device, so the operator answering them can see they belong together. Separate wallets keep your activity apart on-chain; they do not hide that one person holds both.",
+              "它不会让你在本应用的网络看来变成另一个人。这里所有钱包的余额都通过同一连接、同一设备读取，因此提供读取服务的一方能看出它们同属一人。独立钱包能在链上区分你的活动，但无法隐藏它们由同一人持有。",
+            )}
+          </Text>
         </>
       );
     if (settingsSection === "security")

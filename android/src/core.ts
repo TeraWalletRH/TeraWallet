@@ -23,12 +23,14 @@ export * as value from "../../public/tera/core/value.js";
 // that stops one request naming two of them.
 //
 // Shared rather than left to the browser because the rule is the same on both
-// surfaces and only the arithmetic of it is hard. This app holds exactly one
-// account — one phrase in the keystore — so the pairing half has nothing to
-// compare and correctly answers that there is nothing to separate. That is the
-// honest answer arriving from the shared vocabulary rather than the phone
-// silently not having the concept, and it stops being the answer the day this
-// app grows a second account.
+// surfaces and only the arithmetic of it is hard.
+//
+// This app now has more than one wallet, so the pairing half has something to
+// compare — but nothing here draws it yet. Balances on this device are read over
+// one connection to the network the app ships with, which answers for every
+// wallet, so every pair would report as linked at that one operator. A screen
+// saying so is worth building once the phone can point reads somewhere else;
+// until then it would be a panel with one unchanging answer.
 export * as linkage from "../../public/tera/core/linkage.js";
 
 // Re-exported by name because validation.ts and App.tsx use these directly and
