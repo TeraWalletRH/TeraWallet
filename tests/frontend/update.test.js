@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
+  CHANNELS,
   CURRENT,
   EXPECTATIONS,
   JAVASCRIPT,
@@ -8,6 +9,7 @@ import {
   OPTIONAL,
   REQUIRED,
   UpdateError,
+  channelForApplicationId,
   parseManifest,
   updateState,
   verifyDownload,
@@ -112,4 +114,41 @@ test("a download that could not be hashed is not installed", () => {
   // "We could not check it" must never read as "it matched".
   assert.throws(() => verifyDownload({ manifest: manifest(), digest: "" }), UpdateError);
   assert.throws(() => verifyDownload({ manifest: manifest(), digest: null }), UpdateError);
+});
+
+test("each channel is one application ID, and an unknown ID has no channel", () => {
+  assert.equal(channelForApplicationId("app.terawallet.android.preview"), "preview");
+  assert.equal(channelForApplicationId("app.terawallet.android"), "production");
+  assert.equal(channelForApplicationId("app.terawallet.android.dev"), null);
+  assert.equal(channelForApplicationId(undefined), null);
+  assert.notEqual(CHANNELS.preview.applicationId, CHANNELS.production.applicationId);
+});
+
+test("a manifest that names no channel is a preview manifest", () => {
+  // Every manifest published before channels existed was preview.
+  const parsed = parseManifest(manifest());
+  assert.equal(parsed.channel, "preview");
+  assert.equal(parsed.applicationId, "app.terawallet.android.preview");
+});
+
+test("a manifest is refused for an unknown channel or another channel's app", () => {
+  assert.throws(() => parseManifest(manifest({ channel: "staging" })), UpdateError);
+  assert.throws(() => parseManifest(manifest({ channel: ["preview"] })), UpdateError);
+  assert.throws(
+    () => parseManifest(manifest({ channel: "production", applicationId: "app.terawallet.android.preview" })),
+    UpdateError,
+  );
+  assert.throws(
+    () => parseManifest(manifest({ applicationId: "app.terawallet.android" })),
+    UpdateError,
+  );
+});
+
+test("an install is never offered the other channel's build", () => {
+  // The other channel's APK has a different application ID: Android would
+  // install it beside this app, not over it.
+  const production = manifest({ channel: "production", applicationId: "app.terawallet.android" });
+  assert.throws(() => updateState({ manifest: production, installed: 35, channel: "preview" }), UpdateError);
+  assert.throws(() => updateState({ manifest: manifest(), installed: 35, channel: "production" }), UpdateError);
+  assert.equal(updateState({ manifest: production, installed: 35, channel: "production" }).state, OPTIONAL);
 });

@@ -113,3 +113,153 @@ describe("Android version manifest", () => {
     expect(info.body.downloadUrl).toBe(DOWNLOAD);
   });
 });
+
+const PRODUCTION_DOWNLOAD =
+  "https://github.com/TeraWalletRH/TeraWallet/releases/download/android-production/tera-android.apk";
+const PRODUCTION_MANIFEST_URL =
+  "https://github.com/TeraWalletRH/TeraWallet/releases/download/android-production/tera-android.json";
+
+/**
+ * Both channels published at once, each answering only for its own release
+ * tag, and every GitHub API URL recorded so a test can see which release a
+ * request actually read.
+ */
+function bothChannels(
+  manifests: { preview?: unknown; production?: unknown },
+  seen: string[] = [],
+) {
+  return (async (input: string) => {
+    const url = String(input);
+    seen.push(url);
+    if (url.endsWith("/releases/tags/android-preview"))
+      return new Response(
+        JSON.stringify({
+          assets: [
+            // A production-named file in the preview release must not be picked.
+            { name: "tera-android.apk", browser_download_url: DOWNLOAD },
+            { name: "tera-android-preview.apk", browser_download_url: DOWNLOAD, size: 41_000_000 },
+            { name: "tera-android-preview.json", browser_download_url: MANIFEST_URL },
+          ],
+        }),
+        { status: 200 },
+      );
+    if (url.endsWith("/releases/tags/android-production"))
+      return new Response(
+        JSON.stringify({
+          assets: [
+            { name: "tera-android-preview.apk", browser_download_url: PRODUCTION_DOWNLOAD },
+            { name: "tera-android.apk", browser_download_url: PRODUCTION_DOWNLOAD, size: 42_000_000 },
+            { name: "tera-android.json", browser_download_url: PRODUCTION_MANIFEST_URL },
+          ],
+        }),
+        { status: 200 },
+      );
+    if (url === MANIFEST_URL) return new Response(JSON.stringify(manifests.preview), { status: 200 });
+    if (url === PRODUCTION_MANIFEST_URL)
+      return new Response(JSON.stringify(manifests.production), { status: 200 });
+    return new Response("not found", { status: 404 });
+  }) as unknown as typeof fetch;
+}
+
+const productionManifest = (overrides: Record<string, unknown> = {}) =>
+  manifest({
+    channel: "production",
+    applicationId: "app.terawallet.android",
+    versionCode: 50,
+    ...overrides,
+  });
+
+describe("Android update channels", () => {
+  it("serves preview to callers that name no channel, as before", async () => {
+    const seen: string[] = [];
+    globalThis.fetch = bothChannels({ preview: manifest() }, seen);
+    const res = await request(app).get("/api/mobile/android/manifest");
+    expect(res.status).toBe(200);
+    expect(res.body.channel).toBe("preview");
+    expect(res.body.manifest.channel).toBe("preview");
+    expect(res.body.manifest.applicationId).toBe("app.terawallet.android.preview");
+    expect(res.body.manifest.downloadUrl).toBe(DOWNLOAD);
+    expect(seen.some((url) => url.endsWith("/tags/android-production"))).toBe(false);
+  });
+
+  it("serves the production release, and only its assets, to production", async () => {
+    const seen: string[] = [];
+    globalThis.fetch = bothChannels({ preview: manifest(), production: productionManifest() }, seen);
+    const res = await request(app).get("/api/mobile/android/manifest?channel=production");
+    expect(res.status).toBe(200);
+    expect(res.body.channel).toBe("production");
+    expect(res.body.manifest.versionCode).toBe(50);
+    expect(res.body.manifest.applicationId).toBe("app.terawallet.android");
+    expect(res.body.manifest.downloadUrl).toBe(PRODUCTION_DOWNLOAD);
+    expect(res.body.manifest.sizeBytes).toBe(42_000_000);
+    expect(seen.some((url) => url.endsWith("/tags/android-preview"))).toBe(false);
+
+    const download = await request(app).get("/api/mobile/android/download?channel=production");
+    expect(download.status).toBe(302);
+    expect(download.headers.location).toBe(PRODUCTION_DOWNLOAD);
+  });
+
+  it("keeps each channel's cache entry separate", async () => {
+    globalThis.fetch = bothChannels({ preview: manifest(), production: productionManifest() });
+    const preview = await request(app).get("/api/mobile/android/manifest?channel=preview");
+    const production = await request(app).get("/api/mobile/android/manifest?channel=production");
+    // Both now cached. A second read of each must still be its own.
+    globalThis.fetch = (async () => {
+      throw new Error("cached reads must not fetch");
+    }) as unknown as typeof fetch;
+    const previewAgain = await request(app).get("/api/mobile/android/manifest");
+    const productionAgain = await request(app).get("/api/mobile/android/manifest?channel=production");
+    expect(previewAgain.body.manifest).toEqual(preview.body.manifest);
+    expect(productionAgain.body.manifest).toEqual(production.body.manifest);
+    expect(previewAgain.body.manifest.downloadUrl).toBe(DOWNLOAD);
+    expect(productionAgain.body.manifest.downloadUrl).toBe(PRODUCTION_DOWNLOAD);
+  });
+
+  it("refuses an unknown channel instead of defaulting it", async () => {
+    let fetched = false;
+    globalThis.fetch = (async () => {
+      fetched = true;
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    for (const path of ["/api/mobile/android", "/api/mobile/android/manifest", "/api/mobile/android/download"]) {
+      const res = await request(app).get(`${path}?channel=staging`);
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    }
+    const repeated = await request(app).get("/api/mobile/android/manifest?channel=preview&channel=production");
+    expect(repeated.status).toBe(400);
+    expect(fetched).toBe(false);
+  });
+
+  it("refuses a production release whose manifest names the other channel", async () => {
+    globalThis.fetch = bothChannels({ production: manifest({ channel: "preview" }) });
+    const res = await request(app).get("/api/mobile/android/manifest?channel=production");
+    expect(res.status).toBe(503);
+  });
+
+  it("refuses a production manifest that names no channel", async () => {
+    // A missing channel means preview, which is not what this release holds.
+    globalThis.fetch = bothChannels({ production: manifest() });
+    const res = await request(app).get("/api/mobile/android/manifest?channel=production");
+    expect(res.status).toBe(503);
+  });
+
+  it("refuses a manifest whose application ID belongs to the other channel", async () => {
+    globalThis.fetch = bothChannels({
+      production: productionManifest({ applicationId: "app.terawallet.android.preview" }),
+      preview: manifest({ applicationId: "app.terawallet.android" }),
+    });
+    expect((await request(app).get("/api/mobile/android/manifest?channel=production")).status).toBe(503);
+    expect((await request(app).get("/api/mobile/android/manifest?channel=preview")).status).toBe(503);
+  });
+
+  it("reports production as unavailable until its release exists", async () => {
+    globalThis.fetch = (async (input: string) =>
+      String(input).endsWith("/tags/android-production")
+        ? new Response("not found", { status: 404 })
+        : new Response("{}", { status: 200 })) as unknown as typeof fetch;
+    const res = await request(app).get("/api/mobile/android/manifest?channel=production");
+    expect(res.status).toBe(503);
+    expect(res.body.error).toMatch(/production/);
+  });
+});

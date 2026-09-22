@@ -103,7 +103,7 @@ The backend exposes an Express service running under Bun:
 | `GET`  | `/api/tags/search`              | Prefix search over the register                      |
 | `POST` | `/api/tags/claim`               | Bind a name to the wallet that signed for it         |
 | `POST` | `/api/tags/release`             | Give a name up                                       |
-| `GET`  | `/api/mobile/android/manifest`  | Published Android version, floor and APK digest      |
+| `GET`  | `/api/mobile/android/manifest`  | Published Android version, floor and APK digest (`?channel=preview\|production`, default preview) |
 
 ### Tags
 
