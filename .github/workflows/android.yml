@@ -71,6 +71,32 @@ jobs:
         with:
           bun-version: "1.4.2"
       - run: bun install --frozen-lockfile
+      # Install the NDK the generated project asks for before anything runs
+      # Gradle. Left to Gradle, it is downloaded implicitly, and a corrupt
+      # archive ("Error on ZipFile unknown archive") fails the build. The
+      # version is read from React Native, so an upgrade cannot leave this
+      # installing the wrong one.
+      - name: Install Android NDK
+        run: |
+          ndk="$(sed -n 's/^ndkVersion = "\(.*\)"$/\1/p' node_modules/react-native/gradle/libs.versions.toml)"
+          test -n "$ndk"
+          sdkmanager="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$sdkmanager" ]; then
+            sdkmanager="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          fi
+          test -n "$sdkmanager" && test -x "$sdkmanager"
+          yes | "$sdkmanager" --licenses >/dev/null || true
+          for attempt in 1 2 3; do
+            # Remove anything a failed download left behind before trying.
+            rm -rf "$ANDROID_SDK_ROOT/ndk/$ndk"
+            if "$sdkmanager" --install "ndk;$ndk" >/dev/null && [ -x "$ANDROID_SDK_ROOT/ndk/$ndk/ndk-build" ]; then
+              echo "Installed NDK $ndk"
+              exit 0
+            fi
+            echo "::warning::NDK $ndk install attempt $attempt failed."
+          done
+          echo "::error::Could not install NDK $ndk."
+          exit 1
       - run: bun run check && bun test tests
       - run: bunx expo install --check
       - run: bun run export
