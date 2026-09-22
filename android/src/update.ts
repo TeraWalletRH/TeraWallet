@@ -1,24 +1,16 @@
 // Updating the app from inside the app.
 //
-// Two mechanisms, because they are not interchangeable and the difference
-// decides what an owner has to do:
+// On launch the app asks Tera what the published build for its channel is. If
+// it is newer, the home screen shows a bubble, and its Update button fetches
+// the new APK here rather than in a browser. The file is hashed and compared
+// against the digest the build workflow published before it is handed to the
+// installer. Without that check, an update button is a remote install channel
+// with TLS as its only guard. Android then shows its own install screen, which
+// no app can skip, and asks once for permission to install unknown apps.
 //
-//   A JavaScript update (expo-updates) replaces the bundle inside the
-//   installed app. Seconds, no browser, no install screen, no permission. It
-//   carries everything written in JavaScript, which is most of this wallet,
-//   and nothing written in native code.
-//
-//   A new APK carries the rest. It is fetched here rather than in a browser,
-//   and — this is the part that matters — it is hashed and compared against
-//   the digest the build workflow published before it is handed to the
-//   installer. Without that check, an update button is a remote install
-//   channel with TLS as its only guard. Android then shows its own install
-//   screen, which no app can skip, and asks once for permission to install
-//   unknown apps.
-//
-// Neither reaches a build that shipped before this file existed: an installed
-// app with no updater in it cannot be told to update itself. Those installs
-// need one manual download, and everything after it is in-app.
+// This does not reach a build that shipped before this file existed: an
+// installed app with no updater in it cannot be told to update itself. Those
+// installs need one manual download, and everything after it is in-app.
 //
 // The decision of whether there is anything to do at all is not made here. It
 // is made by public/tera/core/update.js, against the manifest this fetches, so
@@ -28,24 +20,25 @@
 import * as Application from "expo-application";
 import * as FileSystem from "expo-file-system/legacy";
 import * as IntentLauncher from "expo-intent-launcher";
-import * as Updates from "expo-updates";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex } from "@noble/hashes/utils";
 import { API } from "./config";
 import {
   CURRENT,
-  EXPECTATIONS,
-  JAVASCRIPT,
-  NATIVE,
   OPTIONAL,
   REQUIRED,
+  channelForApplicationId,
   updateState,
   verifyDownload,
 } from "../../public/tera/core/update.js";
 
-export { CURRENT, EXPECTATIONS, JAVASCRIPT, NATIVE, OPTIONAL, REQUIRED };
+export { CURRENT, OPTIONAL, REQUIRED };
+
+export type Channel = "preview" | "production";
 
 export type Manifest = {
+  channel: Channel;
+  applicationId: string;
   versionCode: number;
   versionName: string;
   minSupportedVersionCode: number;
@@ -78,8 +71,17 @@ export function installedVersionCode(): number | null {
 
 export const installedVersionName = () => Application.nativeApplicationVersion ?? "";
 
-/** Whether this build was compiled with a JavaScript update channel configured. */
-export const javascriptUpdatesEnabled = () => Updates.isEnabled;
+/**
+ * This install's release channel, from its application ID.
+ *
+ * Read from the installed package rather than from a build variable, because
+ * the application ID is what decides which APK Android will install over this
+ * one. A build variable could disagree with it; the package cannot. A build
+ * with neither known ID — a local development build — has no channel and is
+ * offered nothing.
+ */
+export const installedChannel = (): Channel | null =>
+  channelForApplicationId(Application.applicationId) as Channel | null;
 
 /**
  * Ask Tera what the published build is, and decide what to say about it.
@@ -89,39 +91,25 @@ export const javascriptUpdatesEnabled = () => Updates.isEnabled;
  * check as "you are up to date" would be making a claim it did not verify.
  */
 export async function checkForUpdate(): Promise<UpdateDecision | null> {
-  if (!API.startsWith("https://")) return null;
+  const channel = installedChannel();
+  if (!API.startsWith("https://") || !channel) return null;
   try {
-    const response = await fetch(`${API}/api/mobile/android/manifest`, {
+    const response = await fetch(`${API}/api/mobile/android/manifest?channel=${channel}`, {
       signal: AbortSignal.timeout(15000),
     });
     if (!response.ok) return null;
     const body = await response.json();
     if (!body?.manifest) return null;
+    // Checked again here, not only on the server: a manifest for the other
+    // channel describes a different app, and updateState refuses it.
     return updateState({
       manifest: body.manifest,
       installed: installedVersionCode(),
+      channel,
     }) as UpdateDecision;
   } catch {
     return null;
   }
-}
-
-/**
- * Take a JavaScript update, if this build has a channel and one is waiting.
- *
- * Returns what happened rather than throwing on "nothing to do", because
- * "already current" is a normal answer to a button press and not a fault.
- * Applying it restarts the app, so anything unsaved is the caller's problem —
- * which is why the screen that calls this refuses while a signature is in
- * flight.
- */
-export async function applyJavascriptUpdate(): Promise<"applied" | "none" | "unavailable"> {
-  if (!Updates.isEnabled) return "unavailable";
-  const check = await Updates.checkForUpdateAsync();
-  if (!check.isAvailable) return "none";
-  await Updates.fetchUpdateAsync();
-  await Updates.reloadAsync();
-  return "applied";
 }
 
 /**
@@ -135,6 +123,11 @@ export async function downloadApk(
   manifest: Manifest,
   onProgress?: (fraction: number) => void,
 ): Promise<string> {
+  // The download is for this app or not at all. The checks before it — the
+  // server's and updateState's — make this unreachable; it stays because the
+  // cost of being wrong is installing a different app.
+  if (manifest.applicationId !== Application.applicationId)
+    throw new Error("This download is for a different app. / 此下载属于另一个应用。");
   const target = `${FileSystem.cacheDirectory}tera-${manifest.versionCode}.apk`;
   await FileSystem.deleteAsync(target, { idempotent: true });
 

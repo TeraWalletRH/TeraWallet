@@ -656,23 +656,15 @@ function Wallet() {
     setPage("home");
   }
   /**
-   * Take whichever update is actually available.
+   * Install the published version, from the bubble on the home screen.
    *
-   * JavaScript first, because it is seconds rather than tens of megabytes and
-   * needs no install screen. If there is none waiting — which is the case for
-   * anything that changed the app's native side — the APK is downloaded here,
-   * checked against the digest the build published, and handed to Android's
-   * installer, which shows its own screen that no app can skip.
+   * The APK is downloaded here, checked against the digest the build
+   * published, and handed to Android's installer. Android then shows its own
+   * install screen — and, the first time, asks to allow installs from this
+   * app. No app can skip either, and the bubble says so before it starts.
    */
   async function runUpdate(guard: () => void) {
     if (!update) return;
-    if (upd.javascriptUpdatesEnabled()) {
-      // Applying restarts the app, so this never runs while something is in
-      // flight: `run` holds the pending lock for the whole call.
-      const applied = await upd.applyJavascriptUpdate();
-      guard();
-      if (applied === "applied") return;
-    }
     setUpdateStage("downloading");
     setUpdateProgress(0);
     try {
@@ -1314,17 +1306,38 @@ function Wallet() {
               <Text style={s.small}>
                 {update.state === upd.REQUIRED
                   ? t(
-                      "This build is below the supported version. Update to keep using it safely.",
-                      "此版本低于受支持的版本。请更新以继续安全使用。",
+                      `This version is no longer supported. Update to version ${update.manifest.versionName} to keep using the app safely.`,
+                      `此版本已不再受支持。请更新到版本 ${update.manifest.versionName} 以继续安全使用。`,
                     )
                   : t(
-                      `Version ${update.manifest.versionName} is published.`,
-                      `版本 ${update.manifest.versionName} 已发布。`,
+                      `A new version of Tera (${update.manifest.versionName}) has been released. Update to get the latest changes.`,
+                      `Tera 新版本（${update.manifest.versionName}）已发布。请更新以获取最新内容。`,
                     )}
               </Text>
-              <Button primary onPress={() => setPage("update")}>
-                {t("Update", "更新")}
-              </Button>
+              {update.manifest.notes ? <Text style={s.small}>{update.manifest.notes}</Text> : null}
+              {updateStage === "downloading" ? (
+                <Text style={s.small}>
+                  {t(
+                    `Downloading… ${Math.round(updateProgress * 100)}%`,
+                    `正在下载… ${Math.round(updateProgress * 100)}%`,
+                  )}
+                </Text>
+              ) : updateStage === "installing" ? (
+                <Text style={s.small}>
+                  {t(
+                    "Download checked. Confirm the install on Android's screen.",
+                    "下载已校验。请在 Android 界面上确认安装。",
+                  )}
+                </Text>
+              ) : (
+                <Text style={s.small}>
+                  {t(
+                    `The download${update.manifest.sizeBytes ? ` (${Math.round(update.manifest.sizeBytes / 1e6)} MB)` : ""} is checked before anything is installed. Android then asks you to confirm the install, and the first time it asks you to allow installs from Tera. Your wallet stays on the phone.`,
+                    `下载文件${update.manifest.sizeBytes ? `（${Math.round(update.manifest.sizeBytes / 1e6)} MB）` : ""}会先经过校验再安装。随后 Android 会请您确认安装；首次还会请您允许 Tera 安装应用。您的钱包会保留在手机上。`,
+                  )}
+                </Text>
+              )}
+              {action("Update", "更新", runUpdate)}
             </View>
           )}
           {tagsAvailable() && myTag === null && !claimDismissed && (
@@ -1482,69 +1495,6 @@ function Wallet() {
           </View>
         </>
       );
-    if (page === "update") {
-      const kind = upd.javascriptUpdatesEnabled() ? upd.JAVASCRIPT : upd.NATIVE;
-      const expectation = upd.EXPECTATIONS[kind];
-      return (
-        <>
-          {title(
-            update?.state === upd.REQUIRED ? "Update required." : "Update available.",
-            update?.state === upd.REQUIRED ? "需要更新。" : "有可用更新。",
-            update ? `${update.manifest.versionName} · ${update.reason}` : "",
-          )}
-          <View style={s.panel}>
-            <Row
-              label={t("Installed", "已安装")}
-              value={String(upd.installedVersionCode() ?? "—")}
-            />
-            <Row
-              label={t("Published", "已发布")}
-              value={String(update?.manifest.versionCode ?? "—")}
-            />
-            {update?.manifest.sizeBytes ? (
-              <Row
-                label={t("Download", "下载大小")}
-                value={`${Math.round(update.manifest.sizeBytes / 1e6)} MB`}
-              />
-            ) : null}
-          </View>
-          {/*
-            What will happen, in the app's own words, before the owner starts.
-            The native path cannot avoid Android's install screen and does not
-            pretend it can.
-          */}
-          <Text style={s.text}>{expectation.title}</Text>
-          <Text style={s.small}>{expectation.detail}</Text>
-          <Text style={s.small}>{expectation.limit}</Text>
-          {kind === upd.NATIVE && (
-            <Text style={s.small}>
-              {t(
-                "The file is checked against the hash published by the build that produced it. If it does not match, it is deleted and not installed.",
-                "文件将与构建时发布的哈希值比对。若不匹配，将被删除且不会安装。",
-              )}
-            </Text>
-          )}
-          {updateStage === "downloading" && (
-            <Text style={s.small}>
-              {t(
-                `Downloading… ${Math.round(updateProgress * 100)}%`,
-                `正在下载… ${Math.round(updateProgress * 100)}%`,
-              )}
-            </Text>
-          )}
-          {updateStage === "installing" && (
-            <Text style={s.small}>
-              {t(
-                "Verified. Android will now ask you to confirm the install.",
-                "校验通过。Android 现在会请您确认安装。",
-              )}
-            </Text>
-          )}
-          {update ? action("Update", "更新", runUpdate) : null}
-          <Button onPress={() => setPage("home")}>{t("Back", "返回")}</Button>
-        </>
-      );
-    }
     if (page === "tag") {
       return (
         <>

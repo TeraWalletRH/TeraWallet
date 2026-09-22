@@ -10,21 +10,76 @@ Native Expo / React Native wallet, using Tera's cream, forest-green and monospac
 - Relay bridges from RH ETH/USDG to Base ETH/USDC, Solana SOL/USDC/USDT and Arc USDC. Destination address is pasted; source transactions are signed on the phone.
 - Encrypted local drafts, pending hashes and history, configurable retention, local deletion and signed backend proposal deletion. Assistant chat is memory-only.
 - Tags: send to `@astra` instead of an address, and claim a name for this wallet. Tera keeps the register, so resolving a name means trusting the service — unlike a balance or a receipt, there is nothing else to check it against, and the claim screen says so. The resolved address is shown on the review sheet and re-read immediately before signing, and the transfer is built from the address. Tags are not offered as bridge destinations, because a bridge sends to another chain where that address is a different account.
-- In-app updates: the app checks `/api/mobile/android/manifest` on launch and offers what is published. Set `EXPO_PUBLIC_UPDATES_URL` for JavaScript updates; unset, the Update button falls back to a new APK. Tags turn on when the API says the register is enabled.
+- In-app updates: on launch the app checks `/api/mobile/android/manifest?channel=…` for its own channel (preview or production) and offers what is published. See [Updating](#updating). Tags turn on when the API says the register is enabled.
 
 ## Updating
 
-Two mechanisms, and they are not interchangeable.
+1. The owner opens the app. On launch it asks `/api/mobile/android/manifest?channel=…` what the published build for its channel is.
+2. If that build is newer, the home screen shows a bubble: a new version has been released, with its version name, notes and download size, and an **Update** button. If the installed build is below the channel's minimum supported version, the bubble says the update is required.
+3. **Update** downloads the APK inside the app, with progress in the bubble, and hashes it. The hash must equal the `sha256` in the manifest that the build workflow published beside the APK. If it does not match, the app deletes the file and installs nothing.
+4. The app hands the verified file to Android's installer. Android shows its own install screen, and the owner confirms there. The first time, Android also asks the owner to allow installs from Tera (`REQUEST_INSTALL_PACKAGES`). No app can skip either screen, and the bubble says so before the download starts. The wallet data stays, because the APK updates the same app.
 
-**JavaScript updates** (`expo-updates`) replace the bundle inside the installed app: seconds, no browser, no install screen, no permission. They carry everything written in JavaScript, which is most of this wallet, and nothing written in native code. Off unless `EXPO_PUBLIC_UPDATES_URL` points at an update channel.
+A published build that is not newer than the installed one is never offered, so there is no downgrade. A build that cannot read its own version code is not offered anything.
 
-**A new APK** carries the rest. The app downloads it, hashes it in chunks, and compares it against the `sha256` the build workflow published in `tera-android-preview.json` beside the APK. A mismatch deletes the file and installs nothing. Android then shows its own install screen, which no app can skip, and asks once for permission to install unknown apps (`REQUEST_INSTALL_PACKAGES`).
+### Channels
 
-Neither reaches a build that shipped before this code existed: an installed app with no updater inside it cannot be told to update itself. Those installs need one manual download, and everything after that is in-app.
+Preview and production are two different Android apps. Each has its own application ID, signing key, GitHub release and manifest. Neither can update into the other.
 
-The APK signature must match the installed one or Android refuses the update, so self-update works within one signing key and one application ID. Preview and production still do not upgrade into each other.
+| | Preview | Production |
+| --- | --- | --- |
+| Application ID | `app.terawallet.android.preview` | `app.terawallet.android` |
+| Signing key | Expo's development key from the prebuild template | Your release keystore (Actions secrets below) |
+| Built by | Every push to `main` touching `android/` | Manual run with `signed_release=true` on `main` |
+| GitHub release | `android-preview` (prerelease) | `android-production` |
+| Assets | `tera-android-preview.apk`, `tera-android-preview.json` | `tera-android.apk`, `tera-android.json` |
+| Manifest request | `/api/mobile/android/manifest?channel=preview` | `/api/mobile/android/manifest?channel=production` |
+| Minimum supported version | `ANDROID_MIN_SUPPORTED_VERSION_CODE` | `ANDROID_PRODUCTION_MIN_SUPPORTED_VERSION_CODE` |
 
-`ANDROID_MIN_SUPPORTED_VERSION_CODE` (a repository variable) is the floor below which a build is told it is unsupported rather than merely out of date. Left at `1`, every published build is a suggestion.
+- The app takes its channel from its own installed application ID, not from a build setting. It refuses a manifest that names the other channel or the other application ID.
+- The backend reads only the matching GitHub release and asset names. It refuses a manifest whose `channel` or `applicationId` does not match, and caches each channel separately. A request without `channel` gets preview, which is what the site's download link and older preview builds ask for. Any other value gets `400`.
+- A manifest with no `channel` field is treated as preview. Production manifests must say `"channel": "production"`.
+
+### Manifest
+
+The workflow writes the manifest with `scripts/release-manifest.mjs`, in the same run that built the APK. It checks the manifest with the same `parseManifest` the app uses before it publishes it:
+
+```json
+{
+  "platform": "android",
+  "channel": "production",
+  "applicationId": "app.terawallet.android",
+  "versionCode": 57,
+  "versionName": "0.1.0",
+  "minSupportedVersionCode": 1,
+  "sha256": "<SHA-256 of the APK built in this run>",
+  "notes": "<release_notes input>",
+  "publishedAt": "2026-09-22T00:00:00.000Z"
+}
+```
+
+The version code is the workflow run number. The backend adds `downloadUrl` and `sizeBytes` from the release asset, so a manifest can never point the app at another file. The workflow uploads the APK before its manifest. Between the two uploads, the old digest does not match the new file, so the app refuses it.
+
+### Signing keys
+
+Android installs an update only when the application ID **and** the signing certificate match the installed app. The workflow reads both from each built APK with `scripts/verify-apk.sh` (`aapt2` and `apksigner`). If either is wrong, it stops before it publishes.
+
+- Production: the certificate must equal the `ANDROID_RELEASE_CERT_SHA256` variable. A production run fails at the start if that variable is not set.
+- Preview: the certificate is printed in the log. If you set `ANDROID_PREVIEW_CERT_SHA256`, the workflow also compares it.
+- Keep the release keystore. If you lose it or change it, every installed production app refuses all later APKs. Owners must then uninstall and restore from their recovery phrase.
+
+### Older installs
+
+An installed app with no updater inside it cannot be told to update itself. Any build installed before the updater existed needs **one manual download** of its channel's APK. After that, updates come through the bubble.
+
+Production builds made before channel support asked for the preview manifest. Update those by hand to a production APK from the `android-production` release.
+
+### Setup the owner must do
+
+1. **Production signing** (Settings → Secrets and variables → Actions → *Secrets*): `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`, `ANDROID_KEY_PASSWORD` (see the table below).
+2. **Production certificate** (*Variables*): set `ANDROID_RELEASE_CERT_SHA256` to the SHA-256 of your release signing certificate. Get it with `keytool -list -v -keystore tera-release.jks -alias <alias>` (the `SHA256:` line; colons are allowed). It is public and is not a secret.
+3. **Floors** (optional *variables*): `ANDROID_MIN_SUPPORTED_VERSION_CODE` for preview and `ANDROID_PRODUCTION_MIN_SUPPORTED_VERSION_CODE` for production. With the default of `1`, the bubble never says an update is required.
+4. **Backend**: deploy the backend so `/api/mobile/android/manifest` accepts `?channel=`. Until you deploy it, production apps get no answer, and preview works as before.
+5. **First production release**: run the `Android wallet` workflow manually on `main` with `signed_release=true` and optional `release_notes`. That creates the `android-production` release.
 
 ## Public GitHub Actions builds
 
@@ -38,7 +93,7 @@ The build pins the owner-confirmed signer `0x5b2759f9620f54a5E1651A567Ebd8381F07
 
 Invalid or mismatched signatures fail closed. Default public API and RPC URLs are in the workflow. No backend private keys, Relay key, Groq key or seed phrase belongs in the Android environment.
 
-For a distribution build, add these **Actions secrets** and manually run the workflow with `signed_release=true`:
+For a distribution build, add these **Actions secrets**, set `ANDROID_RELEASE_CERT_SHA256` (see [Signing keys](#signing-keys)), and manually run the workflow on `main` with `signed_release=true`:
 
 | Secret | Purpose |
 | --- | --- |
@@ -47,7 +102,7 @@ For a distribution build, add these **Actions secrets** and manually run the wor
 | `ANDROID_KEY_ALIAS` | Release signing alias |
 | `ANDROID_KEY_PASSWORD` | Alias password |
 
-The release produces an APK and AAB for `app.terawallet.android`; the workflow run number sets the version code. Preserve the signing keystore for future updates. Preview and production installs have separate storage; preview does not upgrade into production. This workflow does not publish to Google Play.
+The release produces an APK and AAB for `app.terawallet.android`; the workflow run number sets the version code. The APK and its manifest are published to the `android-production` GitHub release. The AAB is kept only as a workflow artifact. Preserve the signing keystore for future updates. Preview and production installs have separate storage; preview does not upgrade into production. This workflow does not publish to Google Play.
 
 ## Local development
 
@@ -65,7 +120,7 @@ cd android
 ./gradlew assembleRelease
 ```
 
-Copy the public signer address into `.env` before building. The generated native project is ignored and recreated with Expo prebuild. Changes belong in app config, source or plugins.
+Copy the public signer address into `.env` before building. A local build is the preview app unless `TERA_SIGNED_RELEASE=true`. The generated native project is ignored and recreated with Expo prebuild. Changes belong in app config, source or plugins.
 
 ## Signing and privacy boundaries
 
