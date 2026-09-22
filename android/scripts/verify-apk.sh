@@ -34,10 +34,19 @@ if [ "$actual_code" != "$expected_code" ]; then
   exit 1
 fi
 
-"$tools/apksigner" verify "$apk"
-certs="$("$tools/apksigner" verify --print-certs "$apk" | sed -n 's/^Signer #[0-9]* certificate SHA-256 digest: //p')"
-if [ "$(wc -l <<<"$certs")" -ne 1 ] || [ -z "$certs" ]; then
-  echo "::error::$apk must have exactly one signer." >&2
+echo "Using build-tools $(basename "$tools")"
+signers="$("$tools/apksigner" verify --print-certs "$apk" | tr -d '\r')"
+# The wording of these lines differs between build-tools versions ("Signer #1
+# certificate …", "Signer (minSdkVersion=…) certificate …"), and one key can
+# be listed once per signature scheme. So match any signer's certificate
+# digest, leave out the source stamp (which is not the app's signing key), and
+# count distinct certificates rather than lines.
+certs="$(grep -iv 'stamp' <<<"$signers" \
+  | sed -n 's/.*[Ss]igner.*certificate SHA-256 digest: *\([0-9A-Fa-f]\{64\}\).*/\1/p' \
+  | tr 'A-F' 'a-f' | sort -u)"
+if [ -z "$certs" ] || [ "$(wc -l <<<"$certs")" -ne 1 ]; then
+  echo "::error::$apk must be signed by exactly one certificate. apksigner reported:" >&2
+  echo "$signers" >&2
   exit 1
 fi
 echo "$expected_id $actual_code signed by certificate SHA-256 $certs"
