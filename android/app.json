@@ -28,6 +28,14 @@
       }
     },
     "plugins": ["expo-secure-store", "expo-local-authentication"],
-    "updates": { "enabled": false }
+    "updates": {
+      "enabled": false
+    },
+    "extra": {
+      "eas": {
+        "projectId": "e42e623a-3766-41ab-897e-73f808e477b4"
+      }
+    },
+    "owner": "terawallet-org"
   }
 }
