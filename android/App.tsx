@@ -227,7 +227,12 @@ function Wallet() {
   useEffect(() => {
     // Asked once, on launch, and never retried in a loop: an update is not
     // urgent enough to keep a phone talking to the network about it.
-    void upd.checkForUpdate().then(setUpdate);
+    //
+    // Android only: the manifest this checks and the APK fallback in
+    // `runUpdate` are both part of the sideloaded-APK update path, which has
+    // no iOS equivalent and no reason to run there — App Store builds update
+    // through App Review, not a self-fetched binary.
+    if (Platform.OS === "android") void upd.checkForUpdate().then(setUpdate);
     // Whether this deployment keeps a tag register at all. Off until it says
     // yes, so a failed call hides the controls rather than offering ones that
     // cannot work.

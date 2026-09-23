@@ -1,0 +1,43 @@
+{
+  "cli": {
+    "version": ">= 13.0.0",
+    "appVersionSource": "remote"
+  },
+  "build": {
+    "development": {
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": {
+        "resourceClass": "m-medium"
+      }
+    },
+    "preview": {
+      "distribution": "internal",
+      "channel": "preview",
+      "env": {
+        "TERA_SIGNED_RELEASE": "false"
+      },
+      "ios": {
+        "resourceClass": "m-medium",
+        "simulator": false
+      }
+    },
+    "production": {
+      "channel": "production",
+      "env": {
+        "TERA_SIGNED_RELEASE": "true"
+      },
+      "ios": {
+        "resourceClass": "m-medium"
+      }
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "appleTeamId": "8FBV3LRHR8",
+        "ascAppId": "6814249183"
+      }
+    }
+  }
+}

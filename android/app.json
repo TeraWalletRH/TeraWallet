@@ -18,6 +18,15 @@
         "android.permission.WRITE_EXTERNAL_STORAGE"
       ]
     },
+    "ios": {
+      "bundleIdentifier": "app.terawallet.ios",
+      "buildNumber": "1",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Face ID unlocks your wallet instead of typing your password.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
     "plugins": ["expo-secure-store", "expo-local-authentication"],
     "updates": { "enabled": false }
   }
