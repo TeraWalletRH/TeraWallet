@@ -12,7 +12,13 @@
 export class EndpointError extends Error {}
 
 // Everything this wallet is willing to ask an owner-supplied endpoint.
-export const READ_METHODS = ["eth_chainId", "eth_blockNumber", "eth_getBalance", "eth_call"];
+export const READ_METHODS = [
+  "eth_chainId",
+  "eth_blockNumber",
+  "eth_getBalance",
+  "eth_call",
+  "eth_getLogs",
+];
 
 const LOCAL_HOSTS = ["localhost", "127.0.0.1", "[::1]", "::1"];
 

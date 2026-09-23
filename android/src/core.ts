@@ -61,3 +61,5 @@ export {
   INDEPENDENT,
   LIMITS as REGISTRY_LIMITS,
 } from "../../public/tera/core/registry.js";
+
+export * as nft from "../../public/tera/core/nft.js";

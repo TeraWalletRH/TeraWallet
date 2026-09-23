@@ -237,6 +237,16 @@ export function parties(config = {}) {
         "Nothing here is per-owner, so there is nothing to turn off for privacy's sake. Tokenised asset prices do not go this way at all: they are read from the chain's own swap routes. This is the one price with an outside source, and if it cannot be read the wallet reports that rather than valuing ETH at zero.",
     },
     {
+      id: "nft-media",
+      name: "IPFS gateway and collection servers, for NFT pictures",
+      host: "gateway.pinata.cloud · token metadata and image hosts",
+      reach: "direct",
+      learns: ["The network address you are on", "Which NFT metadata or picture was requested"],
+      withheld: ["Your wallet address, unless the collection already knows it"],
+      control:
+        "NFT metadata and pictures load directly from these hosts when you open the gallery. IPFS gateway requests are rate-limited and some collections block browser metadata reads.",
+    },
+    {
       id: "chain-rpc",
       name: "Robinhood Chain public RPC",
       host: rpcHost,

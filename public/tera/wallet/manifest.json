@@ -1,8 +1,8 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-d1d1bdc26c4b",
-  "builtAt": "2026-09-22T22:44:57.262Z",
+  "release": "r-fab9bfa80456",
+  "builtAt": "2026-09-23T17:48:13.303Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
@@ -21,6 +21,11 @@
       "path": "core/minimise.js",
       "hash": "sha256-h1qLfIKzhS8yHYYVOoUDfxeuLX8ZHck1JftvHMQDL+E=",
       "bytes": 7671
+    },
+    {
+      "path": "core/nft.js",
+      "hash": "sha256-YDquuil9zAiulVDhrDEG3hlf6bTUYugqPMkFZMGSwlA=",
+      "bytes": 23440
     },
     {
       "path": "core/parse.js",
@@ -69,13 +74,13 @@
     },
     {
       "path": "wallet/app.css",
-      "hash": "sha256-PayI44qAhD6KizHLqfe8jJpjvAN2+KhjZt6mp+mXmIs=",
-      "bytes": 20555
+      "hash": "sha256-S70utLrG3NC85P+NdLAuYnAJjPJrdSFg6SHyjSfxW1w=",
+      "bytes": 21443
     },
     {
       "path": "wallet/app.js",
-      "hash": "sha256-ahb6jwAsbiFWvLu+9IjD3Nf6dseDfxxUG4R6NGP4zew=",
-      "bytes": 211755
+      "hash": "sha256-VDymKXXoXAh/WGGBuo+PO+WDboL7lFrLxxHF22FaRpY=",
+      "bytes": 216299
     },
     {
       "path": "wallet/boundary.js",
@@ -104,13 +109,13 @@
     },
     {
       "path": "wallet/egress.js",
-      "hash": "sha256-h8e1gCiHUXkx+lWz4/SLrJrGOrDjlhm9pUJ16ukSzek=",
-      "bytes": 19290
+      "hash": "sha256-Y+d7Rsed4F+XFycVHYzrUqZ4xfjWZyJ2mG72h073SXg=",
+      "bytes": 19866
     },
     {
       "path": "wallet/endpoint.js",
-      "hash": "sha256-a6P4VJm+wGvcKNrC8UdQzqu6ynJ8PHC018mJ0h9USjE=",
-      "bytes": 10526
+      "hash": "sha256-5pm7mhWn1xEVPTH/3N8EvA6pu2iARWk/8kz7k+ue/ZM=",
+      "bytes": 10554
     },
     {
       "path": "wallet/engine.js",
@@ -121,6 +126,11 @@
       "path": "wallet/engine.worker.js",
       "hash": "sha256-98BWuJH+MSIvY70T2jZXIOZ0wU6OStpyOtbozSOjNI0=",
       "bytes": 5099
+    },
+    {
+      "path": "wallet/gallery.js",
+      "hash": "sha256-wt9JOM5mRxTsFXBF0S5SrgrnZ8iIKY3cS4KQg30Fd/c=",
+      "bytes": 1858
     },
     {
       "path": "wallet/history.js",
@@ -149,8 +159,8 @@
     },
     {
       "path": "wallet/privacy.js",
-      "hash": "sha256-M2UAUvtfs974S4W1VxEHb2uYQAngCkenskbHImmeF9E=",
-      "bytes": 18480
+      "hash": "sha256-1XuOhhSzTV5qvE8/wCbZHoM2BefQoERuoHrsHSc5dXM=",
+      "bytes": 18838
     },
     {
       "path": "wallet/recovery.js",
@@ -188,5 +198,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-0dG9wmxLr6lie3v4OuOnVSVfVlR5zf0teM8wxsJ3obk="
+  "filesHash": "sha256-+rm/qARW0PAJy1FSc4bRurRlefs3tAWQPPvEoY622Vk="
 }
