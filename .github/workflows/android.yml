@@ -31,7 +31,6 @@ jobs:
     env:
       CI: "1"
       EXPO_NO_TELEMETRY: "1"
-      TERA_SIGNED_RELEASE: "true"
       EXPO_PUBLIC_API_URL: https://api.terawallet.app
       EXPO_PUBLIC_RPC_URL: https://rpc.mainnet.chain.robinhood.com
       EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY: ${{ vars.EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY || '0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05' }}
@@ -122,6 +121,7 @@ jobs:
       - name: Build signed release
         if: ${{ inputs.signed_release && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
         env:
+          TERA_SIGNED_RELEASE: "true"
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
