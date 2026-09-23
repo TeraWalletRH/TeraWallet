@@ -16,6 +16,7 @@ import stakingRouter from "./routes/staking";
 import privateSendRouter from "./routes/private-send";
 import privateBridgeRouter from "./routes/private-bridge";
 import tagsRouter from "./routes/tags";
+import leaderboardRouter from "./routes/leaderboard";
 
 const app = express();
 
@@ -52,6 +53,7 @@ app.use(pricesRouter);
 app.use(stakingRouter);
 app.use(privateSendRouter);
 app.use(tagsRouter);
+app.use(leaderboardRouter);
 app.use(assetsRouter);
 app.use(intentRouter);
 app.use(agentRouter);
