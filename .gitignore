@@ -71,3 +71,6 @@ demo/
 # Local scratch, not part of the build.
 docs
 me.txt
+
+# Local build briefs for Claude Code sessions
+NFT_BUILD_PROMPT.md

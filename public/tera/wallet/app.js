@@ -13,6 +13,7 @@ import {
   GATES,
   ZERO_ADDRESS,
   evaluateLocalPolicy,
+  assertWallet,
 } from "./core.js";
 import { renderAssistantMarkdown } from "./markdown.js";
 import {
@@ -50,6 +51,8 @@ import {
   LIMITS as WIPE_LIMITS,
 } from "./wipe.js";
 import { bridgeView, bridgeFormInput, checkBridgeQuote, sendBridge } from "./bridge.js";
+import { galleryView } from "./gallery.js";
+import * as nft from "../core/nft.js";
 import {
   LOCAL_ONLY,
   REQUESTS,
@@ -405,6 +408,7 @@ const short = (value) => (value ? `${value.slice(0, 6)}…${value.slice(-4)}` : 
 const titles = {
   dashboard: "Overview",
   assets: "Asset registry",
+  nfts: "NFTs",
   agent: "Agent assistant",
   approvals: "Approvals",
   bridge: "Bridge",
@@ -435,6 +439,7 @@ const state = {
   provider: null,
   chain: null,
   assets: [],
+  nft: { tokens: [], loading: false, error: "" },
   assetsLoaded: false,
   assetError: "",
   account: null,
@@ -582,6 +587,7 @@ async function persist() {
 }
 function loadRecords() {
   state.bridges = [];
+  state.nft = { tokens: [], loading: false, error: "" };
   state.records = [];
   state.drafts = [];
   state.versions = {};
@@ -669,6 +675,7 @@ function clearEncryptedStorage() {
   state.recovery = null;
   state.records = [];
   state.bridges = [];
+  state.nft = { tokens: [], loading: false, error: "" };
   state.drafts = [];
   state.agentSessionToken = "";
   state.rpcEndpoints = [];
@@ -776,6 +783,7 @@ function closeDialog() {
 function navigate(key) {
   history.pushState(null, "", href(key));
   render();
+  if (key === "nfts") void loadNfts();
   if (key === "policy")
     void loadPolicyBundle()
       .then(render)
@@ -793,6 +801,14 @@ function render() {
     {
       dashboard: overview,
       assets: registry,
+      nfts: () =>
+        galleryView({
+          esc,
+          ...state.nft,
+          demo: state.demo,
+          owner: state.owner,
+          explorerUrl: config.explorerUrl,
+        }),
       agent: () => `<div class="live-agent panel">${chat()}</div>`,
       approvals,
       bridge: () =>
@@ -2081,6 +2097,7 @@ function forgetEverything() {
   state.balances = {};
   state.records = [];
   state.bridges = [];
+  state.nft = { tokens: [], loading: false, error: "" };
   state.drafts = [];
   state.versions = {};
   state.presets = [];
@@ -2358,6 +2375,82 @@ const readerName = (assigned) => (assigned ? assigned.party : WALLET_PROVIDER);
 // all — a pool that picked at random per read could not be predicted, and would
 // walk every account across every operator anyway.
 const readerAhead = (account) => readerName(ownEndpointActive() ? readerFor(account) : null);
+async function loadNfts(version = generation) {
+  if (!state.owner || !state.provider || state.demo) return;
+  const owner = state.owner;
+  const assigned = ownEndpointActive() ? readerFor(owner) : null;
+  const direct = assigned ? createRpc(assigned.url) : null;
+  const rpc = direct
+    ? ({ method, params = [] }) => direct({ method, params })
+    : ({ method, params = [] }) => state.provider.request({ method, params });
+  state.nft = { tokens: [], loading: true, error: "" };
+  render();
+  state.linkage = noteRead(state.linkage, owner, readerName(assigned));
+  try {
+    const found = await nft.discover({ rpc, owner });
+    if (version !== generation || owner !== state.owner) return;
+    const tokens = [];
+    for (let i = 0; i < found.tokens.length; i += 4) {
+      const batch = await Promise.all(
+        found.tokens.slice(i, i + 4).map(async (token) => ({
+          ...token,
+          metadata: await nft.loadMetadata(token),
+        })),
+      );
+      tokens.push(...batch);
+    }
+    if (version !== generation || owner !== state.owner) return;
+    state.nft = { tokens, loading: false, error: "" };
+    render();
+  } catch (error) {
+    if (version !== generation || owner !== state.owner) return;
+    state.nft = { tokens: [], loading: false, error: errorMessage(error) };
+    render();
+  }
+}
+
+function reviewNftSend(token, version) {
+  const panel = dialog(
+    "Review NFT transfer",
+    `${pair("NFT", token.metadata?.name || `#${token.tokenId}`)}${pair("Collection", token.collection || "Unnamed collection")}${pair("Contract", token.contract)}<form id="nft-send-form"><div class="field"><label for="nft-recipient">Recipient address</label><input id="nft-recipient" name="recipient" required autocomplete="off" placeholder="0x�"></div><p class="micro">Sending this NFT cannot be undone.</p><p role="alert"></p><button class="btn">Confirm transfer</button></form>`,
+  );
+  const form = panel.querySelector("#nft-send-form");
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const submit = form.querySelector("button");
+    const alert = form.querySelector('[role="alert"]');
+    submit.disabled = true;
+    try {
+      if (version !== generation || !panel.open)
+        throw new Error("Wallet or review changed. Review again.");
+      if (state.chain !== chainId) throw new Error("Switch to Robinhood Chain first.");
+      const recipient = String(new FormData(form).get("recipient")).trim();
+      const tx = nft.transferCall(token, state.owner, recipient);
+      await assertWallet(state.provider, state.owner, 4663);
+      const code = await state.provider.request({
+        method: "eth_getCode",
+        params: [tx.to, "latest"],
+      });
+      if (!code || code === "0x") throw new Error("NFT contract is unavailable.");
+      const request = { from: state.owner, ...tx };
+      await state.provider.request({ method: "eth_call", params: [request, "latest"] });
+      const gas = await state.provider.request({ method: "eth_estimateGas", params: [request] });
+      if (version !== generation || !panel.open)
+        throw new Error("Wallet or review changed. Review again.");
+      nft.checkTransfer(tx, token, state.owner, recipient);
+      await assertWallet(state.provider, state.owner, 4663);
+      const hash = await state.provider.request({
+        method: "eth_sendTransaction",
+        params: [{ ...request, gas, chainId: "0x1237" }],
+      });
+      if (!isHash(hash)) throw new Error("Wallet returned no valid transaction hash.");
+      panel.innerHTML = `<h2>Transaction submitted</h2><p>${explorer(hash)}</p>`;
+    } catch (error) {
+      alert.textContent = errorMessage(error);
+      submit.disabled = false;
+    }
+  };
+}
 async function loadBalances(version = generation) {
   if (!state.provider || state.chain !== chainId) return;
   const provider = state.provider,
@@ -2415,6 +2508,7 @@ async function loadBalances(version = generation) {
 function clearAccount() {
   generation++;
   state.bridges = [];
+  state.nft = { tokens: [], loading: false, error: "" };
   state.owner = "";
   state.chain = null;
   state.account = null;
@@ -2469,6 +2563,7 @@ async function setAccount(accounts) {
     if (version === generation) state.notice = errorMessage(error);
   }
   if (version === generation) await refreshAccount();
+  if (version === generation && route() === "nfts") void loadNfts();
 }
 // What the owner most recently confirmed a tag to mean, by address. Shown
 // beside the recipient on the approvals panel so the name and the address stay
@@ -3766,6 +3861,10 @@ document.addEventListener("click", async (event) => {
     index = Number(target.dataset.index);
   try {
     if (action === "close") closeDialog();
+    if (action === "nft-send") {
+      const token = state.nft.tokens[Number(target.dataset.index)];
+      if (token) reviewNftSend(token, generation);
+    }
     if (action === "connect") walletModal("connect");
     if (action === "wallet-account") walletModal("account");
     if (action === "disconnect") walletModal("disconnect");

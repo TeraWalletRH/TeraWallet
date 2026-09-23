@@ -7,6 +7,11 @@ export const LOCAL_ONLY = [
     detail: "Held by your wallet extension. Tera never receives a key or a seed phrase.",
   },
   {
+    label: "NFT discovery and pictures",
+    detail:
+      "NFTs are found from Robinhood Chain transfer logs and contract reads through your wallet provider or configured balance endpoint. Metadata and pictures load directly from collection servers or the public Pinata IPFS gateway; those hosts see your network address and the token requested.",
+  },
+  {
     label: "Token balances",
     detail:
       "Read through your wallet's own network provider with eth_getBalance and eth_call. Balances are not sent to Tera.",

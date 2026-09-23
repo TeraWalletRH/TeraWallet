@@ -40,6 +40,7 @@ test("only a party this browser connects to is said to see the network address",
     .map((entry) => entry.id);
   assert.deepEqual(seesAddress.sort(), [
     "chain-rpc",
+    "nft-media",
     "page-host",
     // Reached by the wallet's provider. This page cannot tell whose address it
     // ends up seeing, so it is listed among those that see the owner's: warning
@@ -115,11 +116,11 @@ test("the explorer is only reached when a link is opened", () => {
 test("the summary counts parties rather than asserting a number", () => {
   const log = [describeRequest("/api/agent/chat", { message: "hello" })];
   const totals = egressSummary(rows(log, { owner, records: 1 }));
-  // Ten since the price source was named. These numbers are asserted precisely so that
+  // Eleven with the NFT media hosts named. These numbers are asserted precisely so that
   // adding a party has to be a decision: a new row that nobody counted is how a panel
   // that promises to list everyone quietly stops doing so.
-  assert.equal(totals.parties, 10);
-  assert.equal(totals.direct, 5);
+  assert.equal(totals.parties, 11);
+  assert.equal(totals.direct, 6);
   // Tera reaches the price source from its own server, like the model provider.
   assert.equal(totals.relayed, 3);
   // The chain RPC and the sequencer are both reachable and both uncountable.

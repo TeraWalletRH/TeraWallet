@@ -35,6 +35,8 @@ import * as vault from "./src/storage";
 import { normalizePhrase, walletFromPhrase } from "./src/crypto";
 import { Button, Choices, colors, Field, Row, styles as s } from "./src/ui";
 import { minimise, PROPOSAL_KEEP, rehydrate, residual, type MinimiseResult } from "./src/minimise";
+import { Gallery, type Item as NftItem } from "./src/Gallery";
+import { nft } from "./src/core";
 
 type Review = {
   title: string;
@@ -887,6 +889,28 @@ function Wallet() {
       ],
     });
   }
+  function sendNft(token: NftItem, recipientText: string) {
+    try {
+      const recipient = recipientText.trim();
+      check(isAddress(recipient), t("Enter a valid recipient address.", "???????????"));
+      const step = nft.transferCall(token, owner, recipient);
+      const reviewed = { ...step, chainId: chain.id } as Tx;
+      void presentReview({
+        title: t("Send NFT", "?? NFT"),
+        rows: [
+          [t("NFT", "NFT"), token.metadata?.name || "#" + token.tokenId],
+          [t("Collection", "??"), token.collection || t("Unnamed collection", "?????")],
+          [t("Token ID", "????"), token.tokenId],
+          [t("Recipient", "????"), recipient],
+        ],
+        steps: [reviewed],
+        recipient,
+        verify: () => nft.checkTransfer(reviewed, token, owner, recipient),
+      });
+    } catch (e) {
+      Alert.alert(t("Cannot send NFT", "???? NFT"), String((e as Error)?.message || e));
+    }
+  }
   async function presentReview(next: Review) {
     setReview({ ...next, simulation: "checking" });
     try {
@@ -1287,6 +1311,10 @@ function Wallet() {
     );
   }
   function main() {
+    if (page === "nfts" && owner)
+      return (
+        <Gallery key={owner} owner={owner} t={t} onBack={() => setPage("home")} onSend={sendNft} />
+      );
     if (page === "home")
       return (
         <>
@@ -1473,6 +1501,11 @@ function Wallet() {
               </Pressable>
             ))}
           </View>
+          <Pressable accessibilityRole="button" onPress={() => setPage("nfts")} style={s.row}>
+            <MaterialCommunityIcons name="image-multiple-outline" size={23} color={colors.green} />
+            <Text style={[s.text, { flex: 1 }]}>{t("NFT gallery", "NFT ??")}</Text>
+            <MaterialCommunityIcons name="chevron-right" size={20} color={colors.muted} />
+          </Pressable>{" "}
           <View style={[s.panel, { backgroundColor: "#e5f2df" }]}>
             <View
               style={{

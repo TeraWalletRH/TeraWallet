@@ -81,7 +81,13 @@ test("a signing method is refused before any request is made", async () => {
 });
 
 test("the read list is exactly what a balance needs and nothing more", () => {
-  assert.deepEqual(READ_METHODS, ["eth_chainId", "eth_blockNumber", "eth_getBalance", "eth_call"]);
+  assert.deepEqual(READ_METHODS, [
+    "eth_chainId",
+    "eth_blockNumber",
+    "eth_getBalance",
+    "eth_call",
+    "eth_getLogs",
+  ]);
 });
 
 test("a read carries no cookies and no referrer", async () => {

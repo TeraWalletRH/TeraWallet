@@ -1,4 +1,4 @@
-# Tera for Android
+﻿# Tera for Android
 
 Native Expo / React Native wallet, using Tera's cream, forest-green and monospace visual language. English and Simplified Chinese are available in the app. No WebView or external wallet is required.
 
@@ -142,3 +142,7 @@ Use a disposable phrase and small amounts. Automated tests do not replace physic
 6. Test English/Chinese, larger system fonts, keyboard layout, retained drafts, data deletion and wallet erasure/recovery.
 
 Production distribution requires device acceptance and a review of custody/signing code in addition to a successful build.
+
+## NFTs
+
+The NFT gallery finds ERC-721 and ERC-1155 tokens from Robinhood Chain and sends them through the app's transaction review. Metadata and pictures load directly from third-party collection servers and the public Pinata IPFS gateway. These hosts see your network address and the requested token; some pictures may fail to load.

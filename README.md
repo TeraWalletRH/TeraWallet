@@ -1,4 +1,4 @@
-# Tera Wallet
+﻿# Tera Wallet
 
 [![CI](https://github.com/notadeveloper7/terrawallet/actions/workflows/backend.yml/badge.svg)](https://github.com/notadeveloper7/terrawallet/actions/workflows/backend.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -230,3 +230,9 @@ terrawallet/
 - **Chain & Protocol**: Robinhood Chain (Arbitrum Orbit L2), ERC-4337 Account Abstraction, ERC-3643 (T-REX).
 - **Deployment**: Render (Backend), Vercel (Frontend).
 - **CI/CD**: GitHub Actions + GitHub Container Registry (GHCR).
+
+## NFT gallery
+
+The dashboard and Android app find ERC-721 and ERC-1155 tokens from Robinhood Chain transfer logs and verify current ownership with the token contracts. Send uses the wallet's normal review and signing flow. NFT metadata and pictures load directly from collection servers or the public Pinata IPFS gateway. Those third-party hosts can see your network address and which token was requested; Pinata may rate-limit image requests, and some web metadata hosts block browser reads.
+
+Open the [NFT gallery](https://terawallet.app/dashboard/nfts/).
