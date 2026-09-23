@@ -11,7 +11,7 @@ on:
         description: EAS build profile
         type: choice
         options: [preview, production]
-        default: preview
+        default: production
       submit:
         description: Submit the finished build to App Store Connect (production profile only)
         type: boolean
@@ -52,7 +52,11 @@ jobs:
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
-          profile="${{ github.event.inputs.profile || 'preview' }}"
+          # No signing credentials exist for the "preview" (ad hoc) profile —
+          # only "production" (App Store/TestFlight) does, set up once via
+          # `eas credentials`. Regular pushes must default to production or
+          # every push-triggered build fails with no credentials to sign with.
+          profile="${{ github.event.inputs.profile || 'production' }}"
           bunx eas-cli build --platform ios --profile "$profile" --non-interactive --no-wait
       - name: Submit to App Store Connect
         if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.submit == 'true' && github.event.inputs.profile == 'production' }}
