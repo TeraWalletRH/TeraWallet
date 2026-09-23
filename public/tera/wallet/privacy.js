@@ -56,6 +56,21 @@ export const LOCAL_ONLY = [
       "If you point balance reads at your own node, the address is kept in the encrypted local vault because it can carry your API key. Tera never receives it, and only its host is ever displayed or exported.",
   },
   {
+    label: "What your holdings are worth",
+    detail:
+      "The price list covers every asset in the registry and is fetched without an address, so it cannot say which of them are yours. Multiplying it by your balances happens in this page. No total, no holding and no list of symbols is ever sent to be valued — which is how the same figure is produced everywhere else.",
+  },
+  {
+    label: "Which of your accounts have been joined up, and by whom",
+    detail:
+      "Switching accounts does not separate them: a party that reads for two of them holds the fact that they are one person. That is counted in this page, per pair, for this session only — never the vault, never browser storage. A stored list of your accounts with a note of who saw each would be the same record the count exists to warn you about. A reload empties it, which does not mean the operators forgot.",
+  },
+  {
+    label: "A request that would name two of your accounts",
+    detail:
+      "Refused before it is built, so it is not sent and does not appear in the log below — a row saying which two accounts were nearly joined is a smaller version of the same record. Allowing one is a switch in Settings that starts off and goes back off when the page reloads.",
+  },
+  {
     label: "Balance visibility and filters",
     detail: "Interface state that stays in the page and is never transmitted.",
   },
@@ -116,6 +131,21 @@ export const REQUESTS = [
     processors: ["Tera service"],
     retention: "No owner data is sent, so there is nothing to retain for this request.",
     withheld: ["Wallet address", "Balances", "Proposal history"],
+  },
+  {
+    id: "asset-prices",
+    method: "GET",
+    path: "/api/assets/prices",
+    match: (path) => path === "/api/assets/prices",
+    label: "Asset prices",
+    purpose:
+      "Load the price of every asset in the registry. Not the price of what you hold: this request carries nothing, so it is the same request whoever makes it, and what you own is multiplied out on this device.",
+    fields: [],
+    identifies: false,
+    processors: ["Tera service", "Public market data API, for ETH only"],
+    retention:
+      "No owner data is sent, so there is nothing to retain for this request. Tera caches one answer for thirty seconds and serves it to everybody, so the market API behind the ETH price sees Tera asking twice a minute and never sees a user.",
+    withheld: ["Wallet address", "Balances", "Which assets you hold", "Assistant messages"],
   },
   {
     id: "account-register",

@@ -8,9 +8,13 @@ on:
   workflow_dispatch:
     inputs:
       signed_release:
-        description: Build a production-signed APK and AAB (requires signing secrets)
+        description: Build a production-signed APK and AAB and publish it to the android-production release (main only; requires signing secrets)
         type: boolean
         default: false
+      release_notes:
+        description: Notes shown in the app for a production release
+        type: string
+        default: ""
 permissions:
   contents: write
 concurrency:
@@ -31,11 +35,24 @@ jobs:
       EXPO_PUBLIC_API_URL: https://api.terawallet.app
       EXPO_PUBLIC_RPC_URL: https://rpc.mainnet.chain.robinhood.com
       EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY: ${{ vars.EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY || '0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05' }}
-      # Unset means no JavaScript update channel, and the Update button falls
-      # back to downloading a new APK.
-      EXPO_PUBLIC_UPDATES_URL: ${{ vars.EXPO_PUBLIC_UPDATES_URL || '' }}
+      # Which release this run publishes, if any: a push to main publishes
+      # preview, and a signed manual run on main publishes production.
+      # Everything else only builds.
+      PUBLISH_PREVIEW: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.signed_release }}
+      PUBLISH_PRODUCTION: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.signed_release }}
     steps:
       - uses: actions/checkout@v4
+      # Fails before anything is built, so a production run never publishes an
+      # APK that installed production apps would refuse.
+      - name: Check release configuration
+        if: ${{ env.PUBLISH_PRODUCTION == 'true' }}
+        env:
+          RELEASE_CERT: ${{ vars.ANDROID_RELEASE_CERT_SHA256 }}
+        run: |
+          if [ -z "$RELEASE_CERT" ]; then
+            echo "::error::Set the ANDROID_RELEASE_CERT_SHA256 repository variable before publishing production. See android/README.md."
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -54,11 +71,56 @@ jobs:
         with:
           bun-version: "1.4.2"
       - run: bun install --frozen-lockfile
+      # Install the NDK the generated project asks for before anything runs
+      # Gradle. Left to Gradle, it is downloaded implicitly, and a corrupt
+      # archive ("Error on ZipFile unknown archive") fails the build. The
+      # version is read from React Native, so an upgrade cannot leave this
+      # installing the wrong one.
+      - name: Install Android NDK
+        run: |
+          ndk="$(sed -n 's/^ndkVersion = "\(.*\)"$/\1/p' node_modules/react-native/gradle/libs.versions.toml)"
+          test -n "$ndk"
+          sdkmanager="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -x "$sdkmanager" ]; then
+            sdkmanager="$(find "$ANDROID_SDK_ROOT/cmdline-tools" -type f -name sdkmanager -print -quit)"
+          fi
+          test -n "$sdkmanager" && test -x "$sdkmanager"
+          yes | "$sdkmanager" --licenses >/dev/null || true
+          for attempt in 1 2 3; do
+            # Remove anything a failed download left behind before trying.
+            rm -rf "$ANDROID_SDK_ROOT/ndk/$ndk"
+            if "$sdkmanager" --install "ndk;$ndk" >/dev/null && [ -x "$ANDROID_SDK_ROOT/ndk/$ndk/ndk-build" ]; then
+              echo "Installed NDK $ndk"
+              exit 0
+            fi
+            echo "::warning::NDK $ndk install attempt $attempt failed."
+          done
+          echo "::error::Could not install NDK $ndk."
+          exit 1
       - run: bun run check && bun test tests
       - run: bunx expo install --check
       - run: bun run export
       - run: bun run prebuild
-      - name: Build Android App Bundle (.aab) and APK (.apk)
+      - name: Build preview APK
+        if: ${{ !inputs.signed_release }}
+        run: |
+          cd android
+          ./gradlew assembleRelease --no-daemon
+          mkdir -p ../../artifacts
+          cp app/build/outputs/apk/release/app-release.apk ../../artifacts/tera-android-preview.apk
+      # Preview is signed with Expo's development key from the prebuild
+      # template. Set ANDROID_PREVIEW_CERT_SHA256 to have a change of that key
+      # stop the run instead of publishing a file no preview install accepts.
+      - name: Check preview APK identity
+        if: ${{ !inputs.signed_release }}
+        working-directory: .
+        env:
+          PREVIEW_CERT: ${{ vars.ANDROID_PREVIEW_CERT_SHA256 }}
+        run: |
+          bash android/scripts/verify-apk.sh artifacts/tera-android-preview.apk \
+            app.terawallet.android.preview "$GITHUB_RUN_NUMBER" "$PREVIEW_CERT"
+      - name: Build signed release
+        if: ${{ inputs.signed_release && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -93,52 +155,46 @@ jobs:
           keytool -list -keystore "$TERA_KEYSTORE_PATH" -storepass "${ANDROID_KEYSTORE_PASSWORD:-TeraWallet2026Secure}" -storetype PKCS12
           printf '\napply from: "../../scripts/signing.gradle"\n' >> android/app/build.gradle
           cd android
-          ./gradlew bundleRelease assembleRelease --no-daemon
-          mkdir -p "$GITHUB_WORKSPACE/artifacts"
-          if [ -f app/build/outputs/bundle/release/app-release.aab ]; then
-            cp app/build/outputs/bundle/release/app-release.aab "$GITHUB_WORKSPACE/artifacts/tera-android.aab"
-          fi
-          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
-            cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/artifacts/tera-android.apk"
-            cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/artifacts/tera-android-preview.apk"
-          fi
-          ls -la "$GITHUB_WORKSPACE/artifacts"
+          ./gradlew assembleRelease bundleRelease --no-daemon
+          mkdir -p ../../artifacts
+          cp app/build/outputs/apk/release/app-release.apk ../../artifacts/tera-android.apk
+          cp app/build/outputs/bundle/release/app-release.aab ../../artifacts/tera-android.aab
+      # A production APK signed by any other key would be refused by every
+      # installed production app, so the certificate must match the one the
+      # owner registered.
+      - name: Check production APK identity
+        if: ${{ env.PUBLISH_PRODUCTION == 'true' }}
+        working-directory: .
+        env:
+          RELEASE_CERT: ${{ vars.ANDROID_RELEASE_CERT_SHA256 }}
+        run: |
+          bash android/scripts/verify-apk.sh artifacts/tera-android.apk \
+            app.terawallet.android "$GITHUB_RUN_NUMBER" "$RELEASE_CERT"
       - uses: actions/upload-artifact@v4
         with:
           name: tera-android-${{ github.run_number }}
           path: ${{ github.workspace }}/artifacts/*
           if-no-files-found: error
           retention-days: 14
-      - name: Write the version manifest
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - name: Write the preview version manifest
+        if: ${{ env.PUBLISH_PREVIEW == 'true' }}
         env:
+          TERA_CHANNEL: preview
+          TERA_VERSION_CODE: ${{ github.run_number }}
           # The floor below which a build stops being offered as optional and
           # starts being told it is unsupported. Set it as a repository
           # variable when a release must not be kept running; leaving it at 1
           # means every published build is a suggestion, never a demand.
-          MIN_SUPPORTED: ${{ vars.ANDROID_MIN_SUPPORTED_VERSION_CODE || '1' }}
-        working-directory: .
-        run: |
-          apk="$GITHUB_WORKSPACE/artifacts/tera-android-preview.apk"
-          # Computed in the run that produced the binary. A digest taken later,
-          # from whatever a server downloaded, would establish nothing.
-          digest="$(sha256sum "$apk" | cut -d" " -f1)"
-          version_name="$(node -p "require('./android/app.json').expo.version")"
-          cat > "$GITHUB_WORKSPACE/artifacts/tera-android-preview.json" <<JSON
-          {
-            "platform": "android",
-            "versionCode": ${GITHUB_RUN_NUMBER},
-            "versionName": "${version_name}",
-            "minSupportedVersionCode": ${MIN_SUPPORTED},
-            "sha256": "${digest}",
-            "publishedAt": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-            "notes": "Automated Android preview build."
-          }
-          JSON
-          node -e "JSON.parse(require('fs').readFileSync('$GITHUB_WORKSPACE/artifacts/tera-android-preview.json','utf8'))"
-          cat "$GITHUB_WORKSPACE/artifacts/tera-android-preview.json"
+          TERA_MIN_SUPPORTED: ${{ vars.ANDROID_MIN_SUPPORTED_VERSION_CODE || '1' }}
+          TERA_NOTES: Automated Android preview build.
+        # Computed in the run that produced the binary. A digest taken later,
+        # from whatever a server downloaded, would establish nothing.
+        run: node scripts/release-manifest.mjs ../artifacts/tera-android-preview.apk ../artifacts/tera-android-preview.json
+      # The APK goes up before its manifest. In between, the old manifest's
+      # digest does not match the new file, and the app refuses it rather than
+      # installing it.
       - name: Publish latest preview APK
-        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        if: ${{ env.PUBLISH_PREVIEW == 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
         working-directory: .
@@ -147,3 +203,23 @@ jobs:
             gh release create android-preview --repo "$GITHUB_REPOSITORY" --title "Tera Android Preview" --notes "Latest automated Android preview build." --prerelease --latest=false
           gh release upload android-preview "$GITHUB_WORKSPACE/artifacts/tera-android-preview.apk" --repo "$GITHUB_REPOSITORY" --clobber
           gh release upload android-preview "$GITHUB_WORKSPACE/artifacts/tera-android-preview.json" --repo "$GITHUB_REPOSITORY" --clobber
+      - name: Write the production version manifest
+        if: ${{ env.PUBLISH_PRODUCTION == 'true' }}
+        env:
+          TERA_CHANNEL: production
+          TERA_VERSION_CODE: ${{ github.run_number }}
+          TERA_MIN_SUPPORTED: ${{ vars.ANDROID_PRODUCTION_MIN_SUPPORTED_VERSION_CODE || '1' }}
+          # Passed through the environment, never pasted into the script, so
+          # the notes cannot run as shell.
+          TERA_NOTES: ${{ inputs.release_notes }}
+        run: node scripts/release-manifest.mjs ../artifacts/tera-android.apk ../artifacts/tera-android.json
+      - name: Publish production APK
+        if: ${{ env.PUBLISH_PRODUCTION == 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        working-directory: .
+        run: |
+          gh release view android-production --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 || \
+            gh release create android-production --repo "$GITHUB_REPOSITORY" --title "Tera Android" --notes "Latest signed Android release. It installs over Tera Wallet (app.terawallet.android) only." --latest=false
+          gh release upload android-production "$GITHUB_WORKSPACE/artifacts/tera-android.apk" --repo "$GITHUB_REPOSITORY" --clobber
+          gh release upload android-production "$GITHUB_WORKSPACE/artifacts/tera-android.json" --repo "$GITHUB_REPOSITORY" --clobber

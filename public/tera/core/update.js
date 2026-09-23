@@ -37,6 +37,31 @@ export const JAVASCRIPT = "javascript";
 /** A new APK, which Android installs through its own confirmation screen. */
 export const NATIVE = "native";
 
+/**
+ * The two release channels, and the one application ID each is built with.
+ *
+ * Android installs an APK over an existing app only when both the application
+ * ID and the signing key match, so a channel is not a preference: it is fixed
+ * by which app is installed. Preview and production are different apps with
+ * different storage, and neither may be offered the other's file.
+ */
+export const CHANNELS = {
+  preview: { applicationId: "app.terawallet.android.preview" },
+  production: { applicationId: "app.terawallet.android" },
+};
+
+/**
+ * Which channel an installed app belongs to, from its application ID.
+ *
+ * An ID that is neither — a local development build, say — has no channel and
+ * returns null, so it is offered nothing rather than guessed into one.
+ */
+export function channelForApplicationId(applicationId) {
+  for (const [channel, config] of Object.entries(CHANNELS))
+    if (config.applicationId === applicationId) return channel;
+  return null;
+}
+
 const isCount = (value) => Number.isSafeInteger(value) && value >= 0;
 const isSha256 = (value) => typeof value === "string" && /^[\da-f]{64}$/i.test(value);
 
@@ -64,8 +89,18 @@ export function parseManifest(input) {
     throw new UpdateError("The manifest does not say what the download should hash to.");
   if (typeof doc.downloadUrl !== "string" || !/^https:\/\//.test(doc.downloadUrl))
     throw new UpdateError("The manifest has no https download.");
+  // Manifests published before channels existed were all preview, so a
+  // missing channel means preview and nothing else.
+  const channel = doc.channel ?? "preview";
+  if (typeof channel !== "string" || !Object.prototype.hasOwnProperty.call(CHANNELS, channel))
+    throw new UpdateError("The manifest names a channel this app does not know.");
+  const applicationId = doc.applicationId ?? CHANNELS[channel].applicationId;
+  if (applicationId !== CHANNELS[channel].applicationId)
+    throw new UpdateError("The manifest's application ID does not belong to its channel.");
   return {
     platform: "android",
+    channel,
+    applicationId,
     versionCode: doc.versionCode,
     versionName: doc.versionName,
     minSupportedVersionCode: doc.minSupportedVersionCode,
@@ -84,9 +119,15 @@ export function parseManifest(input) {
  * build that cannot read its own version reports — is treated as up to date
  * rather than as ancient: prompting every owner of every build because a
  * number could not be read would be worse than missing an update.
+ *
+ * `channel` is the installed app's own channel. A manifest for the other one
+ * is refused outright: its APK has a different application ID, so Android
+ * would install it as a second app rather than update this one.
  */
-export function updateState({ manifest, installed }) {
+export function updateState({ manifest, installed, channel = "preview" }) {
   const published = parseManifest(manifest);
+  if (published.channel !== channel)
+    throw new UpdateError(`This manifest is for ${published.channel}, not ${channel}.`);
   if (!isCount(installed)) {
     return {
       state: CURRENT,

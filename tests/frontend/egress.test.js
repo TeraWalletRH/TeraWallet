@@ -115,9 +115,13 @@ test("the explorer is only reached when a link is opened", () => {
 test("the summary counts parties rather than asserting a number", () => {
   const log = [describeRequest("/api/agent/chat", { message: "hello" })];
   const totals = egressSummary(rows(log, { owner, records: 1 }));
-  assert.equal(totals.parties, 9);
+  // Ten since the price source was named. These numbers are asserted precisely so that
+  // adding a party has to be a decision: a new row that nobody counted is how a panel
+  // that promises to list everyone quietly stops doing so.
+  assert.equal(totals.parties, 10);
   assert.equal(totals.direct, 5);
-  assert.equal(totals.relayed, 2);
+  // Tera reaches the price source from its own server, like the model provider.
+  assert.equal(totals.relayed, 3);
   // The chain RPC and the sequencer are both reachable and both uncountable.
   assert.equal(totals.uncounted, 3);
   // Page host, Tera, the model provider, the wallet's provider and the ledger.
@@ -326,4 +330,22 @@ test("the export lists every operator separately", () => {
     exported.map((entry) => entry.contactedThisSession),
     [false, true],
   );
+});
+
+test("the parties that see every account pair are parties the egress panel names", () => {
+  // `linkage.js` tells an owner that Tera's service, their network address and
+  // their wallet extension see every pair of their accounts regardless of how
+  // the endpoint pool is arranged. That is only credible while those are the
+  // same three the egress panel lists as seeing this browser directly. If a row
+  // here is renamed or dropped, the separation panel starts naming a party that
+  // this wallet no longer says exists.
+  const list = parties(config);
+  assert.ok(row(list, "tera-service"), "the separation panel names Tera's service");
+  assert.ok(row(list, "page-host"), "the separation panel names the network address");
+  assert.ok(row(list, "wallet-rpc"), "the separation panel names the wallet extension");
+  for (const id of ["tera-service", "page-host", "wallet-rpc"])
+    assert.ok(
+      ["direct", "wallet"].includes(row(list, id).reach),
+      `${id} no longer sees this browser directly, so it cannot see every pair`,
+    );
 });
