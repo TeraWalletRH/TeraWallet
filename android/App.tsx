@@ -2600,141 +2600,88 @@ function Wallet() {
       );
     if (page === "leaderboard") {
       const myTagHandle = myTag || "@tera_owner";
+      // TODO(leaderboard): these figures are placeholders. They must come from
+      // /api/leaderboard before this screen is shown to anyone, because a rank
+      // the app made up and labelled as the owner's is a false statement about
+      // them, not a placeholder.
+      const standing = { rank: 1, tier: "Grandmaster", points: "3,450", intents: "142", referrals: "38" };
+      const board = [
+        { rank: 1, tag: "@astra", pts: "3,450", badge: "Grandmaster" },
+        { rank: 2, tag: "@robin_god", pts: "2,890", badge: "Grandmaster" },
+        { rank: 3, tag: "@orbit_whale", pts: "2,150", badge: "Master" },
+        { rank: 4, tag: "@cyber_rwa", pts: "1,780", badge: "Master" },
+        { rank: 5, tag: "@nexus_alpha", pts: "1,240", badge: "Senior" },
+        { rank: 6, tag: "@tera_guard", pts: "980", badge: "Senior" },
+      ];
       return (
         <>
           {title(
-            "Supervisor Ranks.",
+            "Supervisor ranks.",
             "监督者榜单。",
             t(
-              "Global leaderboard for AI Agent Supervisors on Robinhood Chain L2.",
-              "Robinhood Chain L2 上的 AI 代理监督者全球榜单。",
+              "Points are earned by reviewing an agent's proposal and signing it yourself.",
+              "通过审核代理提议并亲自签名来赚取积分。",
             ),
           )}
-          <View
-            style={[
-              s.panel,
-              { backgroundColor: "#15281e", borderColor: colors.green, borderWidth: 1 },
-            ]}
-          >
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                <Text style={{ fontSize: 28 }}>🏆</Text>
-                <View>
-                  <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 18 }}>
-                    {myTagHandle}
-                  </Text>
-                  <Text style={{ color: colors.lime, fontWeight: "700", fontSize: 12 }}>
-                    GRANDMASTER SUPERVISOR
-                  </Text>
-                </View>
-              </View>
-              <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 18 }}>#1</Text>
-            </View>
 
-            <View
-              style={{
-                flexDirection: "row",
-                justifyContent: "space-between",
-                marginTop: 16,
-                paddingTop: 12,
-                borderTopWidth: 1,
-                borderTopColor: "#ffffff22",
-              }}
-            >
-              <View>
-                <Text style={{ color: "#a0aec0", fontSize: 11, fontWeight: "600" }}>POINTS</Text>
-                <Text style={{ color: colors.lime, fontWeight: "800", fontSize: 18 }}>3,450</Text>
-              </View>
-              <View>
-                <Text style={{ color: "#a0aec0", fontSize: 11, fontWeight: "600" }}>
-                  INTENTS SIGNED
-                </Text>
-                <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 18 }}>142</Text>
-              </View>
-              <View>
-                <Text style={{ color: "#a0aec0", fontSize: 11, fontWeight: "600" }}>
-                  REFERRALS
-                </Text>
-                <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 18 }}>38</Text>
-              </View>
-            </View>
-
-            <View style={{ gap: 8, marginTop: 16 }}>
-              <Button
-                primary
-                onPress={() => {
-                  const text = `Ranked #1 Agent Supervisor on @TeraWalletRH 🏆\nPassed 142 safety gates on Robinhood Chain L2!\nJoin me: https://terawallet.app/dashboard/?ref=${encodeURIComponent(myTagHandle)}`;
-                  void Linking.openURL(
-                    `https://x.com/intent/tweet?text=${encodeURIComponent(text)}`,
-                  );
-                }}
-              >
-                {t("Flex Rank on X", "在 X 上炫耀排名")}
-              </Button>
-              <Button
-                onPress={async () => {
-                  await Clipboard.setStringAsync(
-                    `https://terawallet.app/dashboard/?ref=${encodeURIComponent(myTagHandle)}`,
-                  );
-                  setNotice({
-                    title: t("Referral Copied", "推荐链接已复制"),
-                    body: t(
-                      "Share your referral link with friends to earn Supervisor Points!",
-                      "与好友分享你的推荐链接以赚取监督者积分！",
-                    ),
-                    tone: "success",
-                  });
-                }}
-              >
-                {t("Copy Referral Link", "复制推荐链接")}
-              </Button>
-            </View>
+          <View style={s.panel}>
+            <Text style={s.eyebrow}>{t("YOUR STANDING", "你的排名")}</Text>
+            <Text style={[s.title, { fontSize: 40, lineHeight: 44 }]}>#{standing.rank}</Text>
+            <Text style={s.small}>
+              {myTagHandle} · {t(`${standing.tier} supervisor`, `${standing.tier} 监督者`)}
+            </Text>
+            <Row label={t("Points", "积分")} value={standing.points} />
+            <Row label={t("Intents signed", "已签名意图")} value={standing.intents} />
+            <Row label={t("Referrals", "推荐人数")} value={standing.referrals} />
           </View>
 
-          <Text style={s.eyebrow}>{t("TOP AGENT SUPERVISORS", "顶级代理监督者")}</Text>
+          <View style={{ gap: 8 }}>
+            <Button
+              primary
+              onPress={() => {
+                const text =
+                  `Ranked #${standing.rank} supervising agent actions on Tera.
 
-          {[
-            { rank: "🏆 #1", tag: "@astra", pts: "3,450 pts", badge: "Grandmaster" },
-            { rank: "🥇 #2", tag: "@robin_god", pts: "2,890 pts", badge: "Grandmaster" },
-            { rank: "🥈 #3", tag: "@orbit_whale", pts: "2,150 pts", badge: "Master" },
-            { rank: "🥉 #4", tag: "@cyber_rwa", pts: "1,780 pts", badge: "Master" },
-            { rank: "#5", tag: "@nexus_alpha", pts: "1,240 pts", badge: "Senior" },
-            { rank: "#6", tag: "@tera_guard", pts: "980 pts", badge: "Senior" },
-          ].map((item) => (
-            <View
-              key={item.tag}
-              style={[
-                s.panel,
-                {
-                  backgroundColor: colors.paper,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                },
-              ]}
+` +
+                  `${standing.points} supervisor points · ${standing.intents} intents reviewed and signed by me, not for me.
+
+` +
+                  `https://terawallet.app/dashboard/?ref=${encodeURIComponent(myTagHandle)}`;
+                void Linking.openURL(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`);
+              }}
             >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                <Text style={{ fontWeight: "800", fontSize: 15, color: colors.ink, width: 45 }}>
-                  {item.rank}
-                </Text>
-                <View>
-                  <Text style={{ fontWeight: "700", fontSize: 15, color: colors.ink }}>
-                    {item.tag}
-                  </Text>
-                  <Text style={{ fontSize: 12, color: colors.muted }}>{item.badge} Supervisor</Text>
-                </View>
-              </View>
-              <Text style={{ fontWeight: "800", fontSize: 14, color: colors.green }}>
-                {item.pts}
-              </Text>
-            </View>
-          ))}
+              {t("Share rank on X", "在 X 上分享排名")}
+            </Button>
+            <Button
+              onPress={async () => {
+                await Clipboard.setStringAsync(
+                  `https://terawallet.app/dashboard/?ref=${encodeURIComponent(myTagHandle)}`,
+                );
+                setNotice({
+                  title: t("Referral link copied", "推荐链接已复制"),
+                  body: t(
+                    "The link carries your tag and nothing else. It cannot act on your behalf.",
+                    "该链接仅包含你的标签，不能代表你行事。",
+                  ),
+                  tone: "success",
+                });
+              }}
+            >
+              {t("Copy referral link", "复制推荐链接")}
+            </Button>
+          </View>
+
+          <Text style={s.eyebrow}>{t("RANKED SUPERVISORS", "监督者排行")}</Text>
+
+          <View style={s.panel}>
+            {board.map((item) => (
+              <Row
+                key={item.tag}
+                label={`${item.rank}.  ${item.tag}`}
+                value={t(`${item.pts} pts`, `${item.pts} 分`)}
+              />
+            ))}
+          </View>
         </>
       );
     }
