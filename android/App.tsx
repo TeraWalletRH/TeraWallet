@@ -2565,6 +2565,146 @@ function Wallet() {
           ))}
         </>
       );
+    if (page === "leaderboard") {
+      const myTagHandle = myTag || "@tera_owner";
+      return (
+        <>
+          {title(
+            "Supervisor Ranks.",
+            "监督者榜单。",
+            t(
+              "Global leaderboard for AI Agent Supervisors on Robinhood Chain L2.",
+              "Robinhood Chain L2 上的 AI 代理监督者全球榜单。",
+            ),
+          )}
+          <View
+            style={[
+              s.panel,
+              { backgroundColor: "#15281e", borderColor: colors.green, borderWidth: 1 },
+            ]}
+          >
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "space-between",
+              }}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <Text style={{ fontSize: 28 }}>🏆</Text>
+                <View>
+                  <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 18 }}>
+                    {myTagHandle}
+                  </Text>
+                  <Text style={{ color: colors.lime, fontWeight: "700", fontSize: 12 }}>
+                    GRANDMASTER SUPERVISOR
+                  </Text>
+                </View>
+              </View>
+              <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 18 }}>#1</Text>
+            </View>
+
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                marginTop: 16,
+                paddingTop: 12,
+                borderTopWidth: 1,
+                borderTopColor: "#ffffff22",
+              }}
+            >
+              <View>
+                <Text style={{ color: "#a0aec0", fontSize: 11, fontWeight: "600" }}>POINTS</Text>
+                <Text style={{ color: colors.lime, fontWeight: "800", fontSize: 18 }}>3,450</Text>
+              </View>
+              <View>
+                <Text style={{ color: "#a0aec0", fontSize: 11, fontWeight: "600" }}>
+                  INTENTS SIGNED
+                </Text>
+                <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 18 }}>142</Text>
+              </View>
+              <View>
+                <Text style={{ color: "#a0aec0", fontSize: 11, fontWeight: "600" }}>
+                  REFERRALS
+                </Text>
+                <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 18 }}>38</Text>
+              </View>
+            </View>
+
+            <View style={{ gap: 8, marginTop: 16 }}>
+              <Button
+                primary
+                onPress={() => {
+                  const text = `Ranked #1 Agent Supervisor on @TeraWalletRH 🏆\nPassed 142 safety gates on Robinhood Chain L2!\nJoin me: https://terawallet.app/dashboard/?ref=${encodeURIComponent(myTagHandle)}`;
+                  void Linking.openURL(
+                    `https://x.com/intent/tweet?text=${encodeURIComponent(text)}`,
+                  );
+                }}
+              >
+                {t("Flex Rank on X", "在 X 上炫耀排名")}
+              </Button>
+              <Button
+                onPress={async () => {
+                  await Clipboard.setStringAsync(
+                    `https://terawallet.app/dashboard/?ref=${encodeURIComponent(myTagHandle)}`,
+                  );
+                  setNotice({
+                    title: t("Referral Copied", "推荐链接已复制"),
+                    body: t(
+                      "Share your referral link with friends to earn Supervisor Points!",
+                      "与好友分享你的推荐链接以赚取监督者积分！",
+                    ),
+                    tone: "success",
+                  });
+                }}
+              >
+                {t("Copy Referral Link", "复制推荐链接")}
+              </Button>
+            </View>
+          </View>
+
+          <Text style={s.eyebrow}>{t("TOP AGENT SUPERVISORS", "顶级代理监督者")}</Text>
+
+          {[
+            { rank: "🏆 #1", tag: "@astra", pts: "3,450 pts", badge: "Grandmaster" },
+            { rank: "🥇 #2", tag: "@robin_god", pts: "2,890 pts", badge: "Grandmaster" },
+            { rank: "🥈 #3", tag: "@orbit_whale", pts: "2,150 pts", badge: "Master" },
+            { rank: "🥉 #4", tag: "@cyber_rwa", pts: "1,780 pts", badge: "Master" },
+            { rank: "#5", tag: "@nexus_alpha", pts: "1,240 pts", badge: "Senior" },
+            { rank: "#6", tag: "@tera_guard", pts: "980 pts", badge: "Senior" },
+          ].map((item) => (
+            <View
+              key={item.tag}
+              style={[
+                s.panel,
+                {
+                  backgroundColor: colors.paper,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                },
+              ]}
+            >
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <Text style={{ fontWeight: "800", fontSize: 15, color: colors.ink, width: 45 }}>
+                  {item.rank}
+                </Text>
+                <View>
+                  <Text style={{ fontWeight: "700", fontSize: 15, color: colors.ink }}>
+                    {item.tag}
+                  </Text>
+                  <Text style={{ fontSize: 12, color: colors.muted }}>{item.badge} Supervisor</Text>
+                </View>
+              </View>
+              <Text style={{ fontWeight: "800", fontSize: 14, color: colors.green }}>
+                {item.pts}
+              </Text>
+            </View>
+          ))}
+        </>
+      );
+    }
     if (page === "activity")
       return (
         <>
@@ -3261,6 +3401,7 @@ function Wallet() {
           {[
             ["wallet-outline", "Wallet", "钱包", "home"],
             ["message-text-outline", "Assistant", "助手", "assistant"],
+            ["trophy-outline", "Ranks", "榜单", "leaderboard"],
             ["history", "Activity", "记录", "activity"],
             ["cog-outline", "Settings", "设置", "settings"],
           ].map(([icon, en, zh, p]) => (
