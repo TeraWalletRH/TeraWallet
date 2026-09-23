@@ -20,6 +20,8 @@ Tera Wallet is a self-custodial wallet experience for supervised real-world-asse
 
 **Android preview:** [Native wallet source and build guide](android/README.md) · [Public Android builds](https://github.com/TeraWalletRH/TeraWallet/actions/workflows/android.yml). Creates/imports a recovery phrase and signs on-device. Preview requires physical-device testing before production distribution.
 
+**iOS:** same native source as Android (see [build guide](android/README.md#ios)), built and submitted through [EAS](https://expo.dev/eas). No sideloaded-update path — iOS installs update only through TestFlight/the App Store.
+
 ---
 
 ## Core Capabilities

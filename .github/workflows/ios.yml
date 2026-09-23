@@ -1,0 +1,69 @@
+name: iOS wallet
+on:
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/ios.yml"]
+  pull_request:
+    paths: ["android/**", ".github/workflows/ios.yml"]
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: EAS build profile
+        type: choice
+        options: [preview, production]
+        default: preview
+      submit:
+        description: Submit the finished build to App Store Connect (production profile only)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: ios-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    if: github.repository == 'TeraWalletRH/TeraWallet'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: android
+    env:
+      CI: "1"
+      EXPO_NO_TELEMETRY: "1"
+      EXPO_PUBLIC_API_URL: https://api.terawallet.app
+      EXPO_PUBLIC_RPC_URL: https://rpc.mainnet.chain.robinhood.com
+      EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY: ${{ vars.EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY || '0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05' }}
+      EXPO_PUBLIC_UPDATES_URL: ${{ vars.EXPO_PUBLIC_UPDATES_URL || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - run: bun run check && bun test tests
+      # The native archive itself is built on Apple-hosted infrastructure by
+      # EAS, not this (Linux) runner, so no Xcode/macOS runner is needed here.
+      # EXPO_TOKEN authenticates the CLI to the terawallet Expo/EAS account;
+      # code signing is handled by EAS-managed credentials tied to the
+      # organization Apple Developer account.
+      - name: Build with EAS
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          profile="${{ github.event.inputs.profile || 'preview' }}"
+          bunx eas-cli build --platform ios --profile "$profile" --non-interactive --no-wait
+      - name: Submit to App Store Connect
+        if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.submit == 'true' && github.event.inputs.profile == 'production' }}
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+          EXPO_ASC_API_KEY_ID: ${{ secrets.EXPO_ASC_API_KEY_ID }}
+          EXPO_ASC_API_ISSUER_ID: ${{ secrets.EXPO_ASC_API_ISSUER_ID }}
+          ASC_API_KEY_P8_BASE64: ${{ secrets.ASC_API_KEY_P8_BASE64 }}
+        run: |
+          export EXPO_ASC_API_KEY_PATH="$RUNNER_TEMP/asc-api-key.p8"
+          trap 'rm -f "$EXPO_ASC_API_KEY_PATH"' EXIT
+          echo "$ASC_API_KEY_P8_BASE64" | base64 --decode > "$EXPO_ASC_API_KEY_PATH"
+          test -s "$EXPO_ASC_API_KEY_PATH"
+          bunx eas-cli submit --platform ios --profile production --non-interactive --latest
