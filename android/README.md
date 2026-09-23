@@ -122,13 +122,15 @@ Same source, built and signed through [EAS](https://expo.dev/eas) instead of a l
 ```sh
 cd android
 bunx eas-cli login          # or set EXPO_TOKEN for CI
-bunx eas-cli init           # links this project to an EAS project id
+bunx eas-cli init           # links this project to an EAS project id — already done (see extra.eas.projectId in app.json)
 bunx eas-cli credentials    # let EAS generate/manage the iOS distribution cert + provisioning profile
 ```
 
-Then fill in `eas.json`'s `submit.production.ios.appleTeamId` and `ascAppId` (both placeholders right now) with the values from App Store Connect.
+`eas credentials` needs a human at the keyboard — signing setup means logging into the Apple Developer account interactively (Apple ID, password, 2FA), which a robot access token cannot do, so this step cannot run in CI. When it asks which profile, choose **production**: that's App Store/TestFlight-type signing, and it's the only profile with credentials set up. **preview** uses ad hoc distribution, which additionally needs every test device's UDID registered in Apple's portal before EAS can build for it — skipped for now since the App Store is the actual target, not on-device preview builds.
 
-**CI** (`.github/workflows/ios.yml`) builds via EAS on every push touching `android/**`, the same trigger the Android workflow uses, and needs one repository secret to authenticate the CLI:
+`eas.json`'s `submit.production.ios.appleTeamId` and `ascAppId` are already filled in with the values from App Store Connect.
+
+**CI** (`.github/workflows/ios.yml`) builds via EAS on every push touching `android/**`, the same trigger the Android workflow uses, defaults to the `production` profile (the only one with credentials), and needs one repository secret to authenticate the CLI:
 
 | Secret | Purpose |
 | --- | --- |
@@ -148,13 +150,13 @@ Submission to App Store Connect is not automatic — it only runs from a manual 
 cd android
 cp .env.example .env
 bun install
-bunx eas-cli build --platform ios --profile preview   # cloud build, no local signing needed
+bunx eas-cli build --platform ios --profile production   # cloud build, no local signing needed
 # or, to build locally instead of on EAS's infrastructure:
 bun run prebuild:ios
 cd ios && pod install && cd ..
 ```
 
-First TestFlight builds should go through the `preview` profile until device acceptance checks pass; `production` is what `submit:ios` uploads to App Store Connect.
+`production` is both what a device acceptance build is made from and what `submit:ios` uploads to App Store Connect — the same signed build goes to TestFlight first, then to the App Store once it passes review. `preview` stays available in `eas.json` if ad hoc device-registered builds are ever wanted later, but has no credentials set up and will fail until `eas credentials` is run for it.
 
 ## Local development
 
