@@ -2734,6 +2734,41 @@ function Wallet() {
               <MaterialCommunityIcons name="chevron-right" size={24} color={colors.green} />
             </Pressable>
           ))}
+          {/*
+            Which build is installed, read from the installed package. After an
+            update this is how an owner sees that it took: the build number
+            changes.
+          */}
+          <View style={s.panel}>
+            <Text style={s.text}>{t("About this app", "关于此应用")}</Text>
+            <Row
+              label={t("Version", "版本")}
+              value={`${upd.installedVersionName() || "—"} · ${t("build", "构建")} ${upd.installedVersionCode() ?? "—"}`}
+            />
+            <Row
+              label={t("Channel", "渠道")}
+              value={
+                upd.installedChannel() === "production"
+                  ? t("Production", "正式版")
+                  : upd.installedChannel() === "preview"
+                    ? t("Preview", "预览版")
+                    : t("Development", "开发版")
+              }
+            />
+            <Row
+              label={t("Updates", "更新")}
+              value={
+                update === null
+                  ? t("Not checked", "未检查")
+                  : update.state === upd.CURRENT
+                    ? t("Up to date", "已是最新")
+                    : t(
+                        `Build ${update.manifest.versionCode} available`,
+                        `构建 ${update.manifest.versionCode} 可用`,
+                      )
+              }
+            />
+          </View>
         </>
       );
     if (settingsSection === "accounts")
