@@ -68,5 +68,6 @@ sms.md
 # that nothing here can be mistaken for a build Tera published.
 demo/
 
+# Local scratch, not part of the build.
 docs
 me.txt
