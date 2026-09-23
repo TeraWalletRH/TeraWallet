@@ -4,10 +4,14 @@
  * Drawn with the dashboard's own classes — .panel, .metric, .chip, .btn,
  * .pair — so it reads as the same product as the page an owner arrived from.
  *
- * Every value shown here comes from /api/leaderboard. When that call fails the
- * page says so and shows nothing, rather than falling back to figures written
- * into this file: a rank invented by the page and presented as the reader's own
- * is the one thing a leaderboard must never do.
+ * The page is always here. An empty board is a real state, not a failure: a
+ * board nobody has reached yet still has to show what it is and how someone
+ * gets on it. So the heading, the figures and the table draw in every case,
+ * and only the rows change.
+ *
+ * What does not happen is inventing a standing. Every value comes from
+ * /api/leaderboard; when that cannot be read the page says which figures are
+ * missing rather than filling them in.
  */
 
 (function () {
@@ -55,22 +59,35 @@
       ? `${address.slice(0, 8)}…${address.slice(-6)}`
       : address || "";
 
-  function statsPanel(data, you) {
-    // The reader's own standing leads, at the size the dashboard gives its one
-    // large figure. The protocol totals are context and are demoted to match.
+  /**
+   * The four figures above the table.
+   *
+   * Every one of them reads "—" until something has been counted. A zero here
+   * would be a measurement; a dash is the absence of one, and on an empty board
+   * those are different claims.
+   */
+  function statsPanel(data, you, empty) {
+    const yourRank = you ? `#${esc(you.rank)}` : "—";
+    const yourNote = you
+      ? esc(`${you.tier} supervisor`)
+      : empty
+        ? "Nobody has been ranked yet."
+        : "You are not on this board yet.";
+    const yourPoints = you ? esc(count(you.points)) : "—";
+    const pointsNote = you
+      ? `${esc(count(you.intentsSigned))} intents signed`
+      : "Points are earned by reviewing and signing.";
     return `
       <div class="lb-stats">
         <div><div class="section-label"><span>Your rank</span></div>
-          <div class="metric"><strong>${you ? `#${esc(you.rank)}` : "—"}</strong>
-          <small>${you ? esc(`${you.tier} supervisor`) : "You are not on this board yet."}</small></div></div>
+          <div class="metric"><strong>${yourRank}</strong><small>${yourNote}</small></div></div>
         <div><div class="section-label"><span>Your points</span></div>
-          <div class="metric"><strong>${you ? esc(count(you.points)) : "—"}</strong>
-          <small>${you ? `${esc(count(you.intentsSigned))} intents signed` : "Points are earned by reviewing and signing."}</small></div></div>
+          <div class="metric"><strong>${yourPoints}</strong><small>${pointsNote}</small></div></div>
         <div><div class="section-label"><span>Supervisors</span></div>
-          <div class="metric"><strong>${esc(count(data.totalSupervisors))}</strong>
+          <div class="metric"><strong>${esc(count(data?.totalSupervisors))}</strong>
           <small>Across the whole protocol</small></div></div>
         <div><div class="section-label"><span>Intents signed</span></div>
-          <div class="metric"><strong>${esc(count(data.totalIntentsSigned))}</strong>
+          <div class="metric"><strong>${esc(count(data?.totalIntentsSigned))}</strong>
           <small>By an owner, never by an agent alone</small></div></div>
       </div>`;
   }
@@ -92,6 +109,10 @@
       .join("");
   }
 
+  /** One row spanning the table, for the two states that have no entries. */
+  const noticeRow = (message) =>
+    `<tr><td colspan="6"><div class="empty">${esc(message)}</div></td></tr>`;
+
   window.initLeaderboardUI = async function (containerId) {
     const container = document.getElementById(containerId);
     if (!container) return;
@@ -108,19 +129,17 @@
       failure = error instanceof Error ? error.message : "The board could not be read.";
     }
 
-    const entries = Array.isArray(data?.leaderboard) ? data.leaderboard : null;
-    if (!entries) {
-      // No invented board. A page that cannot read the rankings says so.
-      container.innerHTML = `
-        <div class="page-heading"><div><p class="eyebrow">Tera Wallet</p>
-          <h1>Supervisor board</h1></div></div>
-        <div class="note"><strong>Unavailable</strong>${esc(
-          failure || "The board could not be read.",
-        )} Nothing is shown rather than a standing that was not counted.</div>`;
-      return;
-    }
-
+    const entries = Array.isArray(data?.leaderboard) ? data.leaderboard : [];
+    const empty = !failure && entries.length === 0;
     const you = entries.find((entry) => entry.isYou) || null;
+
+    const body = failure
+      ? noticeRow(`${failure} Nothing is shown rather than a standing that was not counted.`)
+      : empty
+        ? noticeRow("Nobody is on the board yet. The first reviewed and signed proposal puts someone here — it may as well be yours.")
+        : tableRows(entries, you?.tag);
+
+    const shown = failure ? "unavailable" : `${count(entries.length)} shown`;
 
     container.innerHTML = `
       <div class="page-heading">
@@ -131,19 +150,19 @@
         <p>Points are earned by reviewing an agent's proposal and signing it yourself. Nothing here counts an action an agent took alone.</p>
       </div>
 
-      ${statsPanel(data, you)}
+      ${statsPanel(data, you, empty)}
 
       <div class="content-grid">
         <section>
           <div class="section-label"><span>Ranked supervisors</span>
-            <span>${esc(count(entries.length))} shown</span></div>
+            <span>${esc(shown)}</span></div>
           <div class="table-scroll">
             <table>
               <thead><tr>
                 <th>Rank</th><th>Supervisor</th><th>Tier</th>
                 <th>Points</th><th>Intents</th><th>Referrals</th>
               </tr></thead>
-              <tbody>${tableRows(entries, you?.tag)}</tbody>
+              <tbody>${body}</tbody>
             </table>
           </div>
         </section>
@@ -158,7 +177,7 @@
           ${
             you
               ? ""
-              : `<p class="micro" style="margin-top:16px">Sign an agent proposal to join the board.</p>`
+              : `<p class="micro" style="margin-top:16px">Sign an agent proposal to join the board and get a link to share.</p>`
           }
         </aside>
       </div>`;
