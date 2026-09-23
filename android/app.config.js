@@ -29,5 +29,16 @@ module.exports = ({ config }) => {
         "android.permission.SYSTEM_ALERT_WINDOW",
       ],
     },
+    // No REQUEST_INSTALL_PACKAGES equivalent here: iOS has no sideloaded-APK
+    // update path (see src/update.ts), so there is nothing preview-only to
+    // permission-gate. Preview and release just get distinct bundle IDs, the
+    // same way they get distinct Android package names, so both can be
+    // installed on one device and TestFlight/App Store submissions never
+    // collide with an ad-hoc preview build.
+    ios: {
+      ...config.ios,
+      bundleIdentifier: release ? "app.terawallet.ios" : "app.terawallet.ios.preview",
+      buildNumber: String(process.env.GITHUB_RUN_NUMBER || 1),
+    },
   };
 };

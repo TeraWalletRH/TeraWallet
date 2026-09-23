@@ -6,3 +6,4 @@ dist/
 .env
 *.keystore
 *.jks
+*.p8
