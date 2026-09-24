@@ -187,6 +187,7 @@ import {
   claimMessage,
   LIMITS as TAG_LIMITS,
 } from "../core/tags.js";
+import * as contactBook from "../core/contacts.js";
 import {
   ACTIONS,
   createPreset,
@@ -449,6 +450,9 @@ const state = {
   balances: {},
   drafts: [],
   records: [],
+  // Names the owner gave addresses they send to. Kept inside the encrypted
+  // vault and never sent to Tera; `core/contacts.js` holds the rules.
+  contacts: [],
   bridges: [],
   chat: [],
   privacyLog: [],
@@ -566,6 +570,7 @@ function readRecoveryBlob() {
 function vaultPayload() {
   return {
     records: state.records,
+    contacts: state.contacts,
     bridges: state.bridges,
     drafts: state.drafts,
     versions: state.versions,
@@ -589,6 +594,7 @@ function loadRecords() {
   state.bridges = [];
   state.nft = { tokens: [], loading: false, error: "" };
   state.records = [];
+  state.contacts = [];
   state.drafts = [];
   state.versions = {};
   state.presets = [];
@@ -634,6 +640,7 @@ async function unlockEncryptedStorage(passphrase = "") {
       )
     : [];
   state.drafts = Array.isArray(vault?.drafts) ? vault.drafts : [];
+  state.contacts = contactBook.cleanBook(vault?.contacts);
   state.bridges = Array.isArray(vault?.bridges)
     ? vault.bridges.filter((r) => sameAddress(r.ownerAddress, state.owner) && isHash(r.requestId))
     : [];
@@ -674,6 +681,7 @@ function clearEncryptedStorage() {
   state.vaultKeyEpoch = 1;
   state.recovery = null;
   state.records = [];
+  state.contacts = [];
   state.bridges = [];
   state.nft = { tokens: [], loading: false, error: "" };
   state.drafts = [];
@@ -1450,7 +1458,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
     ${previewBlock(p)}
     ${historyBlock(p)}
     ${boundaryBlock(p, index)}
-    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", tagFor(intent.recipient) ? `${displayTag(tagFor(intent.recipient))} · ${intent.recipient}` : intent.recipient) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
+    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", tagFor(intent.recipient) ? `${displayTag(tagFor(intent.recipient))} · ${intent.recipient}` : intent.recipient) : ""}${intent?.actionType === "TRANSFER" && contactBook.nameFor(state.contacts, intent.recipient) ? pair("Saved as", contactBook.nameFor(state.contacts, intent.recipient)) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
     ${submitted ? `<p>Transaction: ${explorer(p.txHash)}</p>` : issue ? `<p class="live-blocked">${esc(issue)}</p>` : '<p class="micro">Review the token amount and recipient. Your wallet will ask you to sign and pay the network fee.</p>'}
     <div class="actions">${button("Approve in wallet ↗", "approve", `data-index="${index}" ${issue || submitted || state.busy || state.chain !== chainId ? "disabled" : ""}`)}${button("Prepare again", "reprepare", `data-index="${index}" ${state.busy || submitted || !intent ? "disabled" : ""}`)}${button("Share redacted", "share", `data-index="${index}"`)}${button("Dismiss", "draft-dismiss", `data-index="${index}" ${state.busy ? "disabled" : ""}`)}</div></article>`;
 }
@@ -1568,9 +1576,64 @@ function createServiceSession() {
     }
   };
 }
+/** A saved name with the address beside it, or the address alone. */
+function contactLabel(address) {
+  const name = contactBook.nameFor(state.contacts, address);
+  return name ? `${name} · ${address}` : address;
+}
+function contactsPanel() {
+  if (!state.owner) return "<p>Connect a wallet to keep names for the addresses you send to.</p>";
+  if (!state.vaultKey)
+    return `<p>Names are kept inside your encrypted vault. Unlock it to see or add them.</p><div class="actions">${button("Unlock encrypted vault", "vault-unlock")}</div>`;
+  const list = contactBook.sortedContacts(state.contacts);
+  return `<p class="micro">${esc(contactBook.PRIVACY_NOTE)}</p>${
+    list
+      .map(
+        (entry) =>
+          `${pair(entry.name, entry.address)}<div class="actions">${button("Rename", "contact-edit", `data-address="${esc(entry.address)}"`)}${button("Remove", "contact-remove", `data-address="${esc(entry.address)}"`)}</div>`,
+      )
+      .join("") ||
+    empty("No saved addresses yet. After you send to an address, you can name it on its receipt.")
+  }<div class="actions">${button("Add an address", "contact-edit")}</div>`;
+}
+/** The name sheet. `address` is fixed when given; empty means "add one". */
+function contactDialog(address = "") {
+  connected();
+  if (!state.vaultKey)
+    throw new Error("Unlock your encrypted vault first. Saved names are kept inside it.");
+  const current = address ? contactBook.nameFor(state.contacts, address) : "";
+  dialog(
+    current ? "Rename this address." : "Save an address.",
+    `<form id="contact-form">${
+      address
+        ? `${pair("Address", address)}<input type="hidden" name="address" value="${esc(address)}">`
+        : '<div class="field"><label for="contact-address">Robinhood Chain address</label><input id="contact-address" name="address" required placeholder="0x…" autocomplete="off" spellcheck="false"></div>'
+    }<div class="field"><label for="contact-name">Name</label><input id="contact-name" name="name" required maxlength="${contactBook.LIMITS.maxLength}" placeholder="e.g. Mum, Rent, Ada" autocomplete="off" value="${esc(current)}"></div><p class="micro">${esc(contactBook.PRIVACY_NOTE)}</p><p class="live-form-error" role="alert"></p><div class="actions"><button class="btn primary">Save name</button>${current ? button("Remove name", "contact-remove", `data-address="${esc(address)}"`) : ""}</div></form>`,
+  );
+  const form = document.getElementById("contact-form");
+  form.querySelector("#contact-name")?.focus();
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const result = contactBook.saveContact(state.contacts, {
+      address: String(data.get("address") || ""),
+      name: String(data.get("name") || ""),
+      owner: state.owner,
+    });
+    if (!result.ok) {
+      form.querySelector('[role="alert"]').textContent = result.reason;
+      return;
+    }
+    state.contacts = result.book;
+    await persist();
+    closeDialog();
+    state.notice = `Saved ${result.contact.name} for ${contactBook.short(result.contact.address)} on this device.`;
+    render();
+  };
+}
 function receipts() {
   if (!state.owner) return accountPrompt();
-  return `<div class="section-label">Transactions tracked on this device</div>${state.records.map((r, i) => `<article class="panel live-record"><div class="proposal-top"><b>${esc(r.action || "Transaction")}</b>${chip(r.status === "confirmed" ? (r.recorded ? "Confirmed · recorded" : "Confirmed · audit sync pending") : r.status, r.status === "reverted")}</div>${pair("Submitted", r.createdAt)}<p>${explorer(r.txHash)}</p>${r.error ? `<p class="micro">${esc(r.error)}</p>` : ""}<div class="actions">${r.status !== "reverted" && !r.recorded ? button("Check status / retry audit sync", "receipt-check", `data-index="${i}" ${state.busy ? "disabled" : ""}`) : ""}${button("Export receipt", "receipt-export", `data-index="${i}"`)}</div></article>`).join("") || empty("No transactions tracked on this device.")}
+  return `<div class="section-label">Transactions tracked on this device</div>${state.records.map((r, i) => `<article class="panel live-record"><div class="proposal-top"><b>${esc(r.action || "Transaction")}</b>${chip(r.status === "confirmed" ? (r.recorded ? "Confirmed · recorded" : "Confirmed · audit sync pending") : r.status, r.status === "reverted")}</div>${pair("Submitted", r.createdAt)}${r.payee ? pair("To", contactLabel(r.payee)) : ""}<p>${explorer(r.txHash)}</p>${r.error ? `<p class="micro">${esc(r.error)}</p>` : ""}<div class="actions">${r.status !== "reverted" && !r.recorded ? button("Check status / retry audit sync", "receipt-check", `data-index="${i}" ${state.busy ? "disabled" : ""}`) : ""}${button("Export receipt", "receipt-export", `data-index="${i}"`)}${r.payee ? button(contactBook.nameFor(state.contacts, r.payee) ? "Rename address" : "Name this address", "contact-edit", `data-address="${esc(r.payee)}"`) : ""}</div></article>`).join("") || empty("No transactions tracked on this device.")}
     <div class="section-label live-history-heading">Account history from Tera</div>${state.errors.history ? empty(state.errors.history) : `<div class="table-scroll"><table><thead><tr><th>Action</th><th>Service status</th><th>Created</th><th>Transaction</th></tr></thead><tbody>${state.history.map((r) => `<tr><td>${esc(r.intent_type || r.intent?.actionType || "—")}</td><td>${esc(r.status)}</td><td>${esc(r.created_at || r.createdAt)}</td><td>${r.tx_hash ? explorer(r.tx_hash) : "—"}</td></tr>`).join("")}</tbody></table>${state.history.length ? "" : empty("No history returned by the service.")}</div>`}`;
 }
 // The egress panel is derived once so the view and the export can never
@@ -1903,6 +1966,7 @@ function applyVaultPayload(payload) {
       (r) => sameAddress(r.ownerAddress, state.owner) && isHash(r.requestId),
     );
   if (Array.isArray(payload.drafts)) state.drafts = payload.drafts;
+  if (Array.isArray(payload.contacts)) state.contacts = contactBook.cleanBook(payload.contacts);
   if (payload.versions) state.versions = pruneVersions(payload.versions, state.vaultRetentionDays);
   if (Array.isArray(payload.presets)) state.presets = payload.presets.map(createPreset);
   if (typeof payload.agentSessionToken === "string")
@@ -2096,6 +2160,7 @@ function forgetEverything() {
   state.sessions = [];
   state.balances = {};
   state.records = [];
+  state.contacts = [];
   state.bridges = [];
   state.nft = { tokens: [], loading: false, error: "" };
   state.drafts = [];
@@ -2255,7 +2320,7 @@ async function saveBalanceEndpoint() {
 }
 
 function settings() {
-  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel" id="account-separation"><h2>Account separation</h2>${separationPanel()}</section><section class="panel"><h2>Your tag</h2>${tagPanel()}</section><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
+  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel" id="account-separation"><h2>Account separation</h2>${separationPanel()}</section><section class="panel"><h2>Your tag</h2>${tagPanel()}</section><section class="panel" id="saved-addresses"><h2>Saved addresses</h2>${contactsPanel()}</section><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
 /**
@@ -2516,6 +2581,7 @@ function clearAccount() {
   state.sessions = [];
   state.balances = {};
   state.records = [];
+  state.contacts = [];
   state.drafts = [];
   state.chat = [];
   state.errors = {};
@@ -2693,7 +2759,7 @@ function createProposal(symbol, draft = null) {
   const assets = state.assets.filter((a) => isAddress(a.address) && a.status === "ACTIVE");
   dialog(
     "Prepare an exact action.",
-    `<form id="proposal-form"><div class="field"><label for="proposal-asset">Asset</label><select id="proposal-asset" name="asset">${assets.map((a) => `<option value="${esc(a.symbol)}" ${a.symbol === symbol ? "selected" : ""}>${esc(a.symbol)} · ${esc(a.name)}</option>`).join("")}</select></div><div class="field"><label for="proposal-action">Action</label><select id="proposal-action" name="action"><option>TRANSFER</option><option>BUY</option><option>SELL</option></select></div><div class="field"><label id="proposal-amount-label" for="proposal-amount">Token amount</label><input id="proposal-amount" name="amount" inputmode="decimal" required placeholder="0.00" pattern="[0-9]+(\\.[0-9]+)?"></div>${tagsAvailable() ? '<div class="field"><label for="proposal-recipient-kind">Send to</label><select id="proposal-recipient-kind" name="recipientKind"><option value="address">Another wallet address</option><option value="tag">A Tera tag</option></select></div>' : ""}<div class="field"><label for="proposal-recipient">Recipient</label><input id="proposal-recipient" name="recipient" placeholder="Required for transfers" autocomplete="off"></div><p id="proposal-tag-status" class="micro" role="status"></p><p id="proposal-help" class="micro"></p><p class="live-form-error" role="alert"></p><button class="btn primary">Run the checks ↗</button></form>`,
+    `<form id="proposal-form"><div class="field"><label for="proposal-asset">Asset</label><select id="proposal-asset" name="asset">${assets.map((a) => `<option value="${esc(a.symbol)}" ${a.symbol === symbol ? "selected" : ""}>${esc(a.symbol)} · ${esc(a.name)}</option>`).join("")}</select></div><div class="field"><label for="proposal-action">Action</label><select id="proposal-action" name="action"><option>TRANSFER</option><option>BUY</option><option>SELL</option></select></div><div class="field"><label id="proposal-amount-label" for="proposal-amount">Token amount</label><input id="proposal-amount" name="amount" inputmode="decimal" required placeholder="0.00" pattern="[0-9]+(\\.[0-9]+)?"></div>${tagsAvailable() ? '<div class="field"><label for="proposal-recipient-kind">Send to</label><select id="proposal-recipient-kind" name="recipientKind"><option value="address">Another wallet address</option><option value="tag">A Tera tag</option></select></div>' : ""}<div class="field"><label for="proposal-recipient">Recipient</label><input id="proposal-recipient" name="recipient" placeholder="Required for transfers" autocomplete="off"></div><div id="proposal-contacts" class="actions"></div><p id="proposal-contact-status" class="micro" role="status"></p><p id="proposal-tag-status" class="micro" role="status"></p><p id="proposal-help" class="micro"></p><p class="live-form-error" role="alert"></p><button class="btn primary">Run the checks ↗</button></form>`,
   );
   const form = document.getElementById("proposal-form");
   // A draft read out of a message fills the same fields the owner would type
@@ -2742,6 +2808,51 @@ function createProposal(symbol, draft = null) {
   };
   form.addEventListener("change", updateProposalFields);
   updateProposalFields();
+
+  // Saved names and recent payees, as buttons that fill the address field. A
+  // pick fills the full address, which is what the checks and the wallet see.
+  const contactPicks = document.getElementById("proposal-contacts");
+  const contactStatus = document.getElementById("proposal-contact-status");
+  const renderContactPicks = () => {
+    if (!contactPicks || !contactStatus) return;
+    const data = new FormData(form);
+    const typed = String(data.get("recipient") || "").trim();
+    const asAddress = (data.get("recipientKind") || "address") === "address";
+    if (data.get("action") !== "TRANSFER" || !asAddress) {
+      contactPicks.innerHTML = "";
+      contactStatus.textContent = "";
+      return;
+    }
+    if (isAddress(typed)) {
+      contactPicks.innerHTML = "";
+      const name = contactBook.nameFor(state.contacts, typed);
+      contactStatus.textContent = name
+        ? `Saved as ${name}. Read the address above — it is what gets signed.`
+        : "";
+      return;
+    }
+    contactStatus.textContent = "";
+    const saved = contactBook.searchContacts(state.contacts, typed);
+    const recent = typed
+      ? []
+      : contactBook
+          .recentPayees(
+            state.records.map((r) => ({ payee: r.payee, createdAt: Date.parse(r.createdAt) })),
+            state.contacts,
+            { owner: state.owner },
+          )
+          .filter((entry) => !entry.name);
+    contactPicks.innerHTML = [...saved, ...recent]
+      .slice(0, 8)
+      .map(
+        (entry) =>
+          `<button type="button" class="btn" data-action="contact-pick" data-address="${esc(entry.address)}" title="${esc(entry.address)}">${esc(entry.name || "Sent before")} · ${esc(contactBook.short(entry.address))}</button>`,
+      )
+      .join("");
+  };
+  form.addEventListener("input", renderContactPicks);
+  form.addEventListener("change", renderContactPicks);
+  renderContactPicks();
 
   // The live lookup. It resolves against the chain and prints the address it
   // found, because the address is the thing being agreed to — a screen that
@@ -3652,6 +3763,8 @@ async function approve(index) {
       actionHash: proposal.preparedTransaction.actionHash,
       to: proposal.preparedTransaction.to,
       action: proposal.intent.actionType,
+      // The address the owner chose to pay. Read by the address book only.
+      payee: proposal.intent.actionType === "TRANSFER" ? proposal.intent.recipient : undefined,
       status: "pending",
       recorded: false,
       createdAt: new Date().toISOString(),
@@ -3659,7 +3772,10 @@ async function approve(index) {
     if (version === generation) {
       state.records.unshift(record);
       void persist();
-      state.notice = "Transaction submitted. Waiting for on-chain confirmation.";
+      state.notice =
+        record.payee && !contactBook.nameFor(state.contacts, record.payee)
+          ? "Transaction submitted. Waiting for on-chain confirmation. You can name the address you paid on its receipt below."
+          : "Transaction submitted. Waiting for on-chain confirmation.";
       navigate("receipts");
     } else {
       state.notice = `Transaction submitted: ${hash}. Reconnect this wallet and unlock its encrypted vault to retain the local record.`;
@@ -4185,6 +4301,24 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "approve") await approve(index);
     if (action === "receipt-export") exportReceipt(index);
+    if (action === "contact-edit") contactDialog(target.dataset.address || "");
+    if (action === "contact-remove" && target.dataset.address) {
+      state.contacts = contactBook.removeContact(state.contacts, target.dataset.address);
+      await persist();
+      closeDialog();
+      state.notice = "That name was removed from this device. The address itself is unchanged.";
+      render();
+    }
+    if (action === "contact-pick" && target.dataset.address) {
+      const field = document.getElementById("proposal-recipient");
+      const kind = document.getElementById("proposal-recipient-kind");
+      if (kind) kind.value = "address";
+      if (field) {
+        field.value = target.dataset.address;
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        field.focus();
+      }
+    }
     if (action === "bridge-status") await refreshBridge(state.bridges[index]);
     if (action === "demo-start") startDemo();
     if (action === "demo-exit") exitDemo();
