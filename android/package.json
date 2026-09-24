@@ -29,6 +29,7 @@
     "expo-haptics": "~57.0.3",
     "expo-intent-launcher": "^57.0.1",
     "expo-local-authentication": "~57.0.0",
+    "expo-router": "~57.0.22",
     "expo-secure-store": "~57.0.4",
     "expo-status-bar": "~57.0.1",
     "expo-system-ui": "~57.0.4",

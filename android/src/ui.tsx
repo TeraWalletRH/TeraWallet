@@ -1,5 +1,6 @@
 import React from "react";
 import { Pressable, StyleSheet, Text, TextInput, View, type TextInputProps } from "react-native";
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 export const colors = {
   paper: "#f8f8f6",
   ink: "#17281f",
@@ -108,6 +109,15 @@ export const styles = StyleSheet.create({
     borderColor: colors.danger,
     backgroundColor: "#eee5da",
   },
+  backButton: {
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: colors.line,
+    alignItems: "center",
+    justifyContent: "center",
+  },
 });
 export function Button({
   children,
@@ -133,6 +143,25 @@ export function Button({
       ]}
     >
       <Text style={[styles.buttonText, primary && { color: colors.paper }]}>{children}</Text>
+    </Pressable>
+  );
+}
+export function BackButton({
+  onPress,
+  accessibilityLabel,
+}: {
+  onPress: () => void;
+  accessibilityLabel: string;
+}) {
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel}
+      onPress={onPress}
+      hitSlop={10}
+      style={({ pressed }) => [styles.backButton, { opacity: pressed ? 0.55 : 1 }]}
+    >
+      <MaterialCommunityIcons name="chevron-left" size={26} color={colors.ink} />
     </Pressable>
   );
 }
