@@ -50,6 +50,12 @@ export type LocalData = {
   retention: number;
   language: "en" | "zh";
   theme: "light" | "dark";
+  /**
+   * Names the owner gave addresses they send to. Sealed with the rest of this
+   * file and never sent anywhere; `core/contacts.js` cleans it on every read.
+   * Not trimmed by the retention window — a name is not a record of activity.
+   */
+  contacts: { address: string; name: string; savedAt: number }[];
 };
 export const emptyData = (): LocalData => ({
   drafts: [],
@@ -58,6 +64,7 @@ export const emptyData = (): LocalData => ({
   retention: 30,
   language: "en",
   theme: "dark",
+  contacts: [],
 });
 let phrase: string | null = null;
 let epoch = 0;
