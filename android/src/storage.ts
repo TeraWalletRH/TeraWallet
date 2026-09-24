@@ -49,6 +49,7 @@ export type LocalData = {
   token: string;
   retention: number;
   language: "en" | "zh";
+  theme: "light" | "dark";
 };
 export const emptyData = (): LocalData => ({
   drafts: [],
@@ -56,6 +57,7 @@ export const emptyData = (): LocalData => ({
   token: "",
   retention: 30,
   language: "en",
+  theme: "dark",
 });
 let phrase: string | null = null;
 let epoch = 0;
