@@ -21,37 +21,32 @@ import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { formatUnits, parseUnits, zeroAddress, isAddress, type Address } from "viem";
+import { useRouter } from "expo-router";
 import { api } from "./src/api";
-import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
+import { chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
-import { balances, client, execute, transactionStatus } from "./src/network";
+import { client, execute, transactionStatus } from "./src/network";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { UNVERIFIABLE, value as valueCore } from "./src/core";
 import { check, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { normalizePhrase, walletFromPhrase } from "./src/crypto";
-import { Button, Choices, colors, Field, Row, styles as s } from "./src/ui";
+import { BackButton, Button, Choices, colors, Field, Row, styles as s } from "./src/ui";
 import { minimise, PROPOSAL_KEEP, rehydrate, residual, type MinimiseResult } from "./src/minimise";
 import { Gallery, type Item as NftItem } from "./src/Gallery";
 import { nft } from "./src/core";
+import {
+  useAuth,
+  useData,
+  useLanguage,
+  useReview,
+  useUi,
+  type Review,
+} from "./src/store/WalletProvider";
 
-type Review = {
-  title: string;
-  rows: [string, string][];
-  steps: Tx[];
-  verify: () => void;
-  reference?: string;
-  recipient?: string;
-  actionHash?: string;
-  bridgeInput?: any;
-  draftId?: number;
-  afterSubmitted?: (hash: string) => Promise<void>;
-  simulation?: "checking" | "passed" | "needs-attention";
-  isPrivateBridge?: boolean;
-};
 const tokenImages: Record<string, any> = {
   USDG: require("./assets/RH-RWA-Assets-Media/usdg_logo.png"),
   ETH: require("./assets/RH-RWA-Assets-Media/eth.jpeg"),
@@ -93,41 +88,65 @@ function TokenIcon({ symbol, size = 32 }: { symbol: string; size?: number }) {
     />
   );
 }
-function Wallet() {
-  const [language, setLanguage] = useState<"en" | "zh">("en");
-  const t = (en: string, zh: string) => (language === "zh" ? zh : en);
-  const [ready, setReady] = useState(false),
-    [exists, setExists] = useState(false),
-    [pinWallet, setPinWallet] = useState(false),
-    [owner, setOwner] = useState<Address | "">("");
+export function Wallet() {
+  // Cross-cutting state/closures now live in src/store/* (expo-router
+  // migration, step 2 — see /Users/macbook/.claude/plans/fizzy-conjuring-scroll.md).
+  // Destructuring these hooks here, under the same identifier names the rest
+  // of this file already uses, means every existing call site below keeps
+  // working unchanged.
+  const { language, setLanguage, t } = useLanguage();
+  const {
+    ready,
+    setReady,
+    exists,
+    setExists,
+    pinWallet,
+    setPinWallet,
+    owner,
+    setOwner,
+    accounts,
+    setAccounts,
+    myTag,
+    setMyTag,
+  } = useAuth();
+  const {
+    busy,
+    setBusy,
+    error,
+    setError,
+    progress,
+    setProgress,
+    notice,
+    setNotice,
+    run,
+    pending,
+    inactivity,
+  } = useUi();
+  const {
+    data,
+    setData,
+    dataRef,
+    balance,
+    setBalance,
+    prices,
+    setPrices,
+    assets,
+    setAssets,
+    refresh,
+    store,
+  } = useData();
+  const { review, setReview, signing, setSigning, auth, setAuth, authPassword, setAuthPassword } =
+    useReview();
+  const router = useRouter();
   const [page, setPage] = useState("home"),
-    [busy, setBusy] = useState(false),
-    [error, setError] = useState(""),
-    [progress, setProgress] = useState("");
-  const [data, setData] = useState(vault.emptyData());
-  const dataRef = useRef(data);
-  const [balance, setBalance] = useState<Record<string, string> | null>(null),
-    [prices, setPrices] = useState<Record<string, number>>({ USDG: 1 }),
     [refreshing, setRefreshing] = useState(false),
     [flowStep, setFlowStep] = useState(0),
     [amountInvalid, setAmountInvalid] = useState(false),
     [settingsSection, setSettingsSection] = useState<
       "root" | "security" | "privacy" | "sessions" | "device" | "accounts"
     >("root"),
-    // Every account on this wallet, derived on unlock and after each change.
-    // Addresses only live here while the wallet is open; locking clears them,
-    // the same as the ledger that records who has read them.
-    [accounts, setAccounts] = useState<
-      Array<{ index: number; address: string; name: string; active: boolean }>
-    >([]),
-    [nameInput, setNameInput] = useState(""),
-    [notice, setNotice] = useState<null | {
-      title: string;
-      body: string;
-      tone?: "success" | "error";
-    }>(null);
-  const [assets, setAssets] = useState<Asset[]>(sources),
-    [message, setMessage] = useState(""),
+    [nameInput, setNameInput] = useState("");
+  const [message, setMessage] = useState(""),
     [chat, setChat] = useState<
       { role: string; text: string; minimised?: boolean; sent?: string; replaced?: number }[]
     >([]);
@@ -158,8 +177,6 @@ function Wallet() {
       | { state: "found"; tag: string; address: Address }
       | { state: "error"; message: string }
     >({ state: "idle" }),
-    [myTag, setMyTag] = useState<string | null>(null),
-    [claimInput, setClaimInput] = useState(""),
     [claimDismissed, setClaimDismissed] = useState(false),
     [, setTagsOn] = useState(false),
     // What the published build is, if the check got an answer. Null means the
@@ -178,12 +195,6 @@ function Wallet() {
   const [destination, setDestination] = useState(8453),
     [outSymbol, setOutSymbol] = useState("ETH"),
     [trade, setTrade] = useState("BUY");
-  const [review, setReview] = useState<Review | null>(null),
-    [signing, setSigning] = useState(false),
-    [auth, setAuth] = useState<null | { title: string; action: () => Promise<void> }>(null),
-    [authPassword, setAuthPassword] = useState("");
-  const pending = useRef(false);
-  const inactivity = useRef(Date.now());
   const backgroundLock = useRef<ReturnType<typeof setTimeout> | null>(null);
   function forget() {
     vault.lock();
@@ -208,7 +219,6 @@ function Wallet() {
     setRecipientKind("address");
     setTagLookup({ state: "idle" });
     setMyTag(null);
-    setClaimInput("");
     setClaimDismissed(false);
     setError("");
     setPage("home");
@@ -278,36 +288,9 @@ function Wallet() {
     if (error)
       setNotice({ title: t("Couldn’t complete that", "无法完成操作"), body: error, tone: "error" });
   }, [error]);
-  async function run(work: (guard: () => void) => Promise<void>) {
-    if (pending.current) return;
-    pending.current = true;
-    inactivity.current = Date.now();
-    setBusy(true);
-    setError("");
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    const version = vault.sessionVersion();
-    const guard = () => {
-      if (AppState.currentState !== "active" || version !== vault.sessionVersion())
-        throw new Error("Session locked. / 会话已锁定。");
-    };
-    try {
-      await work(guard);
-    } catch (e) {
-      if (version === vault.sessionVersion()) {
-        const body = e instanceof Error ? e.message : t("Action failed.", "操作失败。");
-        setError(body);
-      }
-    } finally {
-      pending.current = false;
-      setBusy(false);
-      setProgress("");
-    }
-  }
-  async function store(next: vault.LocalData) {
-    await vault.saveData(next);
-    dataRef.current = next;
-    setData(next);
-  }
+  // `run()` (busy/pending guarding) and `store()` (persist + dataRef sync)
+  // now live in UiContext/DataContext respectively — see src/store/UiContext.tsx
+  // and src/store/DataContext.tsx. Destructured from useUi()/useData() above.
   /**
    * A wallet's display name, and the fallback when it has none.
    *
@@ -388,45 +371,8 @@ function Wallet() {
       })
       .catch(() => {});
   }
-  async function refresh(address = owner) {
-    if (!address) return;
-    const version = vault.sessionVersion();
-    const registryResult = await api("/api/assets").catch(() => ({ assets: [] }));
-    const registry: Asset[] = registryResult.assets || [];
-    const teraAsset: Asset = {
-      symbol: "TERA",
-      address: "0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8",
-      decimals: 18,
-      name: "Tera",
-    };
-    const supported = [
-      ...sources,
-      teraAsset,
-      ...registry.filter((a) => !sources.some((s) => s.symbol === a.symbol) && a.symbol !== "TERA"),
-    ];
-    const result = await Promise.allSettled([
-      balances(address, supported),
-      api("/api/assets/prices"),
-    ]);
-    if (version !== vault.sessionVersion()) return;
-    if (result[0].status === "fulfilled") setBalance(result[0].value);
-    else
-      setError(
-        t("Could not refresh balances. Pull again when connected.", "无法刷新余额，请联网后重试。"),
-      );
-    if (result[1].status === "fulfilled") setPrices(result[1].value.prices || { USDG: 1 });
-    setAssets(supported);
-    // Whether this wallet already has a name. Read from the registry, and a
-    // failure leaves it unknown rather than answering "no" — an owner who
-    // already holds a tag must not be asked to claim one over a dropped call.
-    if (tagsAvailable())
-      await tags
-        .tagOf(address)
-        .then((held) => {
-          if (version === vault.sessionVersion()) setMyTag(held);
-        })
-        .catch(() => {});
-  }
+  // `refresh()` now lives in DataContext — see src/store/DataContext.tsx.
+  // Destructured from useData() above.
   async function pullRefresh() {
     setRefreshing(true);
     try {
@@ -637,30 +583,6 @@ function Wallet() {
     await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, proposal] });
     guard();
     showProposal(proposal);
-  }
-  /**
-   * Claim a name for this wallet.
-   *
-   * Signed here with the owner's key; Tera records it. The signature stops a
-   * claim being forged on the way, not Tera rewriting the register later —
-   * the claim screen says which of those it is.
-   */
-  async function claimTagNow(guard: () => void) {
-    const account = vault.currentAccount();
-    const { tag } = await tags.claimTag(account as never, claimInput);
-    guard();
-    setMyTag(tag);
-    setClaimInput("");
-    setClaimDismissed(true);
-    setNotice({
-      title: t("Tag claimed", "标签已领取"),
-      body: t(
-        `${tags.display(tag)} now points at this wallet in Tera's tag register.`,
-        `${tags.display(tag)} 现已在 Tera 标签注册表中指向此钱包。`,
-      ),
-      tone: "success",
-    });
-    setPage("home");
   }
   /**
    * Install the published version, from the bubble on the home screen.
@@ -1382,14 +1304,14 @@ function Wallet() {
                   "标签让他人可以向名称而非地址转账。它是公开的，并在 Robinhood Chain 上指向此钱包。",
                 )}
               </Text>
-              <Button primary onPress={() => setPage("tag")}>
+              <Button primary onPress={() => router.push("/tag")}>
                 {t("Claim a tag", "领取标签")}
               </Button>
               <Button onPress={() => setClaimDismissed(true)}>{t("Not now", "暂不")}</Button>
             </View>
           )}
           {tagsAvailable() && myTag && (
-            <Pressable accessibilityRole="button" onPress={() => setPage("tag")}>
+            <Pressable accessibilityRole="button" onPress={() => router.push("/tag")}>
               <Text style={s.eyebrow}>{tags.display(myTag)}</Text>
             </Pressable>
           )}
@@ -1493,7 +1415,8 @@ function Wallet() {
                     setDestination(8453);
                     setOutSymbol("ETH");
                   }
-                  setPage(p);
+                  if (p === "receive") router.push("/receive");
+                  else setPage(p);
                 }}
               >
                 <MaterialCommunityIcons
@@ -1510,7 +1433,7 @@ function Wallet() {
             <MaterialCommunityIcons name="image-multiple-outline" size={23} color={colors.green} />
             <Text style={[s.text, { flex: 1 }]}>{t("NFT gallery", "NFT ??")}</Text>
             <MaterialCommunityIcons name="chevron-right" size={20} color={colors.muted} />
-          </Pressable>{" "}
+          </Pressable>
           <View style={[s.panel, { backgroundColor: "#e5f2df" }]}>
             <View
               style={{
@@ -1531,96 +1454,6 @@ function Wallet() {
               )}
             </Text>
           </View>
-        </>
-      );
-    if (page === "tag") {
-      return (
-        <>
-          {title(
-            "Your tag.",
-            "您的标签。",
-            myTag ? tags.display(myTag) : t("Not claimed yet", "尚未领取"),
-          )}
-          <Field
-            label={t("Tag", "标签")}
-            value={claimInput}
-            onChangeText={setClaimInput}
-            placeholder="@astra"
-          />
-          <Text style={s.small}>
-            {t(
-              "Three to twenty characters: letters, numbers and underscores, starting with a letter. Names that read alike are treated as the same name, so @astr0 cannot be claimed while @astro exists.",
-              "3 至 20 个字符：字母、数字和下划线，须以字母开头。外观相近的名称视为同一名称，因此 @astro 存在时无法领取 @astr0。",
-            )}
-          </Text>
-          <Text style={s.small}>
-            {t(
-              "A tag is public while you hold it: anyone can see which address it points at. It names this wallet on Robinhood Chain only — it is not an address on any other chain, and it cannot be used as a bridge destination.",
-              "标签在您持有期间是公开的，任何人都可查看其指向的地址。它仅在 Robinhood Chain 上标识此钱包，并非其他链上的地址，也不能用作跨链目标地址。",
-            )}
-          </Text>
-          <Text style={s.small}>
-            {t(
-              "Tera keeps the tag register. Resolving a name means trusting Tera to answer honestly — unlike a balance or a receipt, there is nothing else to check it against. Always read the address on the review screen before you approve.",
-              "Tera 维护标签注册表。解析名称意味着信任 Tera 如实作答——与余额或收据不同，没有其他依据可供核对。批准前请务必核对审核页面上的地址。",
-            )}
-          </Text>
-          {myTag && (
-            <Text style={s.small}>
-              {t(
-                `Claiming a new tag releases ${tags.display(myTag)} in the same transaction.`,
-                `领取新标签将在同一笔交易中释放 ${tags.display(myTag)}。`,
-              )}
-            </Text>
-          )}
-          {action("Claim this tag", "领取此标签", claimTagNow)}
-          <Button onPress={() => setPage("home")}>{t("Back", "返回")}</Button>
-        </>
-      );
-    }
-    if (page === "receive")
-      return (
-        <>
-          {title(
-            "Receive.",
-            "收款。",
-            t(
-              "Send assets on Robinhood Chain to this address.",
-              "请通过 Robinhood Chain 向此地址发送资产。",
-            ),
-          )}
-          <Text selectable style={[s.mono, { fontSize: 18, lineHeight: 30 }]}>
-            {owner}
-          </Text>
-          <View
-            style={{
-              alignSelf: "center",
-              backgroundColor: "#ffffff",
-              padding: 16,
-              borderRadius: 22,
-              borderWidth: 1,
-              borderColor: colors.line,
-            }}
-          >
-            <Image
-              accessibilityLabel={t("Wallet address QR code", "钱包地址二维码")}
-              source={{
-                uri: `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(owner)}`,
-              }}
-              style={{ width: 220, height: 220 }}
-            />
-          </View>
-          {action("Copy address", "复制地址", async () => {
-            await Clipboard.setStringAsync(owner);
-            setNotice({
-              title: t("Address copied", "地址已复制"),
-              body: t(
-                "Your Robinhood Chain wallet address is ready to paste.",
-                "你的 Robinhood Chain 钱包地址已可粘贴。",
-              ),
-              tone: "success",
-            });
-          })}
         </>
       );
     if (page === "private") {
@@ -1949,7 +1782,10 @@ function Wallet() {
             action("Review transaction", "审核交易", prepareTransfer)
           )}
           {flowStep > 0 && (
-            <Button onPress={() => setFlowStep((step) => step - 1)}>{t("Back", "返回")}</Button>
+            <BackButton
+              onPress={() => setFlowStep((step) => step - 1)}
+              accessibilityLabel={t("Back", "返回")}
+            />
           )}
         </>
       );
@@ -2425,7 +2261,10 @@ function Wallet() {
             action("Review live route", "审核实时路线", prepareBridge)
           )}
           {bridgeStep > 0 && (
-            <Button onPress={() => setBridgeStep((step) => step - 1)}>{t("Back", "返回")}</Button>
+            <BackButton
+              onPress={() => setBridgeStep((step) => step - 1)}
+              accessibilityLabel={t("Back", "返回")}
+            />
           )}
         </>
       );
@@ -2899,7 +2738,10 @@ function Wallet() {
     if (settingsSection === "accounts")
       return (
         <>
-          <Button onPress={() => setSettingsSection("root")}>{t("Settings", "设置")}</Button>
+          <BackButton
+            onPress={() => setSettingsSection("root")}
+            accessibilityLabel={t("Settings", "设置")}
+          />
           {title(
             "Your wallets.",
             "你的钱包。",
@@ -2998,7 +2840,10 @@ function Wallet() {
     if (settingsSection === "security")
       return (
         <>
-          <Button onPress={() => setSettingsSection("root")}>{t("Settings", "设置")}</Button>
+          <BackButton
+            onPress={() => setSettingsSection("root")}
+            accessibilityLabel={t("Settings", "设置")}
+          />
           {title("Security.", "安全。")}
           <Button
             disabled={busy}
@@ -3031,7 +2876,10 @@ function Wallet() {
     if (settingsSection === "privacy")
       return (
         <>
-          <Button onPress={() => setSettingsSection("root")}>{t("Settings", "设置")}</Button>
+          <BackButton
+            onPress={() => setSettingsSection("root")}
+            accessibilityLabel={t("Settings", "设置")}
+          />
           {title("Privacy & data.", "隐私与数据。")}
           <Text style={s.small}>
             {t(
@@ -3082,7 +2930,10 @@ function Wallet() {
     if (settingsSection === "sessions")
       return (
         <>
-          <Button onPress={() => setSettingsSection("root")}>{t("Settings", "设置")}</Button>
+          <BackButton
+            onPress={() => setSettingsSection("root")}
+            accessibilityLabel={t("Settings", "设置")}
+          />
           {title("Agent sessions.", "代理会话。")}
           <Field
             label={t("Connect a scoped token", "连接限定权限令牌")}
@@ -3135,7 +2986,10 @@ function Wallet() {
     if (settingsSection === "device")
       return (
         <>
-          <Button onPress={() => setSettingsSection("root")}>{t("Settings", "设置")}</Button>
+          <BackButton
+            onPress={() => setSettingsSection("root")}
+            accessibilityLabel={t("Settings", "设置")}
+          />
           {title("This device.", "此设备。")}
           <Row label={t("Wallet", "钱包")} value={owner} />
           <Button

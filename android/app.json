@@ -27,7 +27,7 @@
         "ITSAppUsesNonExemptEncryption": false
       }
     },
-    "plugins": ["expo-secure-store", "expo-local-authentication"],
+    "plugins": ["expo-router", "expo-secure-store", "expo-local-authentication"],
     "updates": {
       "enabled": false
     },
