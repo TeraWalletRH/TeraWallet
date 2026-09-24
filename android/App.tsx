@@ -29,7 +29,7 @@ import * as upd from "./src/update";
 import { balances, client, execute, transactionStatus } from "./src/network";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
-import { UNVERIFIABLE, value as valueCore } from "./src/core";
+import { contacts as contactsCore, UNVERIFIABLE, value as valueCore } from "./src/core";
 import { check, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { normalizePhrase, walletFromPhrase } from "./src/crypto";
@@ -51,6 +51,8 @@ type Review = {
   afterSubmitted?: (hash: string) => Promise<void>;
   simulation?: "checking" | "passed" | "needs-attention";
   isPrivateBridge?: boolean;
+  /** The address the owner chose to pay. Read by the address book only. */
+  payee?: string;
 };
 const tokenImages: Record<string, any> = {
   USDG: require("./assets/RH-RWA-Assets-Media/usdg_logo.png"),
@@ -112,7 +114,7 @@ function Wallet() {
     [flowStep, setFlowStep] = useState(0),
     [amountInvalid, setAmountInvalid] = useState(false),
     [settingsSection, setSettingsSection] = useState<
-      "root" | "security" | "privacy" | "sessions" | "device" | "accounts"
+      "root" | "security" | "privacy" | "sessions" | "device" | "accounts" | "contacts"
     >("root"),
     // Every account on this wallet, derived on unlock and after each change.
     // Addresses only live here while the wallet is open; locking clears them,
@@ -183,6 +185,18 @@ function Wallet() {
     [auth, setAuth] = useState<null | { title: string; action: () => Promise<void> }>(null),
     [authPassword, setAuthPassword] = useState("");
   const pending = useRef(false);
+  // The contact sheet: adding, renaming, or offered right after a send.
+  const [contactSheet, setContactSheet] = useState<null | {
+      address: string;
+      fixed: boolean;
+      afterSend?: boolean;
+    }>(null),
+    [contactName, setContactName] = useState(""),
+    [contactAddress, setContactAddress] = useState(""),
+    [contactError, setContactError] = useState(""),
+    [contactQuery, setContactQuery] = useState("");
+  // Saved names, cleaned on every read: the stored list is whatever the file held.
+  const book = contactsCore.cleanBook(data.contacts);
   const inactivity = useRef(Date.now());
   const backgroundLock = useRef<ReturnType<typeof setTimeout> | null>(null);
   function forget() {
@@ -691,6 +705,9 @@ function Wallet() {
       [t("Send", "发送"), `${formatUnits(BigInt(i.amount), input.decimals)} ${input.symbol}`],
       [t("Recipient", "收款地址"), i.recipient || owner],
     ];
+    const payee = i.actionType === "TRANSFER" ? i.recipient : undefined;
+    const savedAs = payee ? contactsCore.nameFor(book, payee) : "";
+    if (savedAs) rows.push([t("Saved as", "已保存为"), savedAs]);
     if (q) {
       rows.push([
         t("Expected output", "预计收到"),
@@ -717,6 +734,7 @@ function Wallet() {
         verifyProposal(p, owner);
       },
       recipient: i.recipient || owner,
+      payee,
       actionHash: p.preparedTransaction.actionHash,
       draftId: p.createdAt,
     });
@@ -764,6 +782,12 @@ function Wallet() {
         [t("Asset", "资产"), asset],
         [t("Amount", "金额"), `${amount} ${asset}`],
         [t("Recipient", "收款方"), destination],
+        ...(contactsCore.nameFor(book, destination)
+          ? ([[t("Saved as", "已保存为"), contactsCore.nameFor(book, destination)]] as [
+              string,
+              string,
+            ][])
+          : []),
         [t("Routing", "路由"), t("Intake → payout → recipient", "接收 → 支付 → 收款方")],
       ],
       steps: [{ to: tx.to, data: tx.data, value: BigInt(tx.value).toString(), chainId: chain.id }],
@@ -774,6 +798,7 @@ function Wallet() {
           raw,
         ),
       recipient: created.job.intake_address,
+      payee: destination,
       reference: created.job.id,
       afterSubmitted: async (hash) => {
         await api(`/api/private-send/jobs/${created.job.id}/deposit`, { txHash: hash });
@@ -949,6 +974,7 @@ function Wallet() {
             bridgeInput: record.step === record.totalSteps ? r.bridgeInput : undefined,
             actionHash: record.step === record.totalSteps ? r.actionHash : undefined,
             isPrivateBridge: record.step === record.totalSteps ? r.isPrivateBridge : undefined,
+            payee: record.step === record.totalSteps ? r.payee : undefined,
           };
           await store({
             ...dataRef.current,
@@ -961,11 +987,19 @@ function Wallet() {
       if (r.afterSubmitted && submittedHash) await r.afterSubmitted(submittedHash);
       setPage("activity");
       await refresh();
-      setNotice({
-        title: t("Transaction submitted", "交易已提交"),
-        body: t("Your signed transaction is now in Activity.", "已签名交易现已显示在记录中。"),
-        tone: "success",
-      });
+      const payee = r.payee && isAddress(r.payee) ? r.payee : "";
+      if (
+        payee &&
+        payee.toLowerCase() !== owner.toLowerCase() &&
+        !contactsCore.nameFor(dataRef.current.contacts, payee)
+      )
+        openContact(payee, true);
+      else
+        setNotice({
+          title: t("Transaction submitted", "交易已提交"),
+          body: t("Your signed transaction is now in Activity.", "已签名交易现已显示在记录中。"),
+          tone: "success",
+        });
       setReview(null);
     } finally {
       setSigning(false);
@@ -1310,6 +1344,126 @@ function Wallet() {
       </>
     );
   }
+  const contactNote = t(
+    contactsCore.PRIVACY_NOTE,
+    "名称仅保存在此设备的加密钱包数据中，不会发送给 Tera。名称只是你的标签，并非核验：签名前请核对地址。",
+  );
+  function openContact(address: string, afterSend = false) {
+    setContactName(address ? contactsCore.nameFor(book, address) : "");
+    setContactAddress(address);
+    setContactError("");
+    setContactSheet({ address, fixed: !!address, afterSend });
+  }
+  async function saveContactNow() {
+    const sheet = contactSheet;
+    if (!sheet) return;
+    const result = contactsCore.saveContact(dataRef.current.contacts, {
+      address: sheet.fixed ? sheet.address : contactAddress,
+      name: contactName,
+      owner,
+    });
+    const saved = result.contact;
+    if (!result.ok || !saved) {
+      setContactError(result.reason);
+      return;
+    }
+    await store({ ...dataRef.current, contacts: result.book });
+    setContactSheet(null);
+    setNotice({
+      title: t("Contact saved", "联系人已保存"),
+      body: t(
+        `${saved.name} is saved for ${contactsCore.short(saved.address)} on this device only.`,
+        `已在本设备保存 ${saved.name}（${contactsCore.short(saved.address)}）。`,
+      ),
+      tone: "success",
+    });
+  }
+  function removeContactNow(address: string) {
+    confirm(
+      t("Remove contact", "删除联系人"),
+      t(
+        "The name is removed from this device. The address itself is unchanged.",
+        "名称将从此设备删除，地址本身不受影响。",
+      ),
+      () =>
+        void run(async () => {
+          await store({
+            ...dataRef.current,
+            contacts: contactsCore.removeContact(dataRef.current.contacts, address),
+          });
+          setContactSheet(null);
+        }),
+    );
+  }
+  /** Start a public send with this address already on the recipient step. */
+  function sendTo(address: string) {
+    setError("");
+    setAssetSymbol("USDG");
+    setAmount("");
+    setRecipient(address);
+    setRecipientKind("address");
+    setTagLookup({ state: "idle" });
+    setFlowStep(0);
+    setSendMode("public");
+    setPage("send");
+  }
+  /**
+   * Saved names and recent payees under the recipient field. A pick fills the
+   * full address, which is what the checks and the signature see.
+   */
+  function recipientPicks() {
+    const typed = recipient.trim();
+    if (isAddress(typed)) {
+      const name = contactsCore.nameFor(book, typed);
+      return name ? (
+        <Text style={[s.small, { color: colors.green }]}>
+          {t(
+            `Saved as ${name}. Read the address above — it is what gets signed.`,
+            `已保存为 ${name}。请核对上方地址——签名的是该地址。`,
+          )}
+        </Text>
+      ) : null;
+    }
+    const saved = contactsCore.searchContacts(book, typed);
+    const recent = typed
+      ? []
+      : contactsCore.recentPayees(data.history, book, { owner }).filter((entry) => !entry.name);
+    const picks = [...saved, ...recent].slice(0, 6);
+    if (!picks.length) return null;
+    return (
+      <View style={{ gap: 8 }}>
+        <Text style={s.eyebrow}>
+          {typed ? t("SAVED CONTACTS", "已保存联系人") : t("CONTACTS & RECENT", "联系人与最近")}
+        </Text>
+        {picks.map((entry) => (
+          <Pressable
+            key={entry.address}
+            accessibilityRole="button"
+            accessibilityLabel={`${entry.name || t("Sent before", "曾发送")} ${entry.address}`}
+            onPress={() => {
+              setRecipient(entry.address);
+              setTagLookup({ state: "idle" });
+            }}
+            style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
+          >
+            <MaterialCommunityIcons
+              name={entry.name ? "account-circle-outline" : "history"}
+              size={24}
+              color={colors.green}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={[s.text, { fontWeight: "700" }]}>
+                {entry.name || t("Sent before", "曾发送")}
+              </Text>
+              <Text style={s.mono} numberOfLines={1} ellipsizeMode="middle">
+                {entry.address}
+              </Text>
+            </View>
+          </Pressable>
+        ))}
+      </View>
+    );
+  }
   function main() {
     if (page === "nfts" && owner)
       return (
@@ -1505,7 +1659,7 @@ function Wallet() {
             <MaterialCommunityIcons name="image-multiple-outline" size={23} color={colors.green} />
             <Text style={[s.text, { flex: 1 }]}>{t("NFT gallery", "NFT ??")}</Text>
             <MaterialCommunityIcons name="chevron-right" size={20} color={colors.muted} />
-          </Pressable>{" "}
+          </Pressable>
           <View style={[s.panel, { backgroundColor: "#e5f2df" }]}>
             <View
               style={{
@@ -1873,6 +2027,7 @@ function Wallet() {
                   if (tagLookup.state !== "idle") setTagLookup({ state: "idle" });
                 }}
               />
+              {recipientKind === "address" && recipientPicks()}
               {recipientKind === "tag" ? (
                 <Text style={[s.small, tagLookup.state === "error" && { color: colors.danger }]}>
                   {tagLookup.state === "looking"
@@ -2710,6 +2865,22 @@ function Wallet() {
             return (
               <View key={r.hash} style={s.panel}>
                 <Text style={s.text}>{r.title}</Text>
+                {r.payee ? (
+                  <>
+                    <Text selectable style={s.small}>
+                      {t("To", "发送至")}:{" "}
+                      {contactsCore.nameFor(book, r.payee)
+                        ? `${contactsCore.nameFor(book, r.payee)} · `
+                        : ""}
+                      {r.payee}
+                    </Text>
+                    <Button onPress={() => openContact(r.payee)}>
+                      {contactsCore.nameFor(book, r.payee)
+                        ? t("Rename address", "重命名地址")
+                        : t("Save to contacts", "保存到联系人")}
+                    </Button>
+                  </>
+                ) : null}
                 <Text style={s.eyebrow}>
                   {r.status} · {r.step}/{r.totalSteps}
                 </Text>
@@ -2829,6 +3000,7 @@ function Wallet() {
           )}
           {[
             ["accounts", "Wallets", "钱包", "Add, name and switch between wallets"],
+            ["contacts", "Contacts", "联系人", "Names for the addresses you send to"],
             ["security", "Security", "安全", "Recovery phrase, biometrics and lock"],
             ["privacy", "Privacy & data", "隐私与数据", "Retention and deletion controls"],
             ["sessions", "Agent sessions", "代理会话", "Connect, create and revoke scoped tokens"],
@@ -2891,6 +3063,51 @@ function Wallet() {
           </View>
         </>
       );
+    if (settingsSection === "contacts") {
+      const list = contactsCore.searchContacts(book, contactQuery);
+      return (
+        <>
+          <Button onPress={() => setSettingsSection("root")}>{t("Settings", "设置")}</Button>
+          {title("Contacts.", "联系人。", contactNote)}
+          <Field
+            label={t("Search", "搜索")}
+            value={contactQuery}
+            onChangeText={setContactQuery}
+            placeholder={t("Name or 0x…", "名称或 0x…")}
+          />
+          {list.map((entry) => (
+            <View key={entry.address} style={s.panel}>
+              <Text style={[s.text, { fontWeight: "700" }]}>{entry.name}</Text>
+              <Text selectable style={s.mono}>
+                {entry.address}
+              </Text>
+              <View style={s.wrap}>
+                <Button primary onPress={() => sendTo(entry.address)}>
+                  {t("Send", "发送")}
+                </Button>
+                <Button onPress={() => openContact(entry.address)}>{t("Rename", "重命名")}</Button>
+                <Button onPress={() => removeContactNow(entry.address)}>
+                  {t("Remove", "删除")}
+                </Button>
+              </View>
+            </View>
+          ))}
+          {!list.length && (
+            <Text style={s.small}>
+              {contactQuery
+                ? t("No contact matches that search.", "没有匹配的联系人。")
+                : t(
+                    "No saved addresses yet. After you send to an address, you can save it here.",
+                    "还没有保存的地址。向某个地址发送后即可在此保存。",
+                  )}
+            </Text>
+          )}
+          <Button primary onPress={() => openContact("")}>
+            {t("Add a contact", "添加联系人")}
+          </Button>
+        </>
+      );
+    }
     if (settingsSection === "accounts")
       return (
         <>
@@ -3705,6 +3922,92 @@ function Wallet() {
             </Button>
           </Pressable>
         </Pressable>
+      </Modal>
+      <Modal
+        visible={!!contactSheet && !!owner}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setContactSheet(null)}
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <Pressable
+            onPress={() => setContactSheet(null)}
+            style={{ flex: 1, backgroundColor: "#10221988", justifyContent: "flex-end" }}
+          >
+            <Pressable
+              onPress={() => {}}
+              style={{
+                backgroundColor: colors.paper,
+                borderTopLeftRadius: 30,
+                borderTopRightRadius: 30,
+                padding: 24,
+                gap: 14,
+              }}
+            >
+              {contactSheet?.afterSend ? (
+                <>
+                  <MaterialCommunityIcons
+                    name="check-circle-outline"
+                    size={32}
+                    color={colors.green}
+                  />
+                  <Text style={s.title}>{t("Transaction submitted", "交易已提交")}</Text>
+                  <Text style={s.text}>
+                    {t(
+                      "Your signed transaction is now in Activity.",
+                      "已签名交易现已显示在记录中。",
+                    )}
+                  </Text>
+                  <Text style={[s.text, { fontWeight: "700", marginTop: 6 }]}>
+                    {t("Save this address to contacts?", "将此地址保存到联系人？")}
+                  </Text>
+                </>
+              ) : (
+                <Text style={s.title}>
+                  {contactSheet?.fixed && contactsCore.nameFor(book, contactSheet.address)
+                    ? t("Rename contact", "重命名联系人")
+                    : t("Save a contact", "保存联系人")}
+                </Text>
+              )}
+              {contactSheet?.fixed ? (
+                <Text selectable style={s.mono}>
+                  {contactSheet.address}
+                </Text>
+              ) : (
+                <Field
+                  label={t("Robinhood Chain address", "Robinhood Chain 地址")}
+                  value={contactAddress}
+                  onChangeText={(value) => {
+                    setContactAddress(value);
+                    setContactError("");
+                  }}
+                  placeholder="0x…"
+                />
+              )}
+              <Field
+                label={t("Name", "名称")}
+                value={contactName}
+                onChangeText={(value) => {
+                  setContactName(value);
+                  setContactError("");
+                }}
+                placeholder={t("e.g. Mum, Rent, Ada", "例如：妈妈、房租、Ada")}
+                maxLength={contactsCore.LIMITS.maxLength}
+              />
+              {contactError ? (
+                <Text style={[s.small, { color: colors.danger }]}>{contactError}</Text>
+              ) : null}
+              <Text style={s.small}>{contactNote}</Text>
+              {action("Save contact", "保存联系人", async () => saveContactNow())}
+              <Button onPress={() => setContactSheet(null)}>
+                {contactSheet?.afterSend ? t("Not now", "暂不") : t("Cancel", "取消")}
+              </Button>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
       <Modal
         visible={!!auth && !!owner && !review}
