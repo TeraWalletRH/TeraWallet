@@ -24,6 +24,7 @@
     },
     "production": {
       "channel": "production",
+      "autoIncrement": true,
       "env": {
         "TERA_SIGNED_RELEASE": "true"
       },
