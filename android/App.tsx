@@ -9,6 +9,7 @@ import {
   Image,
   Linking,
   Modal,
+  PanResponder,
   Platform,
   Pressable,
   RefreshControl,
@@ -17,12 +18,13 @@ import {
   View,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
+import Svg, { Path, Defs, RadialGradient, Stop } from "react-native-svg";
 import { BlurTargetView, BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
-import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
+import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
 import { formatUnits, parseUnits, zeroAddress, isAddress, type Address } from "viem";
 import { api } from "./src/api";
 import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
@@ -62,6 +64,7 @@ import { useFonts } from "expo-font";
 import { minimise, PROPOSAL_KEEP, rehydrate, residual, type MinimiseResult } from "./src/minimise";
 import { Gallery, type Item as NftItem } from "./src/Gallery";
 import { ActionSheet } from "./src/ActionSheet";
+import { AppTour, type TourRect } from "./src/Tour";
 import { nft } from "./src/core";
 
 type Review = {
@@ -95,16 +98,6 @@ const tokenImages: Record<string, any> = {
   USDC: require("./assets/usdc.png"),
   USDT: require("./assets/usdt.png"),
   SOL: require("./assets/solana.png"),
-};
-
-// Fluent Emoji 3D (MIT, © Microsoft) — see assets/onboarding/LICENSE.
-const onboardingArt = {
-  welcome: require("./assets/onboarding/welcome.png"),
-  phrase: require("./assets/onboarding/phrase.png"),
-  backup: require("./assets/onboarding/backup.png"),
-  import: require("./assets/onboarding/import.png"),
-  pin: require("./assets/onboarding/pin.png"),
-  unlock: require("./assets/onboarding/unlock.png"),
 };
 
 const logoMark = require("./assets/logo-mark.png");
@@ -215,14 +208,15 @@ function WelcomeHero() {
   );
 }
 /**
- * An onboarding illustration, gently bobbing in place — gives the Fluent
- * Emoji art some life instead of sitting static. A real component (not a
- * helper function called inline from Wallet()) specifically so its
- * animation hooks get their own mount/unmount lifecycle per illustration
- * shown, rather than attaching to Wallet()'s own hook order, which would
- * break across onboarding's conditional branches.
+ * The same wordmark-on-a-badge treatment as WelcomeHero, scaled down for
+ * every later onboarding step — one brand mark throughout instead of a
+ * different stock illustration per step. A real component (not a helper
+ * function called inline from Wallet()) specifically so its animation
+ * hooks get their own mount/unmount lifecycle per step shown, rather than
+ * attaching to Wallet()'s own hook order, which would break across
+ * onboarding's conditional branches.
  */
-function Illustration({ name }: { name: keyof typeof onboardingArt }) {
+function Illustration() {
   const bob = React.useRef(new Animated.Value(0)).current;
   React.useEffect(() => {
     const loop = Animated.loop(
@@ -245,12 +239,23 @@ function Illustration({ name }: { name: keyof typeof onboardingArt }) {
     return () => loop.stop();
   }, [bob]);
   return (
-    <View style={{ alignItems: "center", marginTop: 28, marginBottom: 4 }}>
+    <View style={{ alignItems: "center", marginTop: 12, marginBottom: 4 }}>
+      <View
+        pointerEvents="none"
+        style={{
+          position: "absolute",
+          width: 104,
+          height: 104,
+          borderRadius: 52,
+          backgroundColor: colors.lime,
+          opacity: 0.14,
+        }}
+      />
       <View
         style={{
-          width: 188,
-          height: 188,
-          borderRadius: 94,
+          width: 112,
+          height: 112,
+          borderRadius: 56,
           borderWidth: 1,
           borderColor: colors.tint,
           alignItems: "center",
@@ -259,27 +264,155 @@ function Illustration({ name }: { name: keyof typeof onboardingArt }) {
       >
         <View
           style={{
-            width: 156,
-            height: 156,
-            borderRadius: 78,
+            width: 94,
+            height: 94,
+            borderRadius: 47,
             backgroundColor: colors.tint,
             alignItems: "center",
             justifyContent: "center",
           }}
         >
           <Animated.Image
-            source={onboardingArt[name]}
-            accessibilityIgnoresInvertColors
+            source={logoMark}
+            resizeMode="contain"
             style={{
-              width: 112,
-              height: 112,
+              width: 52,
+              height: 52,
               transform: [
-                { translateY: bob.interpolate({ inputRange: [0, 1], outputRange: [0, -8] }) },
+                { translateY: bob.interpolate({ inputRange: [0, 1], outputRange: [0, -5] }) },
               ],
             }}
           />
         </View>
       </View>
+    </View>
+  );
+}
+/**
+ * A smooth closed blob through `points` around a circle, each point's
+ * radius wobbling on a travelling sine wave — an actual wavelength moving
+ * around the shape, which is the point. Quadratic beziers run through the
+ * midpoint of each edge (not the points themselves), which is what keeps
+ * every corner rounded instead of drawing a spiky star.
+ */
+function wobblePath(
+  cx: number,
+  cy: number,
+  baseR: number,
+  amp: number,
+  freq: number,
+  phase: number,
+  points = 10,
+) {
+  const pts: [number, number][] = [];
+  for (let i = 0; i < points; i++) {
+    const angle = (i / points) * Math.PI * 2;
+    const r = baseR + amp * Math.sin(freq * angle + phase);
+    pts.push([cx + r * Math.cos(angle), cy + r * Math.sin(angle)]);
+  }
+  const mid = (a: [number, number], b: [number, number]): [number, number] => [
+    (a[0] + b[0]) / 2,
+    (a[1] + b[1]) / 2,
+  ];
+  const start = mid(pts[points - 1], pts[0]);
+  let d = `M ${start[0]} ${start[1]} `;
+  for (let i = 0; i < points; i++) {
+    const next = pts[(i + 1) % points];
+    const m = mid(pts[i], next);
+    d += `Q ${pts[i][0]} ${pts[i][1]} ${m[0]} ${m[1]} `;
+  }
+  return d + "Z";
+}
+/**
+ * A listening state for the assistant's voice input. No real audio levels
+ * exist yet to visualise (this is UI only; nothing is transcribed), so
+ * instead of a literal waveform this fakes the same "alive" read with
+ * layered, continuously-morphing blobs in the mark's own palette — closer
+ * to Siri's orb than a static mic icon or a flat nested-circle target.
+ * Native-driven Animated can't touch an SVG path's `d`, so the phase value
+ * runs on the JS thread and a listener recomputes the path on every tick.
+ */
+function VoiceBlob({
+  size,
+  gradientId,
+  colorA,
+  colorB,
+  duration,
+  amp,
+  freq,
+}: {
+  size: number;
+  gradientId: string;
+  colorA: string;
+  colorB: string;
+  duration: number;
+  amp: number;
+  freq: number;
+}) {
+  const phase = React.useRef(new Animated.Value(0)).current;
+  const [d, setD] = React.useState(() =>
+    wobblePath(size / 2, size / 2, size / 2 - amp, amp, freq, 0),
+  );
+  React.useEffect(() => {
+    const id = phase.addListener(({ value }) => {
+      setD(wobblePath(size / 2, size / 2, size / 2 - amp, amp, freq, value * Math.PI * 2));
+    });
+    const loop = Animated.loop(
+      Animated.timing(phase, {
+        toValue: 1,
+        duration,
+        easing: Easing.linear,
+        useNativeDriver: false,
+      }),
+    );
+    loop.start();
+    return () => {
+      loop.stop();
+      phase.removeListener(id);
+    };
+  }, [phase, duration, size, amp, freq]);
+  return (
+    <Svg width={size} height={size} style={{ position: "absolute" }}>
+      <Defs>
+        <RadialGradient id={gradientId} cx="50%" cy="45%" r="65%">
+          <Stop offset="0%" stopColor={colorA} stopOpacity={0.95} />
+          <Stop offset="100%" stopColor={colorB} stopOpacity={0.55} />
+        </RadialGradient>
+      </Defs>
+      <Path d={d} fill={`url(#${gradientId})`} />
+    </Svg>
+  );
+}
+function VoiceListening() {
+  return (
+    <View style={{ alignItems: "center", justifyContent: "center", width: 220, height: 220 }}>
+      <VoiceBlob
+        size={190}
+        gradientId="voiceBlobA"
+        colorA={colors.lime}
+        colorB={colors.green}
+        duration={5200}
+        amp={16}
+        freq={3}
+      />
+      <VoiceBlob
+        size={148}
+        gradientId="voiceBlobB"
+        colorA={colors.copper}
+        colorB={colors.lime}
+        duration={4200}
+        amp={14}
+        freq={4}
+      />
+      <VoiceBlob
+        size={100}
+        gradientId="voiceBlobC"
+        colorA="#ffe9c2"
+        colorB={colors.copper}
+        duration={3400}
+        amp={10}
+        freq={5}
+      />
     </View>
   );
 }
@@ -298,6 +431,28 @@ function ChainIcon({ name, size = 32 }: { name: string; size?: number }) {
       style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: colors.wash }}
     />
   );
+}
+
+/**
+ * A shuffle order for the backup word bank, stable across re-renders without
+ * a `useMemo` — `onboarding()` is a plain function called conditionally
+ * inside Wallet(), not a component, so it can't hold hooks of its own.
+ * Deterministic in the phrase (same phrase, same order every render) and
+ * different between phrases, via a small seeded PRNG rather than `Math.random`.
+ */
+function shuffleOrder(seed: string, n: number): number[] {
+  let h = 0;
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0;
+  const rand = () => {
+    h = (h * 1103515245 + 12345) | 0;
+    return ((h >>> 1) % 100000) / 100000;
+  };
+  const order = Array.from({ length: n }, (_, i) => i);
+  for (let i = order.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [order[i], order[j]] = [order[j], order[i]];
+  }
+  return order;
 }
 
 /** A balance for a list row: at most six decimals, no trailing zeros. The review screen shows the exact figure. */
@@ -331,6 +486,9 @@ function Wallet() {
     [owner, setOwner] = useState<Address | "">("");
   const [page, setPage] = useState("home"),
     [sheetOpen, setSheetOpen] = useState(false),
+    [swapReceivePicker, setSwapReceivePicker] = useState(false),
+    [voiceMode, setVoiceMode] = useState(false),
+    [liveTranscript, setLiveTranscript] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [progress, setProgress] = useState("");
@@ -351,6 +509,22 @@ function Wallet() {
       Array<{ index: number; address: string; name: string; active: boolean }>
     >([]),
     [nameInput, setNameInput] = useState(""),
+    // Which wallet's "…" action sheet / rename sheet is open, if any — an
+    // index into `accounts`, not a boolean, since either sheet can target
+    // any wallet in the list, not just the one currently open.
+    [walletMenuFor, setWalletMenuFor] = useState<number | null>(null),
+    [renamingIndex, setRenamingIndex] = useState<number | null>(null),
+    // Shown inline in the rename sheet, never via the global `error` →
+    // `notice` pipeline: that pipeline opens its own Modal, which would
+    // stack on top of the rename sheet's still-open Modal and hang iOS,
+    // the same way the "…" menu's own actions did before they were
+    // deferred past its close.
+    [renameError, setRenameError] = useState(""),
+    [accountsInfo, setAccountsInfo] = useState(false),
+    // Same "…" menu treatment as a wallet row, keyed by address instead of
+    // index since that's a contact's stable identity.
+    [contactMenuFor, setContactMenuFor] = useState<string | null>(null),
+    [contactsInfo, setContactsInfo] = useState(false),
     [notice, setNotice] = useState<null | {
       title: string;
       body: string;
@@ -369,11 +543,55 @@ function Wallet() {
   const [setup, setSetup] = useState<"start" | "phrase" | "backup" | "import" | "password">(
     "start",
   );
+  // The trail of steps taken to reach the current one, so a swipe or a back
+  // control can retrace it — this is a plain wizard, not a navigation stack,
+  // so there is nothing else recording how `setup` got here.
+  const [setupHistory, setSetupHistory] = useState<(typeof setup)[]>([]);
+  function goSetup(next: typeof setup) {
+    setSetupHistory((h) => [...h, setup]);
+    setSetup(next);
+  }
+  function setupBack() {
+    setSetupHistory((h) => {
+      if (!h.length) return h;
+      setSetup(h[h.length - 1]);
+      return h.slice(0, -1);
+    });
+  }
+  // There's no navigation stack here (plain state, not react-navigation), so
+  // nothing gives onboarding the native edge-swipe-to-go-back gesture for
+  // free. This reproduces just that gesture: a narrow capture zone on the
+  // left edge, refs so the PanResponder (created once) always sees the
+  // latest history instead of the one from first render.
+  const setupHistoryRef = useRef(setupHistory);
+  setupHistoryRef.current = setupHistory;
+  const setupBackRef = useRef(setupBack);
+  setupBackRef.current = setupBack;
+  const edgeSwipeBack = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponderCapture: (evt, gesture) => {
+        if (!setupHistoryRef.current.length) return false;
+        const startX = evt.nativeEvent.pageX - gesture.dx;
+        return startX < 24 && gesture.dx > 10 && Math.abs(gesture.dx) > Math.abs(gesture.dy) * 2;
+      },
+      onPanResponderRelease: (_evt, gesture) => {
+        if (gesture.dx > 70 && Math.abs(gesture.dy) < 60) setupBackRef.current();
+      },
+    }),
+  ).current;
   const [mnemonic, setMnemonic] = useState(""),
     [password, setPassword] = useState(""),
     [repeat, setRepeat] = useState("");
   const [answers, setAnswers] = useState(["", "", ""]),
     [revealed, setRevealed] = useState("");
+  // The backup check picks words rather than typing them: each slot holds the
+  // index into `mnemonic`'s own words that was tapped for it (not the bank's
+  // shuffled position), so a picked chip can be found and hidden regardless
+  // of where it landed in the shuffle.
+  const [pickedChips, setPickedChips] = useState<(number | null)[]>([null, null, null]),
+    // -1: no slot's word list is open. A slot only opens on tap — nothing
+    // is shown until the owner asks for it.
+    [activeAnswerSlot, setActiveAnswerSlot] = useState(-1);
   const [amount, setAmount] = useState(""),
     [recipient, setRecipient] = useState(""),
     // Which kind of destination the owner is entering. A tag and an address
@@ -410,20 +628,37 @@ function Wallet() {
   const [review, setReview] = useState<Review | null>(null),
     [signing, setSigning] = useState(false),
     [auth, setAuth] = useState<null | { title: string; action: () => Promise<void> }>(null),
-    [authPassword, setAuthPassword] = useState("");
+    [authPassword, setAuthPassword] = useState(""),
+    // Shown inline in their own modals rather than via the global `error` →
+    // `notice` pipeline: that pipeline opens its own Modal, which would
+    // stack on top of these still-open ones and hang iOS (same reasoning as
+    // renameError near the wallet menu).
+    [authError, setAuthError] = useState(""),
+    [biometricSheet, setBiometricSheet] = useState(false),
+    [biometricError, setBiometricError] = useState("");
   const pending = useRef(false);
   const glassTarget = useRef<View>(null);
-  // The centre button turns its plus into a cross while the sheet is open, on
-  // the sheet's own slow curve.
-  const spin = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.timing(spin, {
-      toValue: sheetOpen ? 1 : 0,
-      duration: sheetOpen ? 520 : 340,
-      easing: Easing.bezier(0.16, 1, 0.3, 1),
-      useNativeDriver: true,
-    }).start();
-  }, [sheetOpen, spin]);
+  const chatScrollRef = useRef<ScrollView>(null);
+  // A wallet-menu action that itself opens a Modal can't run right away —
+  // the menu is still a Modal mid-close at that point. It's queued here and
+  // fired from the menu's onClosed, once its Modal has actually unmounted.
+  const afterWalletMenuCloses = useRef<(() => void) | null>(null);
+  const afterContactMenuCloses = useRef<(() => void) | null>(null);
+  // The spotlight app tour: `tourStep` is null while inactive, else an index
+  // into `tourSteps` below. `tourRect` is that step's target measured in
+  // screen coordinates — recomputed on every step change, not derived at
+  // render time, since it depends on an async native measurement.
+  const [tourStep, setTourStep] = useState<number | null>(null);
+  const [tourRect, setTourRect] = useState<TourRect | null>(null);
+  const tourPending = useRef(false);
+  const homeScrollRef = useRef<ScrollView>(null);
+  const homeScrollY = useRef(0);
+  const tourTagBannerRef = useRef<View>(null);
+  const tourSwitcherRef = useRef<View>(null);
+  const tourBalanceRef = useRef<View>(null);
+  const tourActionsRef = useRef<View>(null);
+  const tourAssetsRef = useRef<View>(null);
+  const tourTabBarRef = useRef<View>(null);
   const [keyboardOpen, setKeyboardOpen] = useState(false);
   useEffect(() => {
     const shown = Keyboard.addListener("keyboardDidShow", () => setKeyboardOpen(true));
@@ -433,6 +668,66 @@ function Wallet() {
       hidden.remove();
     };
   }, []);
+  // On-device speech recognition for the assistant's mic button. Interim
+  // results land here as they're heard, so the message field is already
+  // filled with whatever was said by the time recognition ends — there's
+  // no separate "transcribe, then fill" step.
+  useSpeechRecognitionEvent("result", (event) => {
+    const transcript = event.results[0]?.transcript;
+    if (transcript !== undefined) {
+      setLiveTranscript(transcript);
+      setMessage(transcript);
+    }
+  });
+  useSpeechRecognitionEvent("end", () => setVoiceMode(false));
+  useSpeechRecognitionEvent("error", (event) => {
+    setVoiceMode(false);
+    // Silence and a deliberate stop aren't failures — nothing to tell the
+    // owner beyond the message field simply staying as it was.
+    if (
+      event.error === "no-speech" ||
+      event.error === "speech-timeout" ||
+      event.error === "aborted"
+    )
+      return;
+    if (event.error === "not-allowed") {
+      setNotice({
+        title: t("Microphone access needed", "需要麦克风权限"),
+        body: t(
+          "Allow microphone and speech recognition access in system settings to use voice input.",
+          "请在系统设置中允许麦克风和语音识别权限以使用语音输入。",
+        ),
+        tone: "error",
+      });
+      return;
+    }
+    setNotice({
+      title: t("Voice input failed", "语音输入失败"),
+      body: t("Try again, or type your message instead.", "请重试，或改为手动输入。"),
+      tone: "error",
+    });
+  });
+  async function startVoiceMode() {
+    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!permission.granted) {
+      setNotice({
+        title: t("Microphone access needed", "需要麦克风权限"),
+        body: t(
+          "Allow microphone and speech recognition access in system settings to use voice input.",
+          "请在系统设置中允许麦克风和语音识别权限以使用语音输入。",
+        ),
+        tone: "error",
+      });
+      return;
+    }
+    setLiveTranscript("");
+    ExpoSpeechRecognitionModule.start({
+      lang: language === "zh" ? "zh-CN" : "en-US",
+      interimResults: true,
+      continuous: false,
+    });
+    setVoiceMode(true);
+  }
   // The contact sheet: adding, renaming, or offered right after a send.
   const [contactSheet, setContactSheet] = useState<null | {
       address: string;
@@ -477,6 +772,7 @@ function Wallet() {
     setBridgeStep(0);
     setSettingsSection("root");
     setSetup("start");
+    setSetupHistory([]);
     setAccounts([]);
     setNameInput("");
     void vault.usesPin().then(setPinWallet);
@@ -614,8 +910,10 @@ function Wallet() {
       setData(saved);
       dataRef.current = saved;
       setLanguage(saved.language);
-      setColorTheme(saved.theme ?? "dark");
-      setTheme(saved.theme ?? "dark");
+      // Dark mode only for now, regardless of what a wallet set up before
+      // this had stored — see the commented-out toggle in Settings.
+      setColorTheme("dark");
+      setTheme("dark");
     }
     void refresh(address);
     return address;
@@ -626,6 +924,175 @@ function Wallet() {
     return adopt((await vault.selectAccount(index)) as Address);
   }
 
+  const tourSteps = [
+    // Only in the tour when the banner itself is on screen to point at —
+    // an owner who's already claimed a tag never sees this step.
+    ...(tagsAvailable() && myTag === null
+      ? [
+          {
+            ref: tourTagBannerRef,
+            scrollable: true,
+            label: t("Your tag", "你的标签"),
+            body: t(
+              "Claim a short name so people can send to you without typing out an address.",
+              "领取一个简短的名称，这样其他人无需输入地址即可向你付款。",
+            ),
+          },
+        ]
+      : []),
+    {
+      ref: tourSwitcherRef,
+      scrollable: true,
+      label: t("Wallets", "钱包"),
+      body: t(
+        "Tap your wallet name to switch between wallets, or add another.",
+        "点击钱包名称可切换钱包或添加新钱包。",
+      ),
+    },
+    {
+      ref: tourBalanceRef,
+      scrollable: true,
+      label: t("Balance", "余额"),
+      body: t(
+        "Your total balance across every asset, plus the ETH you're holding for gas.",
+        "这里显示你所有资产的总价值，以及用于支付燃料费的 ETH。",
+      ),
+    },
+    {
+      ref: tourActionsRef,
+      scrollable: true,
+      label: t("Quick actions", "快捷操作"),
+      body: t(
+        "Send, receive, or swap directly. Tap More for everything else this wallet does:",
+        "直接发送、接收或兑换。点击“更多”查看钱包的其他全部功能：",
+      ),
+      // A preview of what's actually inside the More sheet, shown right in
+      // the tooltip rather than opening the real sheet for this step: the
+      // real one is a Modal, and stacking it under this overlay risks the
+      // exact same double-Modal hang fixed elsewhere in the wallet menu.
+      extra: (
+        <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+          {(
+            [
+              ["bridge", t("Bridge", "跨链")],
+              ["shield-lock-outline", t("Private", "私密发送")],
+              ["image-multiple-outline", t("NFTs", "NFT")],
+              ...(tagsAvailable() ? [["at", t("Tag", "标签")]] : []),
+              ["trophy-outline", t("Ranks", "榜单")],
+              ["account-multiple-outline", t("Contacts", "联系人")],
+            ] as [string, string][]
+          ).map(([icon, label]) => (
+            <View
+              key={icon}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 6,
+                backgroundColor: colors.wash,
+                borderRadius: 999,
+                paddingVertical: 6,
+                paddingHorizontal: 10,
+              }}
+            >
+              <Icon name={icon} size={14} color={colors.green} />
+              <Text style={[s.small, { color: colors.ink }]}>{label}</Text>
+            </View>
+          ))}
+        </View>
+      ),
+    },
+    {
+      ref: tourAssetsRef,
+      scrollable: true,
+      label: t("Assets", "资产"),
+      body: t(
+        "Your tokens live here, with NFTs one tap away.",
+        "你的代币显示在这里，NFT 也只需一步即可查看。",
+      ),
+    },
+    {
+      ref: tourTabBarRef,
+      scrollable: false,
+      label: t("Navigation", "导航"),
+      body: t(
+        "Jump between your wallet, activity, the Tera assistant, and settings from here.",
+        "在这里可以切换钱包、记录、Tera 助手和设置。",
+      ),
+    },
+  ];
+  function measureInWindow(ref: React.RefObject<View | null>): Promise<TourRect | null> {
+    return new Promise((resolve) => {
+      if (!ref.current) {
+        resolve(null);
+        return;
+      }
+      ref.current.measureInWindow((x, y, width, height) => resolve({ x, y, width, height }));
+    });
+  }
+  function wait(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+  // Scrolls the target into a consistent spot before measuring it for real:
+  // a target's on-screen position depends on scroll, so the first read here
+  // is only used to compute how far to scroll, not to place the spotlight.
+  async function goToTourStep(index: number) {
+    const step = tourSteps[index];
+    if (!step) return;
+    if (step.scrollable) {
+      const first = await measureInWindow(step.ref);
+      if (first) {
+        const delta = first.y - 150;
+        if (Math.abs(delta) > 4) {
+          homeScrollRef.current?.scrollTo({
+            y: Math.max(0, homeScrollY.current + delta),
+            animated: true,
+          });
+          await wait(360);
+        }
+      }
+    }
+    const rect = await measureInWindow(step.ref);
+    setTourRect(rect);
+    setTourStep(index);
+  }
+  function nextTourStep() {
+    if (tourStep === null) return;
+    if (tourStep + 1 >= tourSteps.length) {
+      setTourStep(null);
+      setTourRect(null);
+      return;
+    }
+    void goToTourStep(tourStep + 1);
+  }
+  function prevTourStep() {
+    if (tourStep === null || tourStep === 0) return;
+    void goToTourStep(tourStep - 1);
+  }
+  function skipTour() {
+    setTourStep(null);
+    setTourRect(null);
+  }
+  // Called from Home once it's actually on screen — either immediately, if
+  // already there, or after `page` catches up when triggered from elsewhere
+  // (first unlock, or "Replay app tour" from Settings).
+  function startTour() {
+    if (page === "home") {
+      void goToTourStep(0);
+      return;
+    }
+    tourPending.current = true;
+    setPage("home");
+  }
+  useEffect(() => {
+    if (page === "home" && tourPending.current) {
+      tourPending.current = false;
+      const id = setTimeout(() => void goToTourStep(0), 250);
+      return () => clearTimeout(id);
+    }
+    // Only `page` should retrigger this — `tourPending` is a ref precisely
+    // so setting it doesn't need to also be a dependency here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
   async function opened(address: Address, guard: () => void) {
     setOwner(address);
     setExists(true);
@@ -633,17 +1100,24 @@ function Wallet() {
     setMnemonic("");
     setRepeat("");
     setSetup("start");
+    setSetupHistory([]);
     syncAccounts();
     void refresh(address);
     void vault
       .loadData()
       .then((saved) => {
         guard();
-        setData(saved);
-        dataRef.current = saved;
+        const next = saved.tourSeen ? saved : { ...saved, tourSeen: true };
+        setData(next);
+        dataRef.current = next;
         setLanguage(saved.language);
-        setColorTheme(saved.theme ?? "dark");
-        setTheme(saved.theme ?? "dark");
+        // Dark mode only for now — see the commented-out toggle in Settings.
+        setColorTheme("dark");
+        setTheme("dark");
+        if (!saved.tourSeen) {
+          void vault.saveData(next).catch(() => {});
+          startTour();
+        }
       })
       .catch(() => {});
   }
@@ -1328,6 +1802,7 @@ function Wallet() {
   }
   function authenticate(title: string, action: () => Promise<void>) {
     setAuthPassword("");
+    setAuthError("");
     setAuth({ title, action });
   }
   async function authorize(biometric: boolean, guard: () => void) {
@@ -1346,12 +1821,35 @@ function Wallet() {
       { text: t("Continue", "继续"), style: "destructive", onPress: fn },
     ]);
   }
-  const title = (en: string, zh: string, subtitle?: string) => (
-    <View style={{ gap: 14 }}>
-      <Text style={s.title}>{t(en, zh)}</Text>
+  const title = (
+    en: string,
+    zh: string,
+    subtitle?: string,
+    align: "left" | "center" = "center",
+  ) => (
+    <View style={{ gap: 14, alignItems: align === "center" ? "center" : "flex-start" }}>
+      <Text style={[s.title, { textAlign: align }]}>{t(en, zh)}</Text>
       {subtitle && (
-        <Text style={[s.small, { fontSize: 15, lineHeight: 21 }]}>{subtitle}</Text>
+        <Text style={[s.small, { fontSize: 15, lineHeight: 21, textAlign: align }]}>
+          {subtitle}
+        </Text>
       )}
+    </View>
+  );
+  // Auth screens open with a hero graphic + title. `fill` (the default)
+  // sits them in the vertical middle of the space before the controls that
+  // follow (PIN pad, keypad) — right for screens with enough trailing
+  // content to balance it. A screen whose trailing content is just one
+  // field or a short form (import, the phrase/backup steps) has too little
+  // below to balance a flex:1 header: centering it in *all* the leftover
+  // space stretches that gap to the entire screen height instead of a
+  // sensible one, so those pass `fill: false` for a fixed gap instead.
+  const authHeader = (hero: React.ReactNode, titleNode: React.ReactNode, fill = true) => (
+    <View
+      style={fill ? { flex: 1, justifyContent: "center", gap: 24 } : { gap: 24, paddingTop: 4 }}
+    >
+      {hero}
+      {titleNode}
     </View>
   );
   const action = (
@@ -1385,18 +1883,23 @@ function Wallet() {
     if (exists)
       return (
         <>
-          <Illustration name="unlock" />
-          {title(
-            "Your wallet.\nYour authority.",
-            "你的钱包。\n你的权限。",
-            t("Unlock on this device.", "在此设备上解锁。"),
+          {authHeader(
+            <Illustration />,
+            title(
+              "Your wallet.\nYour authority.",
+              "你的钱包。\n你的权限。",
+              t("Unlock on this device.", "在此设备上解锁。"),
+            ),
           )}
           {pinWallet ? (
             <>
               <PinInput label={t("Six-digit wallet PIN", "六码钱包 PIN")} value={password} />
               {busy ? (
-                <View style={{ alignItems: "center", paddingVertical: 20 }}>
-                  <TeraSpinner size={22} />
+                // Same height as the Keypad it replaces (4 rows of 72 + 3
+                // gaps of 16), so the loader doesn't collapse the layout
+                // into a tiny icon stranded where the keypad used to be.
+                <View style={{ height: 336, alignItems: "center", justifyContent: "center" }}>
+                  <TeraSpinner size={44} />
                 </View>
               ) : (
                 <Keypad
@@ -1461,7 +1964,7 @@ function Wallet() {
               opacity: busy ? 0.4 : pressed ? 0.6 : 1,
             })}
           >
-            <MaterialCommunityIcons name="fingerprint" size={17} color={colors.green} />
+            <Icon name="fingerprint" size={17} color={colors.green} />
             <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
               {t("Use biometrics", "使用生物识别")}
             </Text>
@@ -1482,6 +1985,7 @@ function Wallet() {
                     await vault.eraseWallet();
                     setExists(false);
                     setSetup("import");
+                    setSetupHistory([]);
                   }),
               )
             }
@@ -1500,13 +2004,15 @@ function Wallet() {
     if (setup === "start")
       return (
         <>
-          <WelcomeHero />
-          {title(
-            "Your assets.\nYour rules.",
-            "你的资产。\n你的规则。",
-            t(
-              "Self-custodial. Your recovery phrase and keys never leave this device.",
-              "自主保管。助记词和密钥永远只保存在此设备上。",
+          {authHeader(
+            <WelcomeHero />,
+            title(
+              "Your assets.\nYour rules.",
+              "你的资产。\n你的规则。",
+              t(
+                "Self-custodial. Your recovery phrase and keys never leave this device.",
+                "自主保管。助记词和密钥永远只保存在此设备上。",
+              ),
             ),
           )}
           <View style={{ flex: 1 }} />
@@ -1515,27 +2021,55 @@ function Wallet() {
             disabled={busy}
             onPress={() => {
               setMnemonic(vault.newPhrase());
-              setSetup("phrase");
+              goSetup("phrase");
             }}
           >
             {t("Create wallet", "创建钱包")}
           </Button>
-          <Button onPress={() => setSetup("import")}>
+          <Button onPress={() => goSetup("import")}>
             {t("I already have a wallet", "我已有钱包")}
           </Button>
         </>
       );
-    if (setup === "phrase" || setup === "backup")
+    if (setup === "phrase" || setup === "backup") {
+      const words = mnemonic.split(" ");
+      function pickChip(wordIdx: number) {
+        setPickedChips((prev) => {
+          if (prev.includes(wordIdx)) return prev;
+          const slot = activeAnswerSlot;
+          if (slot < 0 || slot > 2 || prev[slot] !== null) return prev;
+          const next = prev.map((x, i) => (i === slot ? wordIdx : x));
+          setAnswers((a) => a.map((x, i) => (i === slot ? words[wordIdx] : x)));
+          return next;
+        });
+        // Choosing a word answers the question that opened this list —
+        // close it, rather than leaving it open or jumping to the next slot.
+        setActiveAnswerSlot(-1);
+      }
+      function tapSlot(slot: number) {
+        if (activeAnswerSlot === slot) {
+          setActiveAnswerSlot(-1);
+          return;
+        }
+        if (pickedChips[slot] !== null) {
+          setPickedChips((p) => p.map((x, i) => (i === slot ? null : x)));
+          setAnswers((a) => a.map((x, i) => (i === slot ? "" : x)));
+        }
+        setActiveAnswerSlot(slot);
+      }
       return (
         <>
-          <Illustration name={setup === "phrase" ? "phrase" : "backup"} />
-          {title(
-            setup === "phrase" ? "Write these down." : "Check your backup.",
-            setup === "phrase" ? "请记下这些单词。" : "检查你的备份。",
-            t(
-              "Anyone with these words can move your funds. Tera cannot recover them for you.",
-              "拥有这些单词的人可以转走资金，Tera 无法替你恢复。",
+          {authHeader(
+            <Illustration />,
+            title(
+              setup === "phrase" ? "Write these down." : "Check your backup.",
+              setup === "phrase" ? "请记下这些单词。" : "检查你的备份。",
+              t(
+                "Anyone with these words can move your funds. Tera cannot recover them for you.",
+                "拥有这些单词的人可以转走资金，Tera 无法替你恢复。",
+              ),
             ),
+            false,
           )}
           {setup === "phrase" ? (
             <>
@@ -1559,19 +2093,93 @@ function Wallet() {
                   </View>
                 ))}
               </View>
-              <Button primary onPress={() => setSetup("backup")}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("Copy recovery phrase", "复制助记词")}
+                onPress={() =>
+                  void Clipboard.setStringAsync(mnemonic).then(() =>
+                    setNotice({
+                      title: t("Phrase copied", "助记词已复制"),
+                      body: t(
+                        "Paste it somewhere private, then clear your clipboard.",
+                        "请粘贴到私密位置，然后清空剪贴板。",
+                      ),
+                      tone: "success",
+                    }),
+                  )
+                }
+                style={({ pressed }) => [
+                  { flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8 },
+                  { paddingVertical: 10, opacity: pressed ? 0.6 : 1 },
+                ]}
+              >
+                <Icon name="content-copy" size={16} color={colors.muted} />
+                <Text style={[s.small, { color: colors.muted, fontWeight: "600" }]}>
+                  {t("Copy", "复制")}
+                </Text>
+              </Pressable>
+              <Button
+                primary
+                onPress={() => {
+                  setAnswers(["", "", ""]);
+                  setPickedChips([null, null, null]);
+                  setActiveAnswerSlot(-1);
+                  goSetup("backup");
+                }}
+              >
                 {t("I wrote them down", "我已记下")}
               </Button>
             </>
           ) : (
             <>
               {[2, 6, 10].map((n, i) => (
-                <Field
-                  key={n}
-                  label={t(`Word ${n + 1}`, `第 ${n + 1} 个单词`)}
-                  value={answers[i]}
-                  onChangeText={(v) => setAnswers((a) => a.map((x, j) => (j === i ? v : x)))}
-                />
+                <View key={n} style={s.field}>
+                  <Text style={s.eyebrow}>{t(`Word ${n + 1}`, `第 ${n + 1} 个单词`)}</Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t(`Word ${n + 1}`, `第 ${n + 1} 个单词`)}
+                    onPress={() => tapSlot(i)}
+                    style={[
+                      s.input,
+                      {
+                        justifyContent: "center",
+                        borderColor: activeAnswerSlot === i ? colors.green : colors.line,
+                        borderWidth: activeAnswerSlot === i ? 2 : 1,
+                      },
+                    ]}
+                  >
+                    <Text style={[s.mono, { fontSize: 16 }]}>{answers[i]}</Text>
+                  </Pressable>
+                  {activeAnswerSlot === i && (
+                    <View style={[s.wrap, { marginTop: 2 }]}>
+                      {shuffleOrder(mnemonic, words.length)
+                        .filter((wordIdx) => !pickedChips.includes(wordIdx))
+                        .map((wordIdx) => (
+                          <Pressable
+                            key={wordIdx}
+                            accessibilityRole="button"
+                            onPress={() => pickChip(wordIdx)}
+                            style={({ pressed }) => ({
+                              paddingVertical: 10,
+                              paddingHorizontal: 16,
+                              borderRadius: 999,
+                              backgroundColor: colors.tint,
+                              opacity: pressed ? 0.6 : 1,
+                            })}
+                          >
+                            <Text
+                              style={[
+                                s.mono,
+                                { fontSize: 15, color: colors.green, fontWeight: "600" },
+                              ]}
+                            >
+                              {words[wordIdx]}
+                            </Text>
+                          </Pressable>
+                        ))}
+                    </View>
+                  )}
+                </View>
               ))}
               <Button
                 primary
@@ -1582,7 +2190,9 @@ function Wallet() {
                     )
                   ) {
                     setAnswers(["", "", ""]);
-                    setSetup("password");
+                    setPickedChips([null, null, null]);
+                    setActiveAnswerSlot(-1);
+                    goSetup("password");
                   } else
                     setError(t("Those words do not match. Try again.", "单词不匹配，请重试。"));
                 }}
@@ -1593,35 +2203,96 @@ function Wallet() {
           )}
         </>
       );
+    }
     if (setup === "import")
       return (
         <>
-          <Illustration name="import" />
-          {title(
-            "Welcome back.",
-            "欢迎回来。",
-            t(
-              "Import a standard English recovery phrase. Uses the first Ethereum account; BIP-39 passphrases are not supported in this version.",
-              "导入标准英文助记词，使用第一个以太坊账户，此版本不支持 BIP-39 附加口令。",
+          {authHeader(
+            <Illustration />,
+            title(
+              "Welcome back.",
+              "欢迎回来。",
+              t(
+                "Import a standard English recovery phrase. Uses the first Ethereum account; BIP-39 passphrases are not supported in this version.",
+                "导入标准英文助记词，使用第一个以太坊账户，此版本不支持 BIP-39 附加口令。",
+              ),
             ),
+            false,
           )}
-          <Field
-            label={t("Recovery phrase", "助记词")}
-            value={mnemonic}
-            onChangeText={setMnemonic}
-            multiline
-            secureTextEntry={false}
-            contextMenuHidden
-            autoComplete="off"
-            importantForAutofill="noExcludeDescendants"
-          />
+          <View style={s.field}>
+            <Text style={s.eyebrow}>{t("Recovery phrase", "助记词")}</Text>
+            <View style={[s.input, { padding: 0, overflow: "hidden" }]}>
+              <TextInput
+                accessibilityLabel={t("Recovery phrase", "助记词")}
+                placeholderTextColor={colors.muted}
+                autoCorrect={false}
+                autoCapitalize="none"
+                value={mnemonic}
+                onChangeText={setMnemonic}
+                multiline
+                secureTextEntry={false}
+                autoComplete="off"
+                importantForAutofill="noExcludeDescendants"
+                style={{
+                  minHeight: mnemonic ? 110 : 60,
+                  textAlignVertical: "top",
+                  padding: 15,
+                  color: colors.ink,
+                  fontSize: 16,
+                }}
+              />
+              {!mnemonic && (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t("Paste recovery phrase", "粘贴助记词")}
+                  onPress={() =>
+                    void Clipboard.getStringAsync()
+                      .then((text) => {
+                        if (text) setMnemonic(text);
+                        else
+                          setNotice({
+                            title: t("Nothing to paste", "剪贴板为空"),
+                            body: t(
+                              "Copy your recovery phrase first, then try again.",
+                              "请先复制助记词，然后重试。",
+                            ),
+                            tone: "error",
+                          });
+                      })
+                      .catch(() =>
+                        setNotice({
+                          title: t("Couldn’t read the clipboard", "无法读取剪贴板"),
+                          body: t("Paste it in manually instead.", "请改为手动粘贴。"),
+                          tone: "error",
+                        }),
+                      )
+                  }
+                  style={({ pressed }) => [
+                    {
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 8,
+                      paddingBottom: 16,
+                    },
+                    { opacity: pressed ? 0.6 : 1 },
+                  ]}
+                >
+                  <Icon name="content-paste" size={18} color={colors.muted} />
+                  <Text style={[s.small, { color: colors.muted, fontWeight: "600" }]}>
+                    {t("Paste", "粘贴")}
+                  </Text>
+                </Pressable>
+              )}
+            </View>
+          </View>
           <Button
             primary
             onPress={() => {
               try {
                 walletFromPhrase(mnemonic);
                 setMnemonic(normalizePhrase(mnemonic));
-                setSetup("password");
+                goSetup("password");
               } catch {
                 setError(t("Check the phrase and word order.", "请检查助记词及顺序。"));
               }
@@ -1633,32 +2304,34 @@ function Wallet() {
       );
     return (
       <>
-        <Illustration name="pin" />
-        {password.length < 6 ? (
-          <>
-            {title(
-              "Protect this wallet.",
-              "保护此钱包。",
-              t(
-                "Choose a six-digit PIN. Use your recovery phrase if you forget it.",
-                "设置六码 PIN，忘记时可使用助记词恢复。",
+        {authHeader(
+          <Illustration />,
+          password.length < 6
+            ? title(
+                "Protect this wallet.",
+                "保护此钱包。",
+                t(
+                  "Choose a six-digit PIN. Use your recovery phrase if you forget it.",
+                  "设置六码 PIN，忘记时可使用助记词恢复。",
+                ),
+              )
+            : title(
+                "Confirm your PIN.",
+                "确认您的 PIN。",
+                t("Enter it once more to make sure.", "请再次输入以确认。"),
               ),
-            )}
-            <PinInput label={t("Six-digit PIN", "六码 PIN")} value={password} />
-          </>
+        )}
+        {password.length < 6 ? (
+          <PinInput label={t("Six-digit PIN", "六码 PIN")} value={password} />
         ) : (
-          <>
-            {title(
-              "Confirm your PIN.",
-              "确认您的 PIN。",
-              t("Enter it once more to make sure.", "请再次输入以确认。"),
-            )}
-            <PinInput label={t("Repeat PIN", "重复 PIN")} value={repeat} />
-          </>
+          <PinInput label={t("Repeat PIN", "重复 PIN")} value={repeat} />
         )}
         {busy ? (
-          <View style={{ alignItems: "center", paddingVertical: 20 }}>
-            <TeraSpinner size={22} />
+          // Same height as the Keypad it replaces (4 rows of 72 + 3 gaps of
+          // 16), so the loader doesn't collapse the layout into a tiny icon
+          // stranded where the keypad used to be.
+          <View style={{ height: 336, alignItems: "center", justifyContent: "center" }}>
+            <TeraSpinner size={44} />
           </View>
         ) : (
           <Keypad
@@ -1716,6 +2389,7 @@ function Wallet() {
     setRecipient("");
     setFlowStep(0);
     setBridgeStep(0);
+    setSwapReceivePicker(false);
     if (p === "send") {
       setSendMode(mode);
       if (mode === "private") {
@@ -1833,7 +2507,7 @@ function Wallet() {
             }}
             style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
           >
-            <MaterialCommunityIcons
+            <Icon
               name={entry.name ? "account-circle-outline" : "history"}
               size={24}
               color={colors.green}
@@ -1848,6 +2522,262 @@ function Wallet() {
             </View>
           </Pressable>
         ))}
+      </View>
+    );
+  }
+  /**
+   * Its own layout, not a page inside the shared ScrollView like everything
+   * else — a chat only reads as a chat when the input is pinned to the
+   * bottom and the conversation scrolls in the space above it, rather than
+   * the input sitting wherever it falls in a page that scrolls as one long
+   * column.
+   */
+  function assistantScreen() {
+    const teraAvatar = (
+      <View style={[s.iconDisc, { width: 28, height: 28, borderRadius: 14 }]}>
+        <Image
+          source={require("./assets/logo-mark.png")}
+          style={{ width: 16, height: 16 }}
+          resizeMode="contain"
+        />
+      </View>
+    );
+    return (
+      <View style={{ flex: 1 }}>
+        <Header
+          title={t("Tera assistant", "Tera 助手")}
+          onBack={() => setPage("home")}
+          backLabel={t("Wallet", "钱包")}
+        />
+        <ScrollView
+          ref={chatScrollRef}
+          contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20, gap: 14 }}
+          keyboardShouldPersistTaps="handled"
+          onContentSizeChange={() => chatScrollRef.current?.scrollToEnd({ animated: true })}
+        >
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Messages go to the assistant service. Proposals need your review.",
+              "消息将发送至助手服务，提案需要你审核。",
+            )}
+          </Text>
+          <Choices
+            options={[t("Ask a question", "提问"), t("Prepare a proposal", "准备提案")]}
+            value={propose ? t("Prepare a proposal", "准备提案") : t("Ask a question", "提问")}
+            select={(v) => setPropose(v === t("Prepare a proposal", "准备提案"))}
+          />
+          {data.token && (
+            <Text style={s.eyebrow}>{t("Scoped session connected", "已连接限定权限的会话")}</Text>
+          )}
+          <View style={{ gap: 12 }}>
+            {!chat.length && (
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "flex-end",
+                  gap: 8,
+                  alignSelf: "flex-start",
+                  maxWidth: "88%",
+                }}
+              >
+                {teraAvatar}
+                <View style={[s.panel, { flexShrink: 1, borderBottomLeftRadius: 4 }]}>
+                  <Text style={s.text}>
+                    {t(
+                      "Ask about an asset or tell me what you want to do.",
+                      "询问资产，或告诉我你想做什么。",
+                    )}
+                  </Text>
+                </View>
+              </View>
+            )}
+            {chat.map((m, i) =>
+              m.role === "you" ? (
+                <View
+                  key={i}
+                  style={[
+                    s.panel,
+                    {
+                      maxWidth: "88%",
+                      alignSelf: "flex-end",
+                      borderBottomRightRadius: 4,
+                      backgroundColor: colors.green,
+                    },
+                  ]}
+                >
+                  <Text selectable style={[s.text, { color: colors.paper }]}>
+                    {m.text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/^#{1,6}\s/gm, "")}
+                  </Text>
+                </View>
+              ) : (
+                <View
+                  key={i}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "flex-end",
+                    gap: 8,
+                    alignSelf: "flex-start",
+                    maxWidth: "88%",
+                  }}
+                >
+                  {teraAvatar}
+                  <View style={[s.panel, { flexShrink: 1, borderBottomLeftRadius: 4 }]}>
+                    <Text selectable style={s.text}>
+                      {m.text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/^#{1,6}\s/gm, "")}
+                    </Text>
+                  </View>
+                </View>
+              ),
+            )}
+            {busy && (
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 8,
+                  alignSelf: "flex-start",
+                }}
+              >
+                <View style={[s.iconDisc, { width: 28, height: 28, borderRadius: 14 }]}>
+                  <TeraSpinner size={16} />
+                </View>
+                <Text style={[s.small, { color: colors.muted, fontStyle: "italic" }]}>
+                  {t("Tera is thinking…", "Tera 正在思考…")}
+                </Text>
+              </View>
+            )}
+          </View>
+          {data.drafts.length > 0 && (
+            <View style={{ gap: 12 }}>
+              <Text style={s.eyebrow}>{t("PROPOSALS", "提案")}</Text>
+              {data.drafts.map((d) => (
+                <View style={s.panel} key={d.createdAt}>
+                  <Text style={s.text}>
+                    {d.intent?.actionType} ·{" "}
+                    {
+                      assets.find(
+                        (a) => a.address.toLowerCase() === d.intent?.assetAddress?.toLowerCase(),
+                      )?.symbol
+                    }
+                  </Text>
+                  <Button
+                    disabled={busy}
+                    onPress={() => {
+                      try {
+                        showProposal(d);
+                      } catch (e) {
+                        setError((e as Error).message);
+                      }
+                    }}
+                  >
+                    {t("Review", "审核")}
+                  </Button>
+                  {action(
+                    "Delete draft",
+                    "删除草稿",
+                    async () =>
+                      store({
+                        ...dataRef.current,
+                        drafts: dataRef.current.drafts.filter((p) => p.createdAt !== d.createdAt),
+                      }),
+                    false,
+                  )}
+                </View>
+              ))}
+            </View>
+          )}
+        </ScrollView>
+        <View
+          style={{
+            paddingHorizontal: 16,
+            paddingTop: 10,
+            paddingBottom: 14,
+            borderTopWidth: StyleSheet.hairlineWidth,
+            borderColor: colors.line,
+            backgroundColor: colors.bg,
+          }}
+        >
+          <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 8 }}>
+            {/* Caps growth like a real chat input (ChatGPT/iMessage-style):
+                grows with content up to ~6 lines, then scrolls internally
+                instead of swallowing the whole screen and pushing the send
+                button out of reach. */}
+            <TextInput
+              value={message}
+              onChangeText={setMessage}
+              maxLength={1200}
+              multiline
+              placeholder={t("Message Tera…", "给 Tera 发消息…")}
+              placeholderTextColor={colors.muted}
+              style={{
+                flex: 1,
+                borderWidth: 1,
+                borderColor: colors.line,
+                borderRadius: 22,
+                backgroundColor: colors.wash,
+                paddingHorizontal: 16,
+                paddingVertical: 12,
+                minHeight: 44,
+                maxHeight: 140,
+                color: colors.ink,
+                fontSize: 16,
+              }}
+            />
+            {message.trim() ? (
+              <Pressable
+                disabled={busy}
+                onPress={startAssistantMessage}
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 22,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: colors.green,
+                  opacity: busy ? 0.45 : 1,
+                }}
+              >
+                <Icon name="arrow-up" color={colors.paper} size={20} />
+              </Pressable>
+            ) : (
+              <Pressable
+                disabled={busy}
+                accessibilityRole="button"
+                accessibilityLabel={t("Voice message", "语音消息")}
+                onPress={() => void startVoiceMode()}
+                style={{
+                  width: 44,
+                  height: 44,
+                  borderRadius: 22,
+                  borderWidth: 1,
+                  borderColor: colors.line,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: busy ? 0.45 : 1,
+                }}
+              >
+                <Icon name="mic" color={colors.green} size={20} />
+              </Pressable>
+            )}
+          </View>
+          <Pressable
+            accessibilityRole="switch"
+            accessibilityState={{ checked: minimiseEnabled }}
+            onPress={() => setMinimiseEnabled((enabled) => !enabled)}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+              paddingTop: 10,
+              paddingHorizontal: 4,
+            }}
+          >
+            <Toggle on={minimiseEnabled} small />
+            <Text style={[s.small, { flex: 1 }]} numberOfLines={1}>
+              {t("Review what leaves this phone before sending", "发送前审核离开本机的内容")}
+            </Text>
+          </Pressable>
+        </View>
       </View>
     );
   }
@@ -1911,6 +2841,7 @@ function Wallet() {
           )}
           {tagsAvailable() && myTag === null && (
             <Pressable
+              ref={tourTagBannerRef}
               accessibilityRole="button"
               onPress={() => setPage("tag")}
               style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
@@ -1931,11 +2862,15 @@ function Wallet() {
                   justifyContent: "center",
                 }}
               >
-                <MaterialCommunityIcons name="chevron-right" size={20} color={colors.paper} />
+                <Icon name="chevron-right" size={20} color={colors.paper} />
               </View>
             </Pressable>
           )}
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+          <View
+            ref={tourSwitcherRef}
+            collapsable={false}
+            style={{ flexDirection: "row", alignItems: "center", gap: 12 }}
+          >
             <View
               style={{
                 width: 46,
@@ -1946,7 +2881,7 @@ function Wallet() {
                 justifyContent: "center",
               }}
             >
-              <MaterialCommunityIcons name="wallet-outline" size={22} color={colors.green} />
+              <Icon name="wallet-outline" size={22} color={colors.green} />
             </View>
             <View style={{ flex: 1 }}>
               <Text style={s.small}>{t("Welcome back,", "欢迎回来，")}</Text>
@@ -1959,10 +2894,7 @@ function Wallet() {
               */}
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={
-                  accounts.length > 1 ? t("Switch wallet", "切换钱包") : undefined
-                }
-                disabled={accounts.length < 2}
+                accessibilityLabel={t("Switch or add a wallet", "切换或添加钱包")}
                 onPress={() => {
                   setSettingsSection("accounts");
                   setPage("settings");
@@ -1972,9 +2904,7 @@ function Wallet() {
                 <Text style={[s.text, { fontSize: 17, fontWeight: "700" }]} numberOfLines={1}>
                   {walletName(accounts.find((entry) => entry.active) || { index: 0, name: "" })}
                 </Text>
-                {accounts.length > 1 ? (
-                  <MaterialCommunityIcons name="chevron-down" size={18} color={colors.muted} />
-                ) : null}
+                <Icon name="chevron-down" size={18} color={colors.muted} />
               </Pressable>
             </View>
             {tagsAvailable() && myTag ? (
@@ -1994,96 +2924,97 @@ function Wallet() {
               </Pressable>
             ) : null}
           </View>
-          <View
-            style={{
-              backgroundColor: colors.green,
-              borderRadius: 24,
-              padding: 22,
-              gap: 16,
-              overflow: "hidden",
-            }}
-          >
-            {/* The kit's line pattern: two thin rings bleeding off the card. */}
-            <View
-              pointerEvents="none"
-              style={{
-                position: "absolute",
-                width: 280,
-                height: 280,
-                borderRadius: 140,
-                borderWidth: 1,
-                borderColor: "#ffffff40",
-                right: -110,
-                top: -150,
-              }}
-            />
-            <View
-              pointerEvents="none"
-              style={{
-                position: "absolute",
-                width: 220,
-                height: 220,
-                borderRadius: 110,
-                borderWidth: 1,
-                borderColor: "#ffffff33",
-                left: -90,
-                bottom: -150,
-              }}
-            />
-            <View style={{ alignItems: "center" }}>
-              <Text style={[s.small, { color: colors.paper, opacity: 0.7 }]}>
-                {t("Total balance", "资产总值")}
-              </Text>
-              <Text
+          <View ref={tourBalanceRef} collapsable={false}>
+            <LinearGradient
+              colors={[colors.wash, colors.tint, colors.greenPressed]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={{ borderRadius: 24, padding: 22, gap: 16, overflow: "hidden" }}
+            >
+              {/* The kit's line pattern: two thin rings bleeding off the card. */}
+              <View
+                pointerEvents="none"
                 style={{
-                  color: colors.paper,
-                  fontSize: 38,
-                  lineHeight: 46,
-                  fontWeight: "700",
-                  letterSpacing: -1,
+                  position: "absolute",
+                  width: 280,
+                  height: 280,
+                  borderRadius: 140,
+                  borderWidth: 1,
+                  borderColor: "#ffffff1f",
+                  right: -110,
+                  top: -150,
+                }}
+              />
+              <View
+                pointerEvents="none"
+                style={{
+                  position: "absolute",
+                  width: 220,
+                  height: 220,
+                  borderRadius: 110,
+                  borderWidth: 1,
+                  borderColor: "#ffffff19",
+                  left: -90,
+                  bottom: -150,
+                }}
+              />
+              <View style={{ alignItems: "center" }}>
+                <Text style={[s.small, { color: colors.ink, opacity: 0.7 }]}>
+                  {t("Total balance", "资产总值")}
+                </Text>
+                <Text
+                  style={{
+                    color: colors.ink,
+                    fontSize: 38,
+                    lineHeight: 46,
+                    fontWeight: "700",
+                    letterSpacing: -1,
+                  }}
+                >
+                  {valueCore.format(valuation.total)}
+                </Text>
+                {valuation.coverage !== valueCore.COMPLETE ? (
+                  <Text
+                    style={[s.small, { color: colors.ink, opacity: 0.75, textAlign: "center" }]}
+                  >
+                    {valuation.coverage === valueCore.PARTIAL
+                      ? t(
+                          `Subtotal — no price for ${valuation.unpriced.map((entry) => entry.symbol).join(", ")}`,
+                          `小计 — 缺少价格：${valuation.unpriced.map((entry) => entry.symbol).join("、")}`,
+                        )
+                      : t("No prices could be read.", "无法读取价格。")}
+                  </Text>
+                ) : null}
+              </View>
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  backgroundColor: "#00000026",
+                  borderRadius: 12,
+                  paddingHorizontal: 12,
+                  paddingVertical: 9,
                 }}
               >
-                {valueCore.format(valuation.total)}
-              </Text>
-              {valuation.coverage !== valueCore.COMPLETE ? (
-                <Text
-                  style={[s.small, { color: colors.paper, opacity: 0.75, textAlign: "center" }]}
-                >
-                  {valuation.coverage === valueCore.PARTIAL
-                    ? t(
-                        `Subtotal — no price for ${valuation.unpriced.map((entry) => entry.symbol).join(", ")}`,
-                        `小计 — 缺少价格：${valuation.unpriced.map((entry) => entry.symbol).join("、")}`,
-                      )
-                    : t("No prices could be read.", "无法读取价格。")}
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Icon name="gas-station" size={15} color={colors.ink} />
+                  <Text style={[s.small, { color: colors.ink }]}>{t("Gas", "燃料费")}</Text>
+                </View>
+                <Text style={{ color: colors.ink, fontWeight: "700" }}>
+                  {balance
+                    ? `${shortAmount(formatUnits(BigInt(balance.ETH || "0"), 18))} ETH`
+                    : "…"}
                 </Text>
-              ) : null}
-            </View>
-            <View
-              style={{
-                flexDirection: "row",
-                justifyContent: "space-between",
-                alignItems: "center",
-                backgroundColor: "#14131614",
-                borderRadius: 12,
-                paddingHorizontal: 12,
-                paddingVertical: 9,
-              }}
-            >
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                <MaterialCommunityIcons name="gas-station" size={15} color={colors.paper} />
-                <Text style={[s.small, { color: colors.paper }]}>{t("Gas", "燃料费")}</Text>
               </View>
-              <Text style={{ color: colors.paper, fontWeight: "700" }}>
-                {balance ? `${shortAmount(formatUnits(BigInt(balance.ETH || "0"), 18))} ETH` : "…"}
-              </Text>
-            </View>
+            </LinearGradient>
           </View>
-          <View style={s.quickActions}>
+          <View ref={tourActionsRef} collapsable={false} style={s.quickActions}>
             {[
-              ["send", "Send", "发送", "send"],
+              ["arrow-top-right", "Send", "发送", "send"],
               ["arrow-down", "Receive", "收款", "receive"],
-              ["swap", "Swap", "兑换", "swap"],
-              ["dots-grid", "More", "更多", "more"],
+              ["swap-horizontal", "Swap", "兑换", "swap"],
+              ["dots-horizontal", "More", "更多", "more"],
             ].map(([icon, en, zh, p]) => (
               <Pressable
                 key={p}
@@ -2092,13 +3023,13 @@ function Wallet() {
                 onPress={() => (p === "more" ? setSheetOpen(true) : openFlow(p))}
               >
                 <View style={s.quickIcon}>
-                  <Icon name={icon} color={colors.green} size={24} />
+                  <Icon name={icon} color={colors.lime} size={24} />
                 </View>
                 <Text style={[s.small, { color: colors.ink }]}>{t(en, zh)}</Text>
               </Pressable>
             ))}
           </View>
-          <View style={{ gap: 10 }}>
+          <View ref={tourAssetsRef} collapsable={false} style={{ gap: 10 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
               <Text style={[s.text, { fontWeight: "700" }]}>{t("Assets", "资产")}</Text>
               <Pressable accessibilityRole="button" onPress={() => setPage("nfts")}>
@@ -2165,51 +3096,72 @@ function Wallet() {
               ) : null}
             </View>
             {data.history.length ? (
-              data.history.slice(0, 3).map((r) => (
-                <Pressable
-                  key={r.hash}
-                  accessibilityRole="button"
-                  onPress={() => setPage("activity")}
-                  style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
-                >
-                  <View
-                    style={{
-                      width: 38,
-                      height: 38,
-                      borderRadius: 19,
-                      backgroundColor: colors.raised,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
+              data.history.slice(0, 3).map((r) => {
+                const isBridge = Boolean(
+                  r.bridgeInput ||
+                  (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) ||
+                  r.isPrivateBridge,
+                );
+                const isSend = !isBridge && !!r.recipient;
+                return (
+                  <Pressable
+                    key={r.hash}
+                    accessibilityRole="button"
+                    onPress={() => setPage("activity")}
+                    style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
                   >
-                    <MaterialCommunityIcons name="swap-vertical" size={20} color={colors.ink} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.label} numberOfLines={1}>
-                      {r.title}
-                    </Text>
-                    <Text style={s.small} numberOfLines={1}>
-                      {r.hash.slice(0, 10)}…{r.hash.slice(-6)}
-                    </Text>
-                  </View>
-                  <Text
-                    style={[
-                      s.small,
-                      {
-                        fontWeight: "600",
-                        color:
+                    <View style={s.iconDisc}>
+                      {isSend ? (
+                        <Icon name="arrow-top-right" size={20} color={colors.ink} />
+                      ) : (
+                        <Icon
+                          name={isBridge ? "bridge" : "swap-vertical"}
+                          size={20}
+                          color={colors.ink}
+                        />
+                      )}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={s.label} numberOfLines={1}>
+                        {r.title}
+                      </Text>
+                      <Text style={s.small}>
+                        {t("Step", "步骤")} {r.step}/{r.totalSteps}
+                      </Text>
+                    </View>
+                    <View
+                      style={{
+                        borderRadius: 999,
+                        paddingHorizontal: 10,
+                        paddingVertical: 4,
+                        backgroundColor:
                           r.status === "confirmed"
-                            ? colors.green
+                            ? colors.tint
                             : r.status === "failed" || r.status === "reverted"
-                              ? colors.danger
-                              : colors.yellow,
-                      },
-                    ]}
-                  >
-                    {r.status}
-                  </Text>
-                </Pressable>
-              ))
+                              ? colors.dangerTint
+                              : colors.warnTint,
+                      }}
+                    >
+                      <Text
+                        style={[
+                          s.small,
+                          {
+                            fontWeight: "600",
+                            color:
+                              r.status === "confirmed"
+                                ? colors.green
+                                : r.status === "failed" || r.status === "reverted"
+                                  ? colors.danger
+                                  : colors.yellow,
+                          },
+                        ]}
+                      >
+                        {r.status}
+                      </Text>
+                    </View>
+                  </Pressable>
+                );
+              })
             ) : (
               <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
                 <Text style={s.small}>
@@ -2219,7 +3171,7 @@ function Wallet() {
             )}
           </View>
           <View style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}>
-            <MaterialCommunityIcons name="shield-check-outline" size={22} color={colors.green} />
+            <Icon name="shield-check-outline" size={22} color={colors.green} />
             <Text style={[s.small, { flex: 1 }]}>
               {t(
                 "Tera can prepare an action. Only this wallet can sign it.",
@@ -2238,7 +3190,7 @@ function Wallet() {
             backLabel={t("Back", "返回")}
           />
           <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
-            <MaterialCommunityIcons name="at" size={30} color={colors.green} />
+            <Icon name="at" size={30} color={colors.green} />
             <Text style={[s.text, { fontSize: 20, fontWeight: "700" }]}>
               {myTag ? tags.display(myTag) : t("Not claimed yet", "尚未领取")}
             </Text>
@@ -2445,7 +3397,7 @@ function Wallet() {
                   },
                 ]}
               >
-                <MaterialCommunityIcons
+                <Icon
                   name="earth"
                   size={96}
                   color={sendMode === "public" ? colors.green : colors.ink}
@@ -2467,7 +3419,7 @@ function Wallet() {
                     {t("Public Send", "公开发送")}
                   </Text>
                   {sendMode === "public" && (
-                    <MaterialCommunityIcons name="check-circle" size={22} color={colors.green} />
+                    <Icon name="check-circle" size={22} color={colors.green} />
                   )}
                 </View>
               </Pressable>
@@ -2496,7 +3448,7 @@ function Wallet() {
                   },
                 ]}
               >
-                <MaterialCommunityIcons
+                <Icon
                   name="shield"
                   size={96}
                   color={sendMode === "private" ? colors.green : colors.ink}
@@ -2518,7 +3470,7 @@ function Wallet() {
                     {t("Private Send", "私密发送")}
                   </Text>
                   {sendMode === "private" && (
-                    <MaterialCommunityIcons name="check-circle" size={22} color={colors.green} />
+                    <Icon name="check-circle" size={22} color={colors.green} />
                   )}
                 </View>
               </Pressable>
@@ -2699,7 +3651,6 @@ function Wallet() {
       );
     }
     if (page === "swap") {
-      const selectable = assets.filter((a) => !["ETH", "USDG"].includes(a.symbol));
       return (
         <>
           <Header
@@ -2760,36 +3711,29 @@ function Wallet() {
               justifyContent: "center",
             }}
           >
-            <MaterialCommunityIcons name="swap-vertical" color={colors.paper} size={22} />
+            <Icon name="swap-vertical" color={colors.paper} size={22} />
           </View>
           <View style={s.panel}>
             <Text style={s.eyebrow}>{t("YOU RECEIVE", "你收到")}</Text>
             <View style={s.wrap}>
-              {selectable.map((asset) => (
-                <Pressable
-                  key={asset.symbol}
-                  onPress={() => {
-                    setAssetSymbol(asset.symbol);
-                    setTrade("BUY");
-                  }}
-                  style={{
-                    flexDirection: "row",
-                    gap: 8,
-                    alignItems: "center",
-                    paddingVertical: 7,
-                    paddingHorizontal: 10,
-                    borderRadius: 999,
-                    borderWidth: 1,
-                    borderColor: assetSymbol === asset.symbol ? colors.green : colors.line,
-                    backgroundColor: assetSymbol === asset.symbol ? colors.tint : colors.raised,
-                  }}
-                >
-                  <TokenIcon symbol={asset.symbol} size={24} />
-                  <Text style={[s.text, assetSymbol === asset.symbol && { fontWeight: "700" }]}>
-                    {asset.symbol}
-                  </Text>
-                </Pressable>
-              ))}
+              <Pressable
+                onPress={() => setSwapReceivePicker(true)}
+                style={{
+                  flexDirection: "row",
+                  gap: 8,
+                  alignItems: "center",
+                  paddingVertical: 7,
+                  paddingHorizontal: 10,
+                  borderRadius: 999,
+                  borderWidth: 1,
+                  borderColor: colors.green,
+                  backgroundColor: colors.tint,
+                }}
+              >
+                <TokenIcon symbol={assetSymbol} size={24} />
+                <Text style={[s.text, { fontWeight: "700" }]}>{assetSymbol}</Text>
+                <Icon name="chevron-down" size={18} color={colors.muted} />
+              </Pressable>
             </View>
           </View>
           {action("Review live route", "审核实时路线", prepareTrade)}
@@ -2839,7 +3783,7 @@ function Wallet() {
                   },
                 ]}
               >
-                <MaterialCommunityIcons
+                <Icon
                   name="earth"
                   size={96}
                   color={bridgeMode === "public" ? colors.green : colors.ink}
@@ -2866,7 +3810,7 @@ function Wallet() {
                     </Text>
                   </View>
                   {bridgeMode === "public" && (
-                    <MaterialCommunityIcons name="check-circle" size={22} color={colors.green} />
+                    <Icon name="check-circle" size={22} color={colors.green} />
                   )}
                 </View>
               </Pressable>
@@ -2894,7 +3838,7 @@ function Wallet() {
                   },
                 ]}
               >
-                <MaterialCommunityIcons
+                <Icon
                   name="shield"
                   size={96}
                   color={bridgeMode === "private" ? colors.green : colors.ink}
@@ -2921,7 +3865,7 @@ function Wallet() {
                     </Text>
                   </View>
                   {bridgeMode === "private" && (
-                    <MaterialCommunityIcons name="check-circle" size={22} color={colors.green} />
+                    <Icon name="check-circle" size={22} color={colors.green} />
                   )}
                 </View>
               </Pressable>
@@ -2963,13 +3907,7 @@ function Wallet() {
                           </Text>
                           <Text style={s.small}>{d.tokens.map((t) => t.symbol).join(" · ")}</Text>
                         </View>
-                        {isSelected && (
-                          <MaterialCommunityIcons
-                            name="check-circle"
-                            size={20}
-                            color={colors.green}
-                          />
-                        )}
+                        {isSelected && <Icon name="check-circle" size={20} color={colors.green} />}
                       </Pressable>
                     );
                   })}
@@ -3118,7 +4056,7 @@ function Wallet() {
               {isPrivate && (
                 <View style={[s.panel, { backgroundColor: colors.tint, marginTop: 8 }]}>
                   <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
-                    <MaterialCommunityIcons name="shield-check" size={20} color={colors.green} />
+                    <Icon name="shield-check" size={20} color={colors.green} />
                     <Text style={{ fontWeight: "700", color: colors.green }}>
                       {t("Private bridge routing", "私密跨链路由")}
                     </Text>
@@ -3210,166 +4148,19 @@ function Wallet() {
         </>
       );
     }
-    if (page === "assistant")
-      return (
-        <>
-          <Header title={t("Tera assistant", "Tera 助手")} />
-          <Text style={[s.small, { textAlign: "center" }]}>
-            {t(
-              "Messages go to the assistant service. Proposals need your review.",
-              "消息将发送至助手服务，提案需要你审核。",
-            )}
-          </Text>
-          <Choices
-            options={[t("Ask a question", "提问"), t("Prepare a proposal", "准备提案")]}
-            value={propose ? t("Prepare a proposal", "准备提案") : t("Ask a question", "提问")}
-            select={(v) => setPropose(v === t("Prepare a proposal", "准备提案"))}
-          />
-          <Pressable
-            accessibilityRole="switch"
-            accessibilityState={{ checked: minimiseEnabled }}
-            onPress={() => setMinimiseEnabled((enabled) => !enabled)}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: 15,
-              borderRadius: 18,
-              backgroundColor: minimiseEnabled ? colors.tint : colors.wash,
-            }}
-          >
-            <View style={{ flex: 1, paddingRight: 12 }}>
-              <Text style={[s.eyebrow, { color: colors.green }]}>
-                {t("PROMPT PRIVACY", "PROMPT PRIVACY")}
-              </Text>
-              <Text style={s.small}>
-                {minimiseEnabled
-                  ? t(
-                      "Review what leaves this phone before sending.",
-                      "Review what leaves this phone before sending.",
-                    )
-                  : t("Messages are sent as typed.", "Messages are sent as typed.")}
-              </Text>
-            </View>
-            <Toggle on={minimiseEnabled} />
-          </Pressable>
-          {data.token && (
-            <Text style={s.eyebrow}>{t("Scoped session connected", "已连接限定权限的会话")}</Text>
-          )}
-          <View style={{ gap: 12 }}>
-            {!chat.length && (
-              <View style={[s.panel, { alignSelf: "flex-start", maxWidth: "88%" }]}>
-                <Text style={[s.eyebrow, { color: colors.green }]}>TERA</Text>
-                <Text style={s.text}>
-                  {t(
-                    "Ask about an asset or tell me what you want to do.",
-                    "询问资产，或告诉我你想做什么。",
-                  )}
-                </Text>
-              </View>
-            )}
-            {chat.map((m, i) => (
-              <View
-                key={i}
-                style={[
-                  s.panel,
-                  {
-                    maxWidth: "88%",
-                    alignSelf: m.role === "you" ? "flex-end" : "flex-start",
-                    borderBottomRightRadius: m.role === "you" ? 4 : 20,
-                    borderBottomLeftRadius: m.role === "you" ? 20 : 4,
-                  },
-                  m.role === "you" && { backgroundColor: colors.green },
-                ]}
-              >
-                <Text style={[s.eyebrow, m.role === "you" && { color: colors.paper }]}>
-                  {m.role === "you" ? t("YOU", "你") : "TERA"}
-                </Text>
-                <Text selectable style={[s.text, m.role === "you" && { color: colors.paper }]}>
-                  {m.text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/^#{1,6}\s/gm, "")}
-                </Text>
-              </View>
-            ))}
-          </View>
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "flex-end",
-              borderWidth: 1,
-              borderColor: colors.line,
-              borderRadius: 22,
-              overflow: "hidden",
-              backgroundColor: colors.wash,
-            }}
-          >
-            <TextInput
-              value={message}
-              onChangeText={setMessage}
-              maxLength={1200}
-              multiline
-              placeholder={t("Message Tera…", "给 Tera 发消息…")}
-              placeholderTextColor={colors.muted}
-              style={{ flex: 1, padding: 15, minHeight: 54, color: colors.ink, fontSize: 16 }}
-            />
-            <Pressable
-              disabled={busy || !message.trim()}
-              onPress={startAssistantMessage}
-              style={{
-                width: 56,
-                minHeight: 54,
-                alignItems: "center",
-                justifyContent: "center",
-                backgroundColor: colors.green,
-                opacity: busy || !message.trim() ? 0.45 : 1,
-              }}
-            >
-              <MaterialCommunityIcons name="arrow-up" color={colors.paper} size={24} />
-            </Pressable>
-          </View>
-          <Text style={s.eyebrow}>{t("PROPOSALS", "提案")}</Text>
-          {data.drafts.map((d) => (
-            <View style={s.panel} key={d.createdAt}>
-              <Text style={s.text}>
-                {d.intent?.actionType} ·{" "}
-                {
-                  assets.find(
-                    (a) => a.address.toLowerCase() === d.intent?.assetAddress?.toLowerCase(),
-                  )?.symbol
-                }
-              </Text>
-              <Button
-                disabled={busy}
-                onPress={() => {
-                  try {
-                    showProposal(d);
-                  } catch (e) {
-                    setError((e as Error).message);
-                  }
-                }}
-              >
-                {t("Review", "审核")}
-              </Button>
-              {action(
-                "Delete draft",
-                "删除草稿",
-                async () =>
-                  store({
-                    ...dataRef.current,
-                    drafts: dataRef.current.drafts.filter((p) => p.createdAt !== d.createdAt),
-                  }),
-                false,
-              )}
-            </View>
-          ))}
-        </>
-      );
     if (page === "leaderboard") {
       const myTagHandle = myTag || "@tera_owner";
       // TODO(leaderboard): these figures are placeholders. They must come from
       // /api/leaderboard before this screen is shown to anyone, because a rank
       // the app made up and labelled as the owner's is a false statement about
       // them, not a placeholder.
-      const standing = { rank: 1, tier: "Grandmaster", points: "3,450", intents: "142", referrals: "38" };
+      const standing = {
+        rank: 1,
+        tier: "Grandmaster",
+        points: "3,450",
+        intents: "142",
+        referrals: "38",
+      };
       const board = [
         { rank: 1, tag: "@astra", pts: "3,450", badge: "Grandmaster" },
         { rank: 2, tag: "@robin_god", pts: "2,890", badge: "Grandmaster" },
@@ -3392,28 +4183,59 @@ function Wallet() {
             )}
           </Text>
 
-          <View style={{ backgroundColor: colors.green, borderRadius: 24, padding: 20, gap: 14 }}>
+          <LinearGradient
+            colors={[colors.wash, colors.tint, colors.greenPressed]}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={{ borderRadius: 24, padding: 20, gap: 14, overflow: "hidden" }}
+          >
+            <View
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                width: 280,
+                height: 280,
+                borderRadius: 140,
+                borderWidth: 1,
+                borderColor: "#ffffff1f",
+                right: -110,
+                top: -150,
+              }}
+            />
+            <View
+              pointerEvents="none"
+              style={{
+                position: "absolute",
+                width: 220,
+                height: 220,
+                borderRadius: 110,
+                borderWidth: 1,
+                borderColor: "#ffffff19",
+                left: -90,
+                bottom: -150,
+              }}
+            />
             <View style={{ flexDirection: "row", alignItems: "center", gap: 14 }}>
               <View
                 style={{
                   width: 56,
                   height: 56,
                   borderRadius: 28,
-                  backgroundColor: "#14131622",
+                  backgroundColor: "#ffffff14",
                   alignItems: "center",
                   justifyContent: "center",
                 }}
               >
-                <MaterialCommunityIcons name="trophy" size={28} color={colors.paper} />
+                <Icon name="trophy" size={28} color={colors.ink} />
               </View>
               <View style={{ flex: 1 }}>
-                <Text style={[s.small, { color: colors.paper, opacity: 0.7 }]}>
+                <Text style={[s.small, { color: colors.ink, opacity: 0.7 }]}>
                   {t("Your standing", "你的排名")}
                 </Text>
-                <Text style={{ color: colors.paper, fontSize: 32, fontWeight: "800" }}>
+                <Text style={{ color: colors.ink, fontSize: 32, fontWeight: "800" }}>
                   #{standing.rank}
                 </Text>
-                <Text style={[s.small, { color: colors.paper }]}>
+                <Text style={[s.small, { color: colors.ink }]}>
                   {myTagHandle} · {t(`${standing.tier} supervisor`, `${standing.tier} 监督者`)}
                 </Text>
               </View>
@@ -3428,26 +4250,26 @@ function Wallet() {
                   key={label}
                   style={{
                     flex: 1,
-                    backgroundColor: "#14131614",
+                    backgroundColor: "#00000026",
                     borderRadius: 12,
                     padding: 10,
                     alignItems: "center",
                   }}
                 >
-                  <Text style={{ color: colors.paper, fontWeight: "700", fontSize: 16 }}>
+                  <Text style={{ color: colors.ink, fontWeight: "700", fontSize: 16 }}>
                     {value}
                   </Text>
-                  <Text style={[s.small, { color: colors.paper, opacity: 0.75, fontSize: 11 }]}>
+                  <Text style={[s.small, { color: colors.ink, opacity: 0.75, fontSize: 11 }]}>
                     {label}
                   </Text>
                 </View>
               ))}
             </View>
-          </View>
+          </LinearGradient>
 
-          <View style={{ gap: 8 }}>
-            <Button
-              primary
+          <View style={{ flexDirection: "row", gap: 8 }}>
+            <Pressable
+              accessibilityRole="button"
               onPress={() => {
                 const text =
                   `Ranked #${standing.rank} supervising agent actions on Tera.
@@ -3459,10 +4281,23 @@ function Wallet() {
                   `https://terawallet.app/dashboard/?ref=${encodeURIComponent(myTagHandle)}`;
                 void Linking.openURL(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`);
               }}
+              style={({ pressed }) => [
+                s.panel,
+                {
+                  flex: 1,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  opacity: pressed ? 0.7 : 1,
+                },
+              ]}
             >
-              {t("Share rank on X", "在 X 上分享排名")}
-            </Button>
-            <Button
+              <Icon name="share-2" size={16} color={colors.green} />
+              <Text style={[s.label, { color: colors.green }]}>{t("Share on X", "分享到 X")}</Text>
+            </Pressable>
+            <Pressable
+              accessibilityRole="button"
               onPress={async () => {
                 await Clipboard.setStringAsync(
                   `https://terawallet.app/dashboard/?ref=${encodeURIComponent(myTagHandle)}`,
@@ -3476,9 +4311,21 @@ function Wallet() {
                   tone: "success",
                 });
               }}
+              style={({ pressed }) => [
+                s.panel,
+                {
+                  flex: 1,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 8,
+                  opacity: pressed ? 0.7 : 1,
+                },
+              ]}
             >
-              {t("Copy referral link", "复制推荐链接")}
-            </Button>
+              <Icon name="link-2" size={16} color={colors.green} />
+              <Text style={[s.label, { color: colors.green }]}>{t("Copy link", "复制链接")}</Text>
+            </Pressable>
           </View>
 
           <Group title={t("Ranked supervisors", "监督者排行")}>
@@ -3487,23 +4334,19 @@ function Wallet() {
                 key={item.tag}
                 style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12 }}
               >
-                <View style={[s.iconDisc, item.rank <= 3 && { backgroundColor: colors.tint }]}>
-                  <Text
-                    style={[
-                      s.label,
-                      {
-                        color:
-                          item.rank === 1
-                            ? colors.yellow
-                            : item.rank <= 3
-                              ? colors.green
-                              : colors.muted,
-                      },
-                    ]}
-                  >
-                    {item.rank}
-                  </Text>
-                </View>
+                <Image
+                  accessibilityLabel={item.tag}
+                  source={{
+                    uri: `https://api.dicebear.com/9.x/thumbs/png?seed=${encodeURIComponent(item.tag)}&size=76`,
+                  }}
+                  style={[
+                    { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.raised },
+                    item.rank <= 3 && {
+                      borderWidth: 2,
+                      borderColor: item.rank === 1 ? colors.yellow : colors.green,
+                    },
+                  ]}
+                />
                 <View style={{ flex: 1 }}>
                   <Text style={s.label}>{item.tag}</Text>
                   <Text style={s.small}>{item.badge}</Text>
@@ -3529,7 +4372,7 @@ function Wallet() {
           </Text>
           {!data.history.length && (
             <View style={[s.panel, { alignItems: "center", paddingVertical: 28, gap: 8 }]}>
-              <MaterialCommunityIcons name="history" size={32} color={colors.faint} />
+              <Icon name="history" size={32} color={colors.faint} />
               <Text style={s.small}>
                 {t("Your signed transactions will appear here.", "已签名的交易将显示在这里。")}
               </Text>
@@ -3541,15 +4384,20 @@ function Wallet() {
               (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) ||
               r.isPrivateBridge,
             );
+            const isSend = !isBridge && !!r.recipient;
             return (
               <View key={r.hash} style={s.panel}>
                 <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
                   <View style={s.iconDisc}>
-                    <MaterialCommunityIcons
-                      name={isBridge ? "bridge" : "swap-vertical"}
-                      size={20}
-                      color={colors.ink}
-                    />
+                    {isSend ? (
+                      <Icon name="arrow-top-right" size={20} color={colors.ink} />
+                    ) : (
+                      <Icon
+                        name={isBridge ? "bridge" : "swap-vertical"}
+                        size={20}
+                        color={colors.ink}
+                      />
+                    )}
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={s.label}>{r.title}</Text>
@@ -3715,7 +4563,11 @@ function Wallet() {
       const active = accounts.find((entry) => entry.active) || { index: 0, name: "" };
       return (
         <>
-          <Header title={t("Settings", "设置")} />
+          <Header
+            title={t("Settings", "设置")}
+            onBack={() => setPage("home")}
+            backLabel={t("Wallet", "钱包")}
+          />
           <View style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 14 }]}>
             <View
               style={{
@@ -3727,7 +4579,7 @@ function Wallet() {
                 justifyContent: "center",
               }}
             >
-              <MaterialCommunityIcons name="wallet-outline" size={26} color={colors.green} />
+              <Icon name="wallet-outline" size={26} color={colors.green} />
             </View>
             <View style={{ flex: 1, gap: 4 }}>
               <Text style={[s.text, { fontSize: 18, fontWeight: "700" }]} numberOfLines={1}>
@@ -3751,7 +4603,7 @@ function Wallet() {
                 style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
               >
                 <Text style={[s.mono, { color: colors.muted }]}>{short(owner)}</Text>
-                <MaterialCommunityIcons name="content-copy" size={14} color={colors.muted} />
+                <Icon name="content-copy" size={14} color={colors.muted} />
               </Pressable>
               {tagsAvailable() ? (
                 <Pressable
@@ -3778,7 +4630,7 @@ function Wallet() {
               hitSlop={8}
               style={s.iconDisc}
             >
-              <MaterialCommunityIcons name="pencil-outline" size={18} color={colors.ink} />
+              <Icon name="pencil-outline" size={18} color={colors.ink} />
             </Pressable>
           </View>
           <Group title={t("Account details", "账户详情")}>
@@ -3806,12 +4658,17 @@ function Wallet() {
               detail={t("Retention and deletion controls", "保留与删除设置")}
               onPress={() => setSettingsSection("privacy")}
             />
-            <ListRow
-              icon="robot-outline"
-              label={t("Agent sessions", "代理会话")}
-              detail={t("Connect, create and revoke scoped tokens", "连接、创建和撤销限定权限令牌")}
-              onPress={() => setSettingsSection("sessions")}
-            />
+            {upd.installedChannel() !== "production" ? (
+              <ListRow
+                icon="robot-outline"
+                label={t("Agent sessions", "代理会话")}
+                detail={t(
+                  "Connect, create and revoke scoped tokens",
+                  "连接、创建和撤销限定权限令牌",
+                )}
+                onPress={() => setSettingsSection("sessions")}
+              />
+            ) : null}
             <ListRow
               icon="cellphone-key"
               label={t("Wallet on this device", "本设备钱包")}
@@ -3831,11 +4688,23 @@ function Wallet() {
               }
             />
             <ListRow
-              icon={theme === "dark" ? "weather-night" : "white-balance-sunny"}
+              icon="compass"
+              label={t("Replay app tour", "重新查看引导")}
+              onPress={startTour}
+            />
+            {/*
+              The app is dark-mode only for now — toggleTheme/setColorTheme
+              still work underneath, so this just needs uncommenting (and a
+              real icon name; "weather-night"/"white-balance-sunny" are
+              stale Material Community names from before the Lucide switch)
+              if light mode comes back.
+            */}
+            {/* <ListRow
+              icon="sun"
               label={t("Dark mode", "深色模式")}
               onPress={toggleTheme}
               right={<Toggle on={theme === "dark"} />}
-            />
+            /> */}
             {tagsAvailable() ? (
               <ListRow
                 icon="at"
@@ -3865,19 +4734,19 @@ function Wallet() {
                 </Text>
               }
             />
-            <ListRow
-              icon="source-branch"
-              label={t("Channel", "渠道")}
-              right={
-                <Text style={s.small}>
-                  {upd.installedChannel() === "production"
-                    ? t("Production", "正式版")
-                    : upd.installedChannel() === "preview"
+            {upd.installedChannel() !== "production" ? (
+              <ListRow
+                icon="source-branch"
+                label={t("Channel", "渠道")}
+                right={
+                  <Text style={s.small}>
+                    {upd.installedChannel() === "preview"
                       ? t("Preview", "预览版")
                       : t("Development", "开发版")}
-                </Text>
-              }
-            />
+                  </Text>
+                }
+              />
+            ) : null}
             <ListRow
               icon="update"
               label={t("Updates", "更新")}
@@ -3894,12 +4763,6 @@ function Wallet() {
                 </Text>
               }
             />
-            <ListRow
-              icon="shape-outline"
-              label={t("Icons by Icons8", "图标来自 Icons8")}
-              onPress={() => void Linking.openURL("https://icons8.com")}
-              right={<MaterialCommunityIcons name="open-in-new" size={18} color={colors.faint} />}
-            />
           </Group>
           <Group>
             <ListRow icon="lock-outline" label={t("Lock wallet", "锁定钱包")} onPress={forget} />
@@ -3915,32 +4778,113 @@ function Wallet() {
             title={t("Contacts", "联系人")}
             onBack={toSettings}
             backLabel={t("Settings", "设置")}
-          />
-          <Text style={s.small}>{contactNote}</Text>
-          <Field
-            label={t("Search", "搜索")}
-            value={contactQuery}
-            onChangeText={setContactQuery}
-            placeholder={t("Name or 0x…", "名称或 0x…")}
-          />
-          {list.map((entry) => (
-            <View key={entry.address} style={s.panel}>
-              <Text style={[s.text, { fontWeight: "700" }]}>{entry.name}</Text>
-              <Text selectable style={s.mono}>
-                {entry.address}
-              </Text>
-              <View style={s.wrap}>
-                <Button primary onPress={() => sendTo(entry.address)}>
-                  {t("Send", "发送")}
-                </Button>
-                <Button onPress={() => openContact(entry.address)}>{t("Rename", "重命名")}</Button>
-                <Button onPress={() => removeContactNow(entry.address)}>
-                  {t("Remove", "删除")}
-                </Button>
+            right={
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t("About contacts", "关于联系人")}
+                  hitSlop={8}
+                  onPress={() => setContactsInfo(true)}
+                  style={({ pressed }) => ({
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: pressed ? colors.raised : colors.wash,
+                  })}
+                >
+                  <Icon name="information-outline" size={19} color={colors.ink} />
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t("Add a contact", "添加联系人")}
+                  hitSlop={8}
+                  onPress={() => openContact("")}
+                  style={({ pressed }) => ({
+                    width: 36,
+                    height: 36,
+                    borderRadius: 18,
+                    alignItems: "center",
+                    justifyContent: "center",
+                    backgroundColor: pressed ? colors.greenPressed : colors.green,
+                  })}
+                >
+                  <Icon name="plus" size={20} color={colors.paper} />
+                </Pressable>
               </View>
-            </View>
-          ))}
-          {!list.length && (
+            }
+          />
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              gap: 8,
+              borderWidth: 1,
+              borderColor: colors.line,
+              borderRadius: 22,
+              backgroundColor: colors.wash,
+              paddingHorizontal: 14,
+              height: 44,
+            }}
+          >
+            <Icon name="search" size={17} color={colors.muted} />
+            <TextInput
+              value={contactQuery}
+              onChangeText={setContactQuery}
+              placeholder={t("Search by name or address", "按名称或地址搜索")}
+              placeholderTextColor={colors.muted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={{ flex: 1, color: colors.ink, fontSize: 16 }}
+            />
+          </View>
+          {list.length ? (
+            <Group>
+              {list.map((entry) => (
+                <View
+                  key={entry.address}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 12,
+                    paddingVertical: 9,
+                  }}
+                >
+                  <Image
+                    accessibilityLabel={entry.name}
+                    source={{
+                      uri: `https://api.dicebear.com/9.x/thumbs/png?seed=${encodeURIComponent(entry.address)}&size=76`,
+                    }}
+                    style={{
+                      width: 42,
+                      height: 42,
+                      borderRadius: 21,
+                      backgroundColor: colors.raised,
+                    }}
+                  />
+                  <Pressable
+                    onPress={() => sendTo(entry.address)}
+                    style={({ pressed }) => ({ flex: 1, opacity: pressed ? 0.6 : 1 })}
+                  >
+                    <Text style={[s.text, { fontWeight: "700" }]} numberOfLines={1}>
+                      {entry.name}
+                    </Text>
+                    <Text style={s.small}>{short(entry.address)}</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t("Contact options", "联系人操作")}
+                    hitSlop={10}
+                    onPress={() => setContactMenuFor(entry.address)}
+                    style={({ pressed }) => ({ padding: 6, opacity: pressed ? 0.5 : 1 })}
+                  >
+                    <Icon name="dots-horizontal" size={20} color={colors.muted} />
+                  </Pressable>
+                </View>
+              ))}
+            </Group>
+          ) : (
             <Text style={s.small}>
               {contactQuery
                 ? t("No contact matches that search.", "没有匹配的联系人。")
@@ -3950,9 +4894,6 @@ function Wallet() {
                   )}
             </Text>
           )}
-          <Button primary onPress={() => openContact("")}>
-            {t("Add a contact", "添加联系人")}
-          </Button>
         </>
       );
     }
@@ -3963,13 +4904,25 @@ function Wallet() {
             title={t("Your wallets", "你的钱包")}
             onBack={toSettings}
             backLabel={t("Settings", "设置")}
+            right={
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("How multiple wallets work", "多钱包说明")}
+                hitSlop={8}
+                onPress={() => setAccountsInfo(true)}
+                style={({ pressed }) => ({
+                  width: 36,
+                  height: 36,
+                  borderRadius: 18,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: pressed ? colors.raised : colors.wash,
+                })}
+              >
+                <Icon name="information-outline" size={19} color={colors.ink} />
+              </Pressable>
+            }
           />
-          <Text style={s.small}>
-            {t(
-              "Every wallet here comes from the one recovery phrase you already backed up. Adding one does not give you another phrase to keep safe.",
-              "这里的每个钱包都由你已备份的同一组助记词派生，新增钱包不会产生需要另外保管的助记词。",
-            )}
-          </Text>
           <Group>
             {accounts.map((entry) => (
               <ListRow
@@ -3987,9 +4940,19 @@ function Wallet() {
                         })
                 }
                 right={
-                  entry.active ? (
-                    <MaterialCommunityIcons name="check-circle" size={22} color={colors.green} />
-                  ) : undefined
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    {entry.active && <Icon name="check-circle" size={20} color={colors.green} />}
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={t("Wallet options", "钱包操作")}
+                      hitSlop={10}
+                      disabled={busy}
+                      onPress={() => setWalletMenuFor(entry.index)}
+                      style={({ pressed }) => ({ padding: 6, opacity: pressed ? 0.5 : 1 })}
+                    >
+                      <Icon name="dots-horizontal" size={20} color={colors.muted} />
+                    </Pressable>
+                  </View>
                 }
               />
             ))}
@@ -4011,42 +4974,6 @@ function Wallet() {
             },
             false,
           )}
-          <View style={[s.panel, { gap: 14 }]}>
-            <Text style={[s.text, { fontWeight: "700" }]}>
-              {t("Rename the open wallet", "重命名当前钱包")}
-            </Text>
-            <Field
-              label={t("Name", "名称")}
-              value={nameInput}
-              onChangeText={setNameInput}
-              placeholder={defaultName(vault.selectedIndex())}
-              maxLength={vault.MAX_NAME}
-              hint={t(
-                "Names are stored on this device only. They are never sent anywhere and do not travel with your recovery phrase — restoring on another device gives you the accounts back without them.",
-                "名称仅保存在本设备，不会发送到任何地方，也不随助记词一同迁移——在其他设备恢复时会取回账户，但不会带回名称。",
-              )}
-            />
-            {action(
-              "Save name",
-              "保存名称",
-              async () => {
-                await vault.renameAccount(vault.selectedIndex(), nameInput);
-                syncAccounts();
-              },
-              false,
-            )}
-          </View>
-          <View style={[s.panel, { backgroundColor: colors.warnTint }]}>
-            <Text style={[s.label, { color: colors.yellow }]}>
-              {t("What a second wallet does not do", "第二个钱包无法做到的事")}
-            </Text>
-            <Text style={s.small}>
-              {t(
-                "It does not make you a different person to this app's network. Balances for every wallet here are read over the same connection, from the same device, so the operator answering them can see they belong together. Separate wallets keep your activity apart on-chain; they do not hide that one person holds both.",
-                "它不会让你在本应用的网络看来变成另一个人。这里所有钱包的余额都通过同一连接、同一设备读取，因此提供读取服务的一方能看出它们同属一人。独立钱包能在链上区分你的活动，但无法隐藏它们由同一人持有。",
-              )}
-            </Text>
-          </View>
         </>
       );
     if (settingsSection === "security")
@@ -4070,32 +4997,17 @@ function Wallet() {
               }
             />
             <ListRow icon="lock-outline" label={t("Lock now", "立即锁定")} onPress={forget} />
-          </Group>
-          <View style={[s.panel, { gap: 14 }]}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-              <View style={s.iconDisc}>
-                <Icon name="biometrics" size={20} color={colors.green} />
-              </View>
-              <Text style={[s.text, { fontWeight: "700", flex: 1 }]}>
-                {t("Biometric unlock", "生物识别解锁")}
-              </Text>
-            </View>
-            <Field
-              label={t("Password to enable biometrics", "启用生物识别所需的密码")}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-            />
-            {action(
-              "Enable biometric unlock",
-              "启用生物识别解锁",
-              async () => {
-                await vault.enableBiometrics(password);
+            <ListRow
+              icon="fingerprint"
+              label={t("Biometric unlock", "生物识别解锁")}
+              detail={t("Unlock with Face ID or a fingerprint", "使用 Face ID 或指纹解锁")}
+              onPress={() => {
                 setPassword("");
-              },
-              false,
-            )}
-          </View>
+                setBiometricError("");
+                setBiometricSheet(true);
+              }}
+            />
+          </Group>
         </>
       );
     if (settingsSection === "privacy") {
@@ -4171,7 +5083,7 @@ function Wallet() {
           />
           {data.token ? (
             <View style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}>
-              <MaterialCommunityIcons name="check-circle" size={22} color={colors.green} />
+              <Icon name="check-circle" size={22} color={colors.green} />
               <Text style={[s.text, { flex: 1 }]}>
                 {t("Scoped session connected", "已连接限定权限的会话")}
               </Text>
@@ -4468,6 +5380,11 @@ function Wallet() {
       </>
     );
   }
+  // Only Wallet and Activity keep the persistent tab bar. Every other
+  // screen — Assistant, Settings (root and its sections), and every pushed
+  // flow (send, receive, swap, bridge, tag, nfts) — reads as a place you
+  // back out of with its own control, not one you tab-jump from.
+  const isRootTab = page === "home" || page === "activity";
   return (
     <SafeAreaView
       style={s.page}
@@ -4476,27 +5393,25 @@ function Wallet() {
       }}
     >
       <StatusBar style={theme === "dark" ? "light" : "dark"} />
-      {owner && (
+      {/*
+        Every other screen (Activity, Assistant, Settings and its sub-
+        sections, and every pushed flow) already shows its own title via
+        the shared Header component — repeating the global "Tera Wallet"
+        bar there would just be a second, redundant title stacked above it.
+        Home is the one screen with no title of its own, so it's the one
+        that gets this bar.
+      */}
+      {owner && page === "home" && (
         <View style={s.header}>
           <Pressable
             onPress={() => setPage("home")}
             style={{ flexDirection: "row", alignItems: "center", gap: 9 }}
           >
-            <View
-              style={{
-                width: 32,
-                height: 32,
-                borderRadius: 16,
-                overflow: "hidden",
-                backgroundColor: colors.dark,
-              }}
-            >
-              <Image
-                source={require("./assets/icon.png")}
-                style={{ width: 32, height: 32 }}
-                resizeMode="cover"
-              />
-            </View>
+            <Image
+              source={require("./assets/logo-mark.png")}
+              style={{ width: 28, height: 28 }}
+              resizeMode="contain"
+            />
             <View>
               <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 14 }}>
                 Tera Wallet
@@ -4505,7 +5420,8 @@ function Wallet() {
           </Pressable>
           <View
             style={{
-              backgroundColor: colors.wash,
+              borderWidth: 1,
+              borderColor: colors.line,
               borderRadius: 999,
               paddingHorizontal: 12,
               paddingVertical: 7,
@@ -4522,30 +5438,47 @@ function Wallet() {
             style={{ flex: 1 }}
             behavior={Platform.OS === "ios" ? "padding" : undefined}
           >
-            <ScrollView
-              contentContainerStyle={[s.content, owner ? { paddingBottom: 124 } : null]}
-              keyboardShouldPersistTaps="handled"
-              refreshControl={
-                owner ? (
-                  <RefreshControl
-                    refreshing={refreshing}
-                    onRefresh={pullRefresh}
-                    tintColor={colors.green}
-                  />
-                ) : undefined
-              }
-            >
-              {owner ? main() : onboarding()}
-            </ScrollView>
+            {owner && page === "assistant" ? (
+              assistantScreen()
+            ) : (
+              <ScrollView
+                ref={homeScrollRef}
+                onScroll={(e) => {
+                  homeScrollY.current = e.nativeEvent.contentOffset.y;
+                }}
+                scrollEventThrottle={32}
+                contentContainerStyle={[s.content, owner ? { paddingBottom: 124 } : null]}
+                keyboardShouldPersistTaps="handled"
+                refreshControl={
+                  owner ? (
+                    <RefreshControl
+                      refreshing={refreshing}
+                      onRefresh={pullRefresh}
+                      tintColor={colors.green}
+                    />
+                  ) : undefined
+                }
+              >
+                {owner ? main() : onboarding()}
+              </ScrollView>
+            )}
           </KeyboardAvoidingView>
         </BlurTargetView>
+        {!owner && setupHistory.length > 0 && (
+          <View
+            {...edgeSwipeBack.panHandlers}
+            style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 24 }}
+          />
+        )}
         {/*
           A floating glass bar, clear of the screen's edges like Safari's on
           iOS 26. It steps aside while the keyboard is up, so it never sits on
           top of the field being typed into.
         */}
-        {owner && !keyboardOpen && (
+        {owner && !keyboardOpen && isRootTab && (
           <View
+            ref={tourTabBarRef}
+            collapsable={false}
             style={{
               position: "absolute",
               left: 16,
@@ -4580,11 +5513,11 @@ function Wallet() {
               }}
             >
               {[
-                ["wallet", "Wallet", "钱包", "home"],
+                ["wallet-outline", "Wallet", "钱包", "home"],
                 ["history", "Activity", "记录", "activity"],
                 ["", "", "", "actions"],
                 ["message-text-outline", "Assistant", "助手", "assistant"],
-                ["settings", "Settings", "设置", "settings"],
+                ["cog-outline", "Settings", "设置", "settings"],
               ].map(([icon, en, zh, p]) =>
                 p === "actions" ? (
                   <View key={p} style={{ flex: 1, alignItems: "center" }}>
@@ -4599,20 +5532,7 @@ function Wallet() {
                         transform: [{ scale: pressed ? 0.9 : 1 }],
                       })}
                     >
-                      <Animated.View
-                        style={{
-                          transform: [
-                            {
-                              rotate: spin.interpolate({
-                                inputRange: [0, 1],
-                                outputRange: ["0deg", "45deg"],
-                              }),
-                            },
-                          ],
-                        }}
-                      >
-                        <Icon name="plus" size={50} color={colors.green} />
-                      </Animated.View>
+                      <Icon name="lightning-bolt-outline" size={30} color={colors.green} />
                     </Pressable>
                   </View>
                 ) : (
@@ -4631,8 +5551,6 @@ function Wallet() {
                       alignItems: "center",
                       gap: 3,
                       paddingVertical: 7,
-                      borderRadius: 26,
-                      backgroundColor: page === p ? "#ffffff14" : "transparent",
                       opacity: pressed ? 0.7 : 1,
                     })}
                   >
@@ -4658,6 +5576,26 @@ function Wallet() {
           </View>
         )}
       </View>
+      {tourStep !== null &&
+        (() => {
+          const step = tourSteps[tourStep];
+          return (
+            <AppTour
+              rect={tourRect}
+              label={step.label}
+              body={step.body}
+              extra={step.extra}
+              index={tourStep}
+              count={tourSteps.length}
+              onNext={nextTourStep}
+              onBack={prevTourStep}
+              onSkip={skipTour}
+              nextLabel={tourStep + 1 >= tourSteps.length ? t("Done", "完成") : t("Next", "下一步")}
+              backLabel={t("Back", "上一步")}
+              skipLabel={t("Skip", "跳过")}
+            />
+          );
+        })()}
       <ActionSheet
         visible={sheetOpen && !!owner}
         onClose={() => setSheetOpen(false)}
@@ -4665,7 +5603,7 @@ function Wallet() {
         actions={[
           {
             key: "send",
-            icon: "send",
+            icon: "arrow-top-right",
             label: t("Send", "发送"),
             onPress: () => openFlow("send"),
           },
@@ -4677,7 +5615,7 @@ function Wallet() {
           },
           {
             key: "swap",
-            icon: "swap",
+            icon: "swap-horizontal",
             label: t("Swap", "兑换"),
             onPress: () => openFlow("swap"),
           },
@@ -4715,8 +5653,353 @@ function Wallet() {
             label: t("Ranks", "榜单"),
             onPress: () => setPage("leaderboard"),
           },
+          {
+            key: "contacts",
+            icon: "account-multiple-outline",
+            label: t("Contacts", "联系人"),
+            onPress: () => {
+              setSettingsSection("contacts");
+              setPage("settings");
+            },
+          },
         ]}
       />
+      <ActionSheet
+        visible={walletMenuFor !== null && !!owner}
+        onClose={() => setWalletMenuFor(null)}
+        onClosed={() => {
+          afterWalletMenuCloses.current?.();
+          afterWalletMenuCloses.current = null;
+        }}
+        title={
+          walletMenuFor !== null
+            ? walletName(
+                accounts.find((entry) => entry.index === walletMenuFor) || {
+                  index: walletMenuFor,
+                  name: "",
+                },
+              )
+            : ""
+        }
+        actions={(() => {
+          const entry = accounts.find((a) => a.index === walletMenuFor);
+          if (!entry) return [];
+          return [
+            // Every action here is deferred to the sheet's onClosed, not run
+            // immediately: the sheet itself is a Modal, still present on the
+            // native side until its close animation actually finishes, and
+            // anything that can open another Modal (rename, or an error
+            // notice from `run`) would briefly overlap it and hang iOS.
+            ...(entry.active
+              ? []
+              : [
+                  {
+                    key: "switch",
+                    icon: "check-circle",
+                    label: t("Switch to this wallet", "切换到此钱包"),
+                    onPress: () => {
+                      afterWalletMenuCloses.current = () =>
+                        void run(async () => {
+                          await switchTo(entry.index);
+                        });
+                    },
+                  },
+                ]),
+            {
+              key: "rename",
+              icon: "pencil-outline",
+              label: t("Rename", "重命名"),
+              onPress: () => {
+                afterWalletMenuCloses.current = () => {
+                  setRenameError("");
+                  setNameInput(entry.name);
+                  setRenamingIndex(entry.index);
+                };
+              },
+            },
+            {
+              key: "copy",
+              icon: "content-copy",
+              label: t("Copy address", "复制地址"),
+              onPress: () =>
+                void Clipboard.setStringAsync(entry.address).then(() => {
+                  afterWalletMenuCloses.current = () =>
+                    setNotice({
+                      title: t("Address copied", "地址已复制"),
+                      body: t(
+                        "The wallet address is on your clipboard.",
+                        "钱包地址已复制到剪贴板。",
+                      ),
+                      tone: "success",
+                    });
+                }),
+            },
+          ];
+        })()}
+      />
+      <Modal
+        visible={renamingIndex !== null && !!owner}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setRenamingIndex(null)}
+      >
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+        >
+          <Pressable
+            onPress={() => setRenamingIndex(null)}
+            style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "flex-end" }}
+          >
+            <Pressable
+              onPress={() => {}}
+              style={{
+                backgroundColor: colors.sheet,
+                borderTopLeftRadius: 30,
+                borderTopRightRadius: 30,
+                padding: 24,
+                gap: 14,
+              }}
+            >
+              <Text style={s.title}>{t("Rename wallet", "重命名钱包")}</Text>
+              <Field
+                label={t("Name", "名称")}
+                value={nameInput}
+                onChangeText={setNameInput}
+                placeholder={renamingIndex !== null ? defaultName(renamingIndex) : ""}
+                maxLength={vault.MAX_NAME}
+                hint={t(
+                  "Stored on this device only — it does not travel with your recovery phrase.",
+                  "仅保存在本设备，不随助记词一同迁移。",
+                )}
+              />
+              {renameError ? (
+                <Text style={[s.small, { color: colors.danger }]}>{renameError}</Text>
+              ) : null}
+              {action("Save name", "保存名称", async () => {
+                if (renamingIndex === null) return;
+                // Caught here rather than left to throw: `run` would route
+                // a thrown error to the global `error` state, which opens
+                // the shared "Couldn't complete that" notice — another
+                // Modal, which would stack on this sheet's still-open one
+                // and hang iOS. Shown inline instead, like contactError.
+                try {
+                  await vault.renameAccount(renamingIndex, nameInput);
+                  syncAccounts();
+                  setRenamingIndex(null);
+                } catch (e) {
+                  setRenameError(
+                    e instanceof Error
+                      ? e.message
+                      : t("Couldn't save that name.", "无法保存该名称。"),
+                  );
+                }
+              })}
+              <Button
+                onPress={() => {
+                  setRenameError("");
+                  setRenamingIndex(null);
+                }}
+              >
+                {t("Cancel", "取消")}
+              </Button>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
+      <Modal
+        visible={accountsInfo}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAccountsInfo(false)}
+      >
+        <Pressable
+          onPress={() => setAccountsInfo(false)}
+          style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "flex-end" }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              backgroundColor: colors.sheet,
+              borderTopLeftRadius: 30,
+              borderTopRightRadius: 30,
+              padding: 24,
+              gap: 14,
+            }}
+          >
+            <Text style={s.title}>{t("How multiple wallets work", "多钱包说明")}</Text>
+            <Text style={s.text}>
+              {t(
+                "Every wallet here comes from the one recovery phrase you already backed up. Adding one does not give you another phrase to keep safe.",
+                "这里的每个钱包都由你已备份的同一组助记词派生，新增钱包不会产生需要另外保管的助记词。",
+              )}
+            </Text>
+            <Text style={[s.text, { fontWeight: "700" }]}>
+              {t("What a second wallet does not do", "第二个钱包无法做到的事")}
+            </Text>
+            <Text style={s.text}>
+              {t(
+                "It does not make you a different person to this app's network. Balances for every wallet here are read over the same connection, from the same device, so the operator answering them can see they belong together. Separate wallets keep your activity apart on-chain; they do not hide that one person holds both.",
+                "它不会让你在本应用的网络看来变成另一个人。这里所有钱包的余额都通过同一连接、同一设备读取，因此提供读取服务的一方能看出它们同属一人。独立钱包能在链上区分你的活动，但无法隐藏它们由同一人持有。",
+              )}
+            </Text>
+            <Button primary onPress={() => setAccountsInfo(false)}>
+              {t("Got it", "知道了")}
+            </Button>
+          </Pressable>
+        </Pressable>
+      </Modal>
+      <ActionSheet
+        visible={contactMenuFor !== null && !!owner}
+        onClose={() => setContactMenuFor(null)}
+        onClosed={() => {
+          afterContactMenuCloses.current?.();
+          afterContactMenuCloses.current = null;
+        }}
+        title={
+          contactMenuFor !== null
+            ? contactsCore.nameFor(book, contactMenuFor) || short(contactMenuFor)
+            : ""
+        }
+        actions={
+          contactMenuFor === null
+            ? []
+            : [
+                {
+                  key: "send",
+                  icon: "arrow-top-right",
+                  label: t("Send", "发送"),
+                  onPress: () => {
+                    const address = contactMenuFor;
+                    afterContactMenuCloses.current = () => sendTo(address);
+                  },
+                },
+                {
+                  key: "rename",
+                  icon: "pencil-outline",
+                  label: t("Rename", "重命名"),
+                  onPress: () => {
+                    const address = contactMenuFor;
+                    afterContactMenuCloses.current = () => openContact(address);
+                  },
+                },
+                {
+                  key: "remove",
+                  icon: "trash-2",
+                  label: t("Remove", "删除"),
+                  danger: true,
+                  onPress: () => {
+                    const address = contactMenuFor;
+                    afterContactMenuCloses.current = () => removeContactNow(address);
+                  },
+                },
+              ]
+        }
+      />
+      <Modal
+        visible={contactsInfo}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setContactsInfo(false)}
+      >
+        <Pressable
+          onPress={() => setContactsInfo(false)}
+          style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "flex-end" }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              backgroundColor: colors.sheet,
+              borderTopLeftRadius: 30,
+              borderTopRightRadius: 30,
+              padding: 24,
+              gap: 14,
+            }}
+          >
+            <Text style={s.title}>{t("About contacts", "关于联系人")}</Text>
+            <Text style={s.text}>{contactNote}</Text>
+            <Button primary onPress={() => setContactsInfo(false)}>
+              {t("Got it", "知道了")}
+            </Button>
+          </Pressable>
+        </Pressable>
+      </Modal>
+      <Modal
+        visible={swapReceivePicker && !!owner}
+        animationType="slide"
+        onRequestClose={() => setSwapReceivePicker(false)}
+      >
+        <SafeAreaView style={s.page}>
+          <Header
+            title={t("Choose a token", "选择代币")}
+            onBack={() => setSwapReceivePicker(false)}
+            backLabel={t("Cancel", "取消")}
+          />
+          <ScrollView contentContainerStyle={s.content}>
+            {assets
+              .filter((a) => !["ETH", "USDG"].includes(a.symbol))
+              .map((a) => (
+                <Pressable
+                  key={a.symbol}
+                  onPress={() => {
+                    setAssetSymbol(a.symbol);
+                    setTrade("BUY");
+                    setSwapReceivePicker(false);
+                  }}
+                  style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
+                >
+                  <TokenIcon symbol={a.symbol} size={32} />
+                  <Text style={[s.text, { flex: 1, fontWeight: "600" }]}>{a.symbol}</Text>
+                  {assetSymbol === a.symbol && <Icon name="check" size={20} color={colors.green} />}
+                </Pressable>
+              ))}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+      <Modal
+        visible={voiceMode && !!owner}
+        animationType="fade"
+        transparent
+        onRequestClose={() => {
+          ExpoSpeechRecognitionModule.stop();
+          setVoiceMode(false);
+        }}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: colors.scrim,
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 28,
+            paddingHorizontal: 32,
+          }}
+        >
+          <VoiceListening />
+          <Text style={[s.text, { color: "#ffffff", textAlign: "center" }]}>
+            {liveTranscript || t("Listening…", "正在聆听…")}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("Stop", "停止")}
+            onPress={() => {
+              ExpoSpeechRecognitionModule.stop();
+              setVoiceMode(false);
+            }}
+            style={({ pressed }) => ({
+              width: 56,
+              height: 56,
+              borderRadius: 28,
+              backgroundColor: colors.wash,
+              alignItems: "center",
+              justifyContent: "center",
+              opacity: pressed ? 0.7 : 1,
+            })}
+          >
+            <Icon name="circle-x" size={26} color={colors.ink} />
+          </Pressable>
+        </View>
+      </Modal>
       <Modal
         visible={!!minimisePlan && !!owner}
         animationType="slide"
@@ -4972,7 +6255,7 @@ function Wallet() {
                 justifyContent: "center",
               }}
             >
-              <MaterialCommunityIcons
+              <Icon
                 name={notice?.tone === "error" ? "alert" : "check-bold"}
                 size={36}
                 color={colors.paper}
@@ -5016,11 +6299,7 @@ function Wallet() {
             >
               {contactSheet?.afterSend ? (
                 <>
-                  <MaterialCommunityIcons
-                    name="check-circle-outline"
-                    size={32}
-                    color={colors.green}
-                  />
+                  <Icon name="check-circle-outline" size={32} color={colors.green} />
                   <Text style={s.title}>{t("Transaction submitted", "交易已提交")}</Text>
                   <Text style={s.text}>
                     {t(
@@ -5095,13 +6374,119 @@ function Wallet() {
               keyboardType={pinWallet ? "number-pad" : "default"}
               maxLength={pinWallet ? 6 : undefined}
             />
-            {action("Authorize", "授权", (g) => authorize(false, g))}
-            {action("Use biometrics", "使用生物识别", (g) => authorize(true, g), false)}
+            {authError ? (
+              <Text style={[s.small, { color: colors.danger }]}>{authError}</Text>
+            ) : null}
+            {action("Authorize", "授权", async (g) => {
+              // Caught here, not left to `run`: a thrown error would route
+              // through the global `error` state, which opens the shared
+              // notice Modal on top of this still-open one and hangs iOS.
+              try {
+                await authorize(false, g);
+              } catch (e) {
+                setAuthError(
+                  e instanceof Error ? e.message : t("Couldn't authorize that.", "无法完成授权。"),
+                );
+              }
+            })}
+            <Pressable
+              accessibilityRole="button"
+              disabled={busy}
+              onPress={() =>
+                void run(async (g) => {
+                  try {
+                    await authorize(true, g);
+                  } catch (e) {
+                    setAuthError(
+                      e instanceof Error
+                        ? e.message
+                        : t("Couldn't authorize that.", "无法完成授权。"),
+                    );
+                  }
+                })
+              }
+              style={({ pressed }) => ({
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                paddingVertical: 10,
+                opacity: busy ? 0.4 : pressed ? 0.6 : 1,
+              })}
+            >
+              <Icon name="fingerprint" size={17} color={colors.green} />
+              <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                {t("Use biometrics", "使用生物识别")}
+              </Text>
+            </Pressable>
             <Button
               disabled={busy}
               onPress={() => {
                 setAuth(null);
                 setAuthPassword("");
+                setAuthError("");
+              }}
+            >
+              {t("Cancel", "取消")}
+            </Button>
+          </View>
+        </View>
+      </Modal>
+      <Modal
+        visible={biometricSheet && !!owner}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !busy && setBiometricSheet(false)}
+      >
+        <View
+          style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "center", padding: 24 }}
+        >
+          <View style={[s.panel, { backgroundColor: colors.sheet, gap: 14 }]}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+              <View style={s.iconDisc}>
+                <Icon name="fingerprint" size={20} color={colors.green} />
+              </View>
+              <Text style={[s.text, { fontWeight: "700", flex: 1 }]}>
+                {t("Enable biometric unlock", "启用生物识别解锁")}
+              </Text>
+            </View>
+            <Field
+              label={t("Password to enable biometrics", "启用生物识别所需的密码")}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+            />
+            {biometricError ? (
+              <Text style={[s.small, { color: colors.danger }]}>{biometricError}</Text>
+            ) : null}
+            {action("Enable biometric unlock", "启用生物识别解锁", async () => {
+              // Caught here, not left to `run`: a thrown error would route
+              // through the global `error` state, which opens the shared
+              // notice Modal on top of this still-open one and hangs iOS.
+              try {
+                await vault.enableBiometrics(password);
+                setPassword("");
+                setBiometricSheet(false);
+                setNotice({
+                  title: t("Biometric unlock enabled", "已启用生物识别解锁"),
+                  body: t(
+                    "Use Face ID or a fingerprint to unlock next time.",
+                    "下次可使用 Face ID 或指纹解锁。",
+                  ),
+                  tone: "success",
+                });
+              } catch (e) {
+                setBiometricError(
+                  e instanceof Error ? e.message : t("Couldn't enable that.", "无法启用该功能。"),
+                );
+              }
+            })}
+            <Button
+              disabled={busy}
+              onPress={() => {
+                setBiometricSheet(false);
+                setPassword("");
+                setBiometricError("");
               }}
             >
               {t("Cancel", "取消")}
