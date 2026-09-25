@@ -11,9 +11,14 @@ import { chain, RPC, sources, type Tx } from "./config";
 import { currentAccount, sessionVersion } from "./storage";
 import { txCheck } from "./validation";
 import { AppState } from "react-native";
+// retryCount: 0 stays on the wallet transport used for sending a
+// transaction (below) — retrying a broadcast is a real idempotency risk.
+// Reading a balance has no such risk, and no retries here means a single
+// transient network blip fails the whole refresh outright, which reads to
+// an owner as "the transfer I received isn't showing up."
 export const client = createPublicClient({
   chain,
-  transport: http(RPC, { timeout: 20000, retryCount: 0 }),
+  transport: http(RPC, { timeout: 20000, retryCount: 2 }),
 });
 export async function balances(
   address: Address,
@@ -57,8 +62,13 @@ export async function execute(
   const version = sessionVersion();
   const owner = currentAccount().address;
   const active = () => {
+    // "inactive", not just "background", is a real AppState value on iOS —
+    // the transient state while a system sheet (Face ID/Touch ID, an
+    // alert) has focus, not the app leaving the foreground. Treating it as
+    // backgrounded could abort a transaction the owner is mid-way through
+    // authorizing with biometrics. See the matching fix in App.tsx's run().
     if (
-      AppState.currentState !== "active" ||
+      AppState.currentState === "background" ||
       version !== sessionVersion() ||
       currentAccount().address !== owner
     )
