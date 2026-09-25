@@ -101,21 +101,32 @@ jobs:
       - run: bunx expo install --check
       - run: bun run export
       - run: bun run prebuild
+      # GRADLE_OPTS alone didn't fix the Metaspace OOM: under --no-daemon
+      # it only sizes the launcher JVM, but the actual crash (twice now —
+      # DexMergingWorkAction, then mergeDexRelease) is happening in a
+      # separate forked *worker* JVM that Gradle's Worker API spawns for
+      # dex-related tasks, sized from org.gradle.jvmargs in
+      # gradle.properties instead. That file is regenerated fresh by
+      # `expo prebuild` every run (not something to check in), but nothing
+      # stops editing the generated copy right here, between prebuild and
+      # the actual build, in the same job.
+      - name: Raise the worker JVM's memory ceiling
+        run: |
+          cd android
+          if grep -q '^org.gradle.jvmargs=' gradle.properties; then
+            sed -i 's/^org.gradle.jvmargs=.*/org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=2048m -XX:+ExitOnOutOfMemoryError/' gradle.properties
+          else
+            echo 'org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=2048m -XX:+ExitOnOutOfMemoryError' >> gradle.properties
+          fi
+          grep '^org.gradle.jvmargs=' gradle.properties
       - name: Build preview APK
         if: ${{ !inputs.signed_release }}
-        # DexMergingWorkAction and mergeDexRelease have both hit the JVM's
-        # Metaspace ceiling on this runner (BUILD FAILED ... Metaspace, once
-        # the app grew past a certain number of native modules). 1g of
-        # Metaspace wasn't enough — it happened again during mergeDexRelease
-        # in a background RMI thread, and that time the process didn't exit,
-        # it hung for the next 32 minutes until the job's own timeout killed
-        # it. +ExitOnOutOfMemoryError is there so any *future* OOM fails
-        # fast and visibly instead of silently eating the whole timeout
-        # budget again. GRADLE_OPTS, not org.gradle.jvmargs in
-        # gradle.properties: --no-daemon means this env var's JVM *is* the
-        # build JVM, whereas gradle.properties is regenerated fresh by
-        # `expo prebuild` every run and isn't a place to park a durable
-        # setting anyway.
+        # +ExitOnOutOfMemoryError (now on the worker JVM, see the step
+        # above) is there so any *future* OOM fails fast and visibly
+        # instead of silently eating the whole 45-minute timeout budget
+        # the way it did once already. GRADLE_OPTS still sizes the
+        # launcher JVM under --no-daemon, which is a real (if smaller)
+        # part of the same build.
         env:
           GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=2g -XX:+ExitOnOutOfMemoryError
         run: |
