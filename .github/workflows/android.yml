@@ -103,15 +103,21 @@ jobs:
       - run: bun run prebuild
       - name: Build preview APK
         if: ${{ !inputs.signed_release }}
-        # DexMergingWorkAction has hit the JVM's default Metaspace ceiling on
-        # this runner before (BUILD FAILED ... Metaspace, after ~11 minutes,
-        # once the app grew past a certain number of native modules). Wider
-        # heap/Metaspace here, not org.gradle.jvmargs in gradle.properties:
-        # --no-daemon means this env var's JVM *is* the build JVM, whereas
-        # gradle.properties is regenerated fresh by `expo prebuild` every run
-        # and isn't a place to park a durable setting anyway.
+        # DexMergingWorkAction and mergeDexRelease have both hit the JVM's
+        # Metaspace ceiling on this runner (BUILD FAILED ... Metaspace, once
+        # the app grew past a certain number of native modules). 1g of
+        # Metaspace wasn't enough — it happened again during mergeDexRelease
+        # in a background RMI thread, and that time the process didn't exit,
+        # it hung for the next 32 minutes until the job's own timeout killed
+        # it. +ExitOnOutOfMemoryError is there so any *future* OOM fails
+        # fast and visibly instead of silently eating the whole timeout
+        # budget again. GRADLE_OPTS, not org.gradle.jvmargs in
+        # gradle.properties: --no-daemon means this env var's JVM *is* the
+        # build JVM, whereas gradle.properties is regenerated fresh by
+        # `expo prebuild` every run and isn't a place to park a durable
+        # setting anyway.
         env:
-          GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=1g
+          GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=2g -XX:+ExitOnOutOfMemoryError
         run: |
           cd android
           ./gradlew assembleRelease --no-daemon
@@ -136,7 +142,7 @@ jobs:
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           # See the Build preview APK step for why this is here.
-          GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=1g
+          GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=2g -XX:+ExitOnOutOfMemoryError
         run: |
           test -n "$ANDROID_KEYSTORE_BASE64"
           test -n "$ANDROID_KEYSTORE_PASSWORD"
