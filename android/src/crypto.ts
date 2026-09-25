@@ -2,7 +2,7 @@ import { entropyToMnemonic, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { mnemonicToAccount } from "viem/accounts";
 import { gcm } from "@noble/ciphers/aes";
-import { pbkdf2Async } from "@noble/hashes/pbkdf2";
+import { pbkdf2Sync } from "react-native-quick-crypto";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils";
 export const normalizePhrase = (s: string) =>
@@ -56,7 +56,18 @@ export function open(key: Uint8Array, box: Box): string {
 }
 export const LEGACY_PASSWORD_ITERATIONS = 210000;
 export const PASSWORD_ITERATIONS = 100000;
-export const passwordKey = (password: string, salt: Uint8Array, iterations = PASSWORD_ITERATIONS) =>
-  pbkdf2Async(sha256, password.normalize("NFKD"), salt, { c: iterations, dkLen: 32 });
+// Native (JSI, hardware-accelerated) PBKDF2 via react-native-quick-crypto,
+// not @noble/hashes' pure-JS one: same iteration count, same security
+// margin, but the pure-JS version was measured taking multiple seconds per
+// unlock on-device (100k+ rounds of interpreted-JS SHA-256-HMAC), which is
+// what actually made typing a PIN feel slow. `async` here only to keep the
+// existing Promise<Uint8Array> signature every call site already awaits —
+// the native call itself is synchronous and fast enough not to need
+// chunked yielding the way the old asyncLoop-based version did.
+export const passwordKey = async (
+  password: string,
+  salt: Uint8Array,
+  iterations = PASSWORD_ITERATIONS,
+) => pbkdf2Sync(password.normalize("NFKD"), salt, iterations, 32, "sha256");
 export const dataKey = (phrase: string) =>
   sha256(utf8ToBytes(`tera-mobile-data-v1:${normalizePhrase(phrase)}`));
