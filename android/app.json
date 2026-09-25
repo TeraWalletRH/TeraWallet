@@ -23,6 +23,7 @@
       "supportsTablet": false,
       "infoPlist": {
         "NSFaceIDUsageDescription": "Face ID unlocks your wallet instead of typing your password.",
+        "NSPhotoLibraryUsageDescription": "Tera Wallet does not access your photo library. This is required only because a bundled library references the photo library API, which the app never calls.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
