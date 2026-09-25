@@ -644,6 +644,14 @@ function Wallet() {
   // fired from the menu's onClosed, once its Modal has actually unmounted.
   const afterWalletMenuCloses = useRef<(() => void) | null>(null);
   const afterContactMenuCloses = useRef<(() => void) | null>(null);
+  // A speech-recognition error closes the voice-mode Modal and would open
+  // the global notice Modal in the very same tick — two native Modals
+  // transitioning at once, the same class of hang fixed elsewhere this
+  // session. Queued here and flushed once the voice Modal has actually
+  // dismissed (onDismiss is iOS-only, so the effect below is the fallback
+  // for Android, which doesn't share iOS's single-presentation restriction
+  // as strictly but gets the same safe treatment anyway).
+  const pendingVoiceNotice = useRef<null | { title: string; body: string; tone: "error" }>(null);
   // The spotlight app tour: `tourStep` is null while inactive, else an index
   // into `tourSteps` below. `tourRect` is that step's target measured in
   // screen coordinates — recomputed on every step change, not derived at
@@ -691,22 +699,28 @@ function Wallet() {
     )
       return;
     if (event.error === "not-allowed") {
-      setNotice({
+      pendingVoiceNotice.current = {
         title: t("Microphone access needed", "需要麦克风权限"),
         body: t(
           "Allow microphone and speech recognition access in system settings to use voice input.",
           "请在系统设置中允许麦克风和语音识别权限以使用语音输入。",
         ),
         tone: "error",
-      });
+      };
       return;
     }
-    setNotice({
+    pendingVoiceNotice.current = {
       title: t("Voice input failed", "语音输入失败"),
       body: t("Try again, or type your message instead.", "请重试，或改为手动输入。"),
       tone: "error",
-    });
+    };
   });
+  useEffect(() => {
+    if (!voiceMode && pendingVoiceNotice.current) {
+      setNotice(pendingVoiceNotice.current);
+      pendingVoiceNotice.current = null;
+    }
+  }, [voiceMode]);
   async function startVoiceMode() {
     const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
     if (!permission.granted) {
@@ -839,7 +853,14 @@ function Wallet() {
     await new Promise((resolve) => setTimeout(resolve, 0));
     const version = vault.sessionVersion();
     const guard = () => {
-      if (AppState.currentState !== "active" || version !== vault.sessionVersion())
+      // "inactive", not just "background", is a real AppState value on iOS —
+      // it's the transient state while a system sheet (Face ID/Touch ID,
+      // an alert, Control Center) has focus, not the app leaving the
+      // foreground. A biometric prompt routinely leaves AppState reading
+      // "inactive" for a moment after it resolves, so treating anything
+      // short of "active" as backgrounded made a successful Face ID/Touch
+      // ID unlock fail right after with "Session locked".
+      if (AppState.currentState === "background" || version !== vault.sessionVersion())
         throw new Error("Session locked. / 会话已锁定。");
     };
     try {
@@ -5960,6 +5981,12 @@ function Wallet() {
         visible={voiceMode && !!owner}
         animationType="fade"
         transparent
+        onDismiss={() => {
+          if (pendingVoiceNotice.current) {
+            setNotice(pendingVoiceNotice.current);
+            pendingVoiceNotice.current = null;
+          }
+        }}
         onRequestClose={() => {
           ExpoSpeechRecognitionModule.stop();
           setVoiceMode(false);
