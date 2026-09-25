@@ -5,20 +5,48 @@
     "version": "0.1.0",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "scheme": "terawallet",
     "android": {
       "package": "app.terawallet.android",
       "versionCode": 1,
       "allowBackup": false,
       "blockedPermissions": [
-        "android.permission.RECORD_AUDIO",
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE"
       ]
     },
-    "plugins": ["expo-secure-store", "expo-local-authentication"],
-    "updates": { "enabled": false }
+    "ios": {
+      "bundleIdentifier": "app.terawallet.ios",
+      "buildNumber": "1",
+      "supportsTablet": false,
+      "infoPlist": {
+        "NSFaceIDUsageDescription": "Face ID unlocks your wallet instead of typing your password.",
+        "NSPhotoLibraryUsageDescription": "Tera Wallet does not access your photo library. This is required only because a bundled library references the photo library API, which the app never calls.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "plugins": [
+      "expo-secure-store",
+      "expo-local-authentication",
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Tera uses the microphone only while you're dictating a message to the assistant.",
+          "speechRecognitionPermission": "Tera uses speech recognition only to turn your dictated message into text, on this device."
+        }
+      ],
+      "react-native-quick-crypto"
+    ],
+    "updates": {
+      "enabled": false
+    },
+    "extra": {
+      "eas": {
+        "projectId": "e42e623a-3766-41ab-897e-73f808e477b4"
+      }
+    },
+    "owner": "terawallet-org"
   }
 }
