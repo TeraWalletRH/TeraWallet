@@ -36,7 +36,8 @@
           "microphonePermission": "Tera uses the microphone only while you're dictating a message to the assistant.",
           "speechRecognitionPermission": "Tera uses speech recognition only to turn your dictated message into text, on this device."
         }
-      ]
+      ],
+      "react-native-quick-crypto"
     ],
     "updates": {
       "enabled": false
