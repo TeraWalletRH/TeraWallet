@@ -103,6 +103,15 @@ jobs:
       - run: bun run prebuild
       - name: Build preview APK
         if: ${{ !inputs.signed_release }}
+        # DexMergingWorkAction has hit the JVM's default Metaspace ceiling on
+        # this runner before (BUILD FAILED ... Metaspace, after ~11 minutes,
+        # once the app grew past a certain number of native modules). Wider
+        # heap/Metaspace here, not org.gradle.jvmargs in gradle.properties:
+        # --no-daemon means this env var's JVM *is* the build JVM, whereas
+        # gradle.properties is regenerated fresh by `expo prebuild` every run
+        # and isn't a place to park a durable setting anyway.
+        env:
+          GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=1g
         run: |
           cd android
           ./gradlew assembleRelease --no-daemon
@@ -126,6 +135,8 @@ jobs:
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # See the Build preview APK step for why this is here.
+          GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=1g
         run: |
           test -n "$ANDROID_KEYSTORE_BASE64"
           test -n "$ANDROID_KEYSTORE_PASSWORD"
