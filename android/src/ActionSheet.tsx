@@ -8,6 +8,7 @@ export type SheetAction = {
   icon: string;
   label: string;
   onPress: () => void;
+  danger?: boolean;
 };
 
 // Slow in, slower to settle: a long ease-out reads as weight rather than lag.
@@ -24,11 +25,20 @@ const leave = Easing.bezier(0.4, 0, 0.7, 0.2);
 export function ActionSheet({
   visible,
   onClose,
+  onClosed,
   title,
   actions,
 }: {
   visible: boolean;
   onClose: () => void;
+  // Fires once this sheet's own native Modal has actually unmounted —
+  // not just when `visible` flips false, but CLOSE_MS+ later, after the
+  // close animation finishes. A caller whose action needs to open another
+  // Modal (rather than just navigate) must wait for this: presenting a new
+  // Modal while this one is still mid-dismissal hangs iOS. A fixed-duration
+  // setTimeout as a substitute is a race — the native animation-complete
+  // callback and a JS timer aren't guaranteed to land in that order.
+  onClosed?: () => void;
   title: string;
   actions: SheetAction[];
 }) {
@@ -41,6 +51,8 @@ export function ActionSheet({
   while (tiles.length < actions.length) tiles.push(new Animated.Value(0));
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const onClosedRef = useRef(onClosed);
+  onClosedRef.current = onClosed;
 
   useEffect(() => {
     if (visible) {
@@ -73,7 +85,11 @@ export function ActionSheet({
         duration: CLOSE_MS,
         easing: leave,
         useNativeDriver: true,
-      }).start(({ finished }) => finished && setMounted(false));
+      }).start(({ finished }) => {
+        if (!finished) return;
+        setMounted(false);
+        onClosedRef.current?.();
+      });
     }
     // `mounted` is read, not reacted to: only `visible` starts an animation.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -184,16 +200,23 @@ export function ActionSheet({
                         width: 56,
                         height: 56,
                         borderRadius: 18,
-                        backgroundColor: colors.wash,
+                        backgroundColor: a.danger ? colors.dangerTint : colors.wash,
                         borderWidth: 1,
                         borderColor: colors.line,
                         alignItems: "center",
                         justifyContent: "center",
                       }}
                     >
-                      <Icon name={a.icon} size={24} color={colors.green} />
+                      <Icon
+                        name={a.icon}
+                        size={24}
+                        color={a.danger ? colors.danger : colors.green}
+                      />
                     </View>
-                    <Text numberOfLines={1} style={[s.small, { color: colors.ink }]}>
+                    <Text
+                      numberOfLines={1}
+                      style={[s.small, { color: a.danger ? colors.danger : colors.ink }]}
+                    >
                       {a.label}
                     </Text>
                   </Pressable>

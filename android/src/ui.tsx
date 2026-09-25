@@ -2,7 +2,6 @@ import React, { useState } from "react";
 import {
   Animated,
   Easing,
-  Image,
   Pressable,
   StyleSheet,
   Text as NativeText,
@@ -13,8 +12,8 @@ import {
   type TextProps,
   type TextStyle,
 } from "react-native";
-import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { LinearGradient } from "expo-linear-gradient";
+import { Icon } from "./icons";
 // Tokens sampled from the wordmark itself (public/logo.png): the olive-green
 // and cream fold, the gold-to-copper fold, and the forest-green-to-warm-brown
 // ambient gradient behind it. Old names are kept so every screen picks the
@@ -129,30 +128,9 @@ export function TextInput(props: TextInputProps) {
   return <NativeTextInput {...props} style={withFont(props.style)} />;
 }
 
-// Icons8 glyphs (assets/icons/CREDITS.md). Drawn black and tinted here, so one
-// file serves every colour the theme asks for.
-export const glyphs = {
-  wallet: require("../assets/icons/wallet.png"),
-  settings: require("../assets/icons/settings.png"),
-  plus: require("../assets/icons/plus.png"),
-  send: require("../assets/icons/send.png"),
-  swap: require("../assets/icons/swap.png"),
-  translate: require("../assets/icons/translate.png"),
-  biometrics: require("../assets/icons/biometrics.png"),
-};
-export type GlyphName = keyof typeof glyphs;
-/** One icon, whichever set it comes from: an Icons8 glyph by name, else Material Community. */
-export function Icon({ name, size, color }: { name: string; size: number; color: string }) {
-  if (name in glyphs)
-    return (
-      <Image
-        source={glyphs[name as GlyphName]}
-        style={{ width: size, height: size, tintColor: color }}
-        resizeMode="contain"
-      />
-    );
-  return <MaterialCommunityIcons name={name as any} size={size} color={color} />;
-}
+// One icon component for every call site: Lucide icons rendered as SVG
+// (see ./icons.tsx), vendored locally rather than a font/PNG set.
+export { Icon };
 
 // A function, not a bare StyleSheet.create call: setColorTheme() re-runs it
 // and Object.assign()s the result onto the exported `styles` object in
@@ -160,105 +138,105 @@ export function Icon({ name, size, color }: { name: string; size: number; color:
 // valid imports that just pick up the new theme's values on next render.
 function buildStyles() {
   return StyleSheet.create({
-  page: { flex: 1, backgroundColor: colors.bg },
-  // flexGrow, not just flex: a ScrollView's content container only obeys
-  // flexGrow (it has to be able to exceed the screen and still scroll) — it
-  // stretches to fill the screen when content is shorter, which is what
-  // lets a flex:1 spacer inside push something to the bottom of the
-  // viewport; it's a no-op once real content already exceeds screen height.
-  content: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 36, gap: 18, flexGrow: 1 },
-  header: {
-    paddingHorizontal: 20,
-    paddingVertical: 13,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  eyebrow: {
-    color: colors.muted,
-    fontSize: 12,
-    fontWeight: "600",
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
-  },
-  title: {
-    fontSize: 34,
-    color: colors.ink,
-    lineHeight: 39,
-    fontWeight: "800",
-    letterSpacing: -0.8,
-  },
-  text: { color: colors.ink, fontSize: 15, lineHeight: 22 },
-  small: { color: colors.muted, fontSize: 13, lineHeight: 19 },
-  mono: { fontFamily: "monospace", color: colors.ink, fontSize: 13, lineHeight: 21 },
-  label: { color: colors.ink, fontSize: 14, fontWeight: "600" },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 12,
-    paddingVertical: 15,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.line,
-  },
-  panel: {
-    padding: 16,
-    backgroundColor: colors.wash,
-    gap: 10,
-    borderRadius: 16,
-  },
-  button: {
-    minHeight: 52,
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    borderWidth: 1,
-    borderColor: colors.line,
-    backgroundColor: colors.wash,
-    borderRadius: 999,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  buttonText: { fontSize: 15, fontWeight: "600", color: colors.ink, textAlign: "center" },
-  input: {
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    minHeight: 52,
-    borderWidth: 1,
-    borderColor: colors.line,
-    color: colors.ink,
-    fontSize: 16,
-    backgroundColor: colors.wash,
-    borderRadius: 14,
-  },
-  field: { gap: 8 },
-  wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
-  quickActions: { flexDirection: "row", justifyContent: "space-between" },
-  quickAction: { flex: 1, alignItems: "center", gap: 8 },
-  quickIcon: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
-    backgroundColor: colors.wash,
-    borderWidth: 1,
-    borderColor: colors.line,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  iconDisc: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: colors.raised,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  error: {
-    padding: 15,
-    borderRadius: 14,
-    borderLeftWidth: 3,
-    borderColor: colors.danger,
-    backgroundColor: colors.dangerTint,
-  },
+    page: { flex: 1, backgroundColor: colors.bg },
+    // flexGrow, not just flex: a ScrollView's content container only obeys
+    // flexGrow (it has to be able to exceed the screen and still scroll) — it
+    // stretches to fill the screen when content is shorter, which is what
+    // lets a flex:1 spacer inside push something to the bottom of the
+    // viewport; it's a no-op once real content already exceeds screen height.
+    content: { paddingHorizontal: 20, paddingTop: 16, paddingBottom: 36, gap: 18, flexGrow: 1 },
+    header: {
+      paddingHorizontal: 20,
+      paddingVertical: 13,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    eyebrow: {
+      color: colors.muted,
+      fontSize: 12,
+      fontWeight: "600",
+      letterSpacing: 0.4,
+      textTransform: "uppercase",
+    },
+    title: {
+      fontSize: 34,
+      color: colors.ink,
+      lineHeight: 39,
+      fontWeight: "800",
+      letterSpacing: -0.8,
+    },
+    text: { color: colors.ink, fontSize: 15, lineHeight: 22 },
+    small: { color: colors.muted, fontSize: 13, lineHeight: 19 },
+    mono: { fontFamily: "monospace", color: colors.ink, fontSize: 13, lineHeight: 21 },
+    label: { color: colors.ink, fontSize: 14, fontWeight: "600" },
+    row: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 12,
+      paddingVertical: 15,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderColor: colors.line,
+    },
+    panel: {
+      padding: 16,
+      backgroundColor: colors.wash,
+      gap: 10,
+      borderRadius: 16,
+    },
+    button: {
+      minHeight: 52,
+      paddingVertical: 14,
+      paddingHorizontal: 20,
+      borderWidth: 1,
+      borderColor: colors.line,
+      backgroundColor: colors.wash,
+      borderRadius: 999,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    buttonText: { fontSize: 15, fontWeight: "600", color: colors.ink, textAlign: "center" },
+    input: {
+      paddingHorizontal: 16,
+      paddingVertical: 14,
+      minHeight: 52,
+      borderWidth: 1,
+      borderColor: colors.line,
+      color: colors.ink,
+      fontSize: 16,
+      backgroundColor: colors.wash,
+      borderRadius: 14,
+    },
+    field: { gap: 8 },
+    wrap: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+    quickActions: { flexDirection: "row", justifyContent: "space-between" },
+    quickAction: { flex: 1, alignItems: "center", gap: 8 },
+    quickIcon: {
+      width: 52,
+      height: 52,
+      borderRadius: 26,
+      backgroundColor: colors.wash,
+      borderWidth: 1,
+      borderColor: colors.line,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    iconDisc: {
+      width: 38,
+      height: 38,
+      borderRadius: 19,
+      backgroundColor: colors.raised,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    error: {
+      padding: 15,
+      borderRadius: 14,
+      borderLeftWidth: 3,
+      borderColor: colors.danger,
+      backgroundColor: colors.dangerTint,
+    },
   });
 }
 export const styles = buildStyles();
@@ -339,7 +317,7 @@ export function Button({
           colors={[colors.lime, colors.copper]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
-          style={[styles.button, { borderWidth: 0 }]}
+          style={[styles.button, { borderWidth: 0, overflow: "hidden" }]}
         >
           {label}
         </LinearGradient>
@@ -507,7 +485,7 @@ export function Keypad({
                 })}
               >
                 {isBackspace ? (
-                  <MaterialCommunityIcons name="backspace-outline" size={22} color={colors.ink} />
+                  <Icon name="backspace-outline" size={22} color={colors.ink} />
                 ) : (
                   <Text style={{ fontSize: 26, fontWeight: "600", color: colors.ink }}>{key}</Text>
                 )}
@@ -611,7 +589,7 @@ export function Header({
             },
           ]}
         >
-          <MaterialCommunityIcons name="chevron-left" size={24} color={colors.ink} />
+          <Icon name="chevron-left" size={24} color={colors.ink} />
         </Pressable>
       ) : (
         <View style={side} />
@@ -623,7 +601,22 @@ export function Header({
       >
         {title}
       </Text>
-      <View style={[side, { alignItems: "flex-end", justifyContent: "center" }]}>{right}</View>
+      {/* minWidth, not width: keeps single-icon headers exactly as before
+          while letting a `right` with more than one control (e.g. info +
+          add) grow past 40 instead of being squeezed into it. */}
+      <View
+        style={[
+          side,
+          {
+            width: undefined,
+            minWidth: side.width,
+            alignItems: "flex-end",
+            justifyContent: "center",
+          },
+        ]}
+      >
+        {right}
+      </View>
     </View>
   );
 }
@@ -721,21 +714,21 @@ export function ListRow({
           </Text>
         ) : null}
       </View>
-      {right ??
-        (onPress ? (
-          <MaterialCommunityIcons name="chevron-right" size={22} color={colors.faint} />
-        ) : null)}
+      {right ?? (onPress ? <Icon name="chevron-right" size={22} color={colors.faint} /> : null)}
     </Pressable>
   );
 }
 /** The kit's switch. Drawn only: the row it sits in is what gets pressed. */
-export function Toggle({ on }: { on: boolean }) {
+export function Toggle({ on, small = false }: { on: boolean; small?: boolean }) {
+  const width = small ? 34 : 44,
+    height = small ? 20 : 26,
+    knob = small ? 14 : 20;
   return (
     <View
       style={{
-        width: 44,
-        height: 26,
-        borderRadius: 13,
+        width,
+        height,
+        borderRadius: height / 2,
         padding: 3,
         justifyContent: "center",
         backgroundColor: on ? colors.green : colors.line,
@@ -743,9 +736,9 @@ export function Toggle({ on }: { on: boolean }) {
     >
       <View
         style={{
-          width: 20,
-          height: 20,
-          borderRadius: 10,
+          width: knob,
+          height: knob,
+          borderRadius: knob / 2,
           backgroundColor: "#ffffff",
           alignSelf: on ? "flex-end" : "flex-start",
         }}

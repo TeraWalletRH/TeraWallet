@@ -56,6 +56,8 @@ export type LocalData = {
    * Not trimmed by the retention window — a name is not a record of activity.
    */
   contacts: { address: string; name: string; savedAt: number }[];
+  /** Whether the spotlight walkthrough has run on this device already. */
+  tourSeen: boolean;
 };
 export const emptyData = (): LocalData => ({
   drafts: [],
@@ -65,6 +67,7 @@ export const emptyData = (): LocalData => ({
   language: "en",
   theme: "dark",
   contacts: [],
+  tourSeen: false,
 });
 let phrase: string | null = null;
 let epoch = 0;
