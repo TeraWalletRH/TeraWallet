@@ -28,6 +28,12 @@ globalThis.btoa ??= (binary) => Buffer.from(binary, "binary").toString("base64")
 
 const TURN = { input: "what does the policy check do?", output: "It checks the signed bundle." };
 
+// Every receipt these tests build is stamped with this instant. Anything
+// compared against it is offset from it too, never from Date.now(), or the
+// test starts passing or failing according to the day it is run.
+const MADE_AT = Date.UTC(2026, 8, 17, 12, 0, 0);
+const DAY = 24 * 60 * 60 * 1000;
+
 const made = (overrides = {}) =>
   create({
     answeredBy: CODE,
@@ -36,7 +42,7 @@ const made = (overrides = {}) =>
     release: "r-d5b1ca767477",
     integrity: "verified",
     module: "checks.js",
-    at: Date.UTC(2026, 8, 17, 12, 0, 0),
+    at: MADE_AT,
     ...overrides,
   });
 
@@ -463,7 +469,7 @@ test("a registry older than the receipt cannot call its release a forgery", asyn
     registry: "Tera approved builds",
     version: 1,
     algorithm: "sha256",
-    publishedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+    publishedAt: new Date(MADE_AT - 7 * DAY).toISOString(),
     builds: [{ release: "r-ffd0e45a1b2c", filesHash: "sha256-AAAA", publishedAt: "2026-09-10" }],
   };
   const check = (

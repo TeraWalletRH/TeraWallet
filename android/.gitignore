@@ -6,3 +6,5 @@ dist/
 .env
 *.keystore
 *.jks
+*.p8
+scripts/release-keystore.b64
