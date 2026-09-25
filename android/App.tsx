@@ -25,13 +25,14 @@ import { StatusBar } from "expo-status-bar";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "expo-speech-recognition";
-import { formatUnits, parseUnits, zeroAddress, isAddress, type Address } from "viem";
+import { erc20Abi, formatUnits, parseUnits, zeroAddress, isAddress, type Address } from "viem";
 import { api } from "./src/api";
 import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
 import { balances, client, execute, transactionStatus } from "./src/network";
+import { fetchChainHistory, type ChainHistoryEntry } from "./src/explorer";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { contacts as contactsCore, UNVERIFIABLE, value as valueCore } from "./src/core";
@@ -462,12 +463,48 @@ function shortAmount(amount: string) {
   return kept ? `${whole}.${kept}` : whole;
 }
 
-function TokenIcon({ symbol, size = 32 }: { symbol: string; size?: number }) {
+function TokenIcon({
+  symbol,
+  size = 32,
+  chainBadge = false,
+}: {
+  symbol: string;
+  size?: number;
+  // A small Robinhood-mark subscript over the token icon's corner, the way
+  // MetaMask badges a token with the network it's actually held on — every
+  // asset here lives on Robinhood Chain, and "ETH" alone reads as mainnet
+  // Ethereum without it.
+  chainBadge?: boolean;
+}) {
+  const badgeSize = Math.round(size * 0.42);
+  const ringSize = badgeSize + 4;
   return (
-    <Image
-      source={tokenImages[symbol] || require("./assets/RH-RWA-Assets-Media/rh-icon.png")}
-      style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: colors.wash }}
-    />
+    <View style={{ width: size, height: size }}>
+      <Image
+        source={tokenImages[symbol] || require("./assets/RH-RWA-Assets-Media/rh-icon.png")}
+        style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: colors.wash }}
+      />
+      {chainBadge && (
+        <View
+          style={{
+            position: "absolute",
+            right: -2,
+            bottom: -2,
+            width: ringSize,
+            height: ringSize,
+            borderRadius: ringSize / 2,
+            backgroundColor: colors.wash,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Image
+            source={require("./assets/RH-RWA-Assets-Media/rh-icon.png")}
+            style={{ width: badgeSize, height: badgeSize, borderRadius: badgeSize / 2 }}
+          />
+        </View>
+      )}
+    </View>
   );
 }
 function Wallet() {
@@ -525,6 +562,15 @@ function Wallet() {
     // index since that's a contact's stable identity.
     [contactMenuFor, setContactMenuFor] = useState<string | null>(null),
     [contactsInfo, setContactsInfo] = useState(false),
+    [importAddress, setImportAddress] = useState(""),
+    [importLookup, setImportLookup] = useState<Asset | null>(null),
+    [importError, setImportError] = useState(""),
+    // The tx hash of whichever Activity row is open on the detail screen.
+    [activityDetail, setActivityDetail] = useState<string | null>(null),
+    // Confirmed activity read back from the chain, to fill in what a
+    // second device (or a reinstall) of this same wallet has no local
+    // record of. null until the first fetch resolves.
+    [chainHistory, setChainHistory] = useState<ChainHistoryEntry[] | null>(null),
     [notice, setNotice] = useState<null | {
       title: string;
       body: string;
@@ -639,6 +685,25 @@ function Wallet() {
   const pending = useRef(false);
   const glassTarget = useRef<View>(null);
   const chatScrollRef = useRef<ScrollView>(null);
+  const reviewScrollRef = useRef<ScrollView>(null);
+  // The PIN/biometric box appears inline inside the review sheet (not its
+  // own Modal — stacking a second Modal on top of review's would risk the
+  // same presentation collision fixed elsewhere this session), low enough
+  // in a long review that it can land below the fold. Scroll it into view
+  // instead of leaving the owner to find it.
+  useEffect(() => {
+    if (auth) reviewScrollRef.current?.scrollToEnd({ animated: true });
+  }, [auth]);
+  useEffect(() => {
+    if (page !== "activity" || !owner) return;
+    let live = true;
+    void fetchChainHistory(owner, t)
+      .then((entries) => live && setChainHistory(entries))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [page, owner]);
   // A wallet-menu action that itself opens a Modal can't run right away —
   // the menu is still a Modal mid-close at that point. It's queued here and
   // fired from the menu's onClosed, once its Modal has actually unmounted.
@@ -997,7 +1062,6 @@ function Wallet() {
             [
               ["bridge", t("Bridge", "跨链")],
               ["shield-lock-outline", t("Private", "私密发送")],
-              ["image-multiple-outline", t("NFTs", "NFT")],
               ...(tagsAvailable() ? [["at", t("Tag", "标签")]] : []),
               ["trophy-outline", t("Ranks", "榜单")],
               ["account-multiple-outline", t("Contacts", "联系人")],
@@ -1026,10 +1090,7 @@ function Wallet() {
       ref: tourAssetsRef,
       scrollable: true,
       label: t("Assets", "资产"),
-      body: t(
-        "Your tokens live here, with NFTs one tap away.",
-        "你的代币显示在这里，NFT 也只需一步即可查看。",
-      ),
+      body: t("Your tokens live here.", "你的代币显示在这里。"),
     },
     {
       ref: tourTabBarRef,
@@ -1145,7 +1206,16 @@ function Wallet() {
   async function refresh(address = owner) {
     if (!address) return;
     const version = vault.sessionVersion();
-    const registryResult = await api("/api/assets").catch(() => ({ assets: [] }));
+    // Fired together, not chained: only balances() actually needs the
+    // registry's token list first. Prices and the tag lookup don't depend
+    // on anything here, but used to be awaited before/after it anyway,
+    // turning three independent requests into three sequential round-trips.
+    const registryPromise = api("/api/assets").catch(() => ({ assets: [] }));
+    const pricesPromise = api("/api/assets/prices");
+    const tagPromise = tagsAvailable()
+      ? tags.tagOf(address).catch(() => undefined)
+      : Promise.resolve(undefined);
+    const registryResult = await registryPromise;
     const registry: Asset[] = registryResult.assets || [];
     const teraAsset: Asset = {
       symbol: "TERA",
@@ -1153,33 +1223,36 @@ function Wallet() {
       decimals: 18,
       name: "Tera",
     };
+    const known = [...sources, teraAsset, ...registry];
     const supported = [
       ...sources,
       teraAsset,
       ...registry.filter((a) => !sources.some((s) => s.symbol === a.symbol) && a.symbol !== "TERA"),
+      // Tokens the owner imported by address — anything outside the
+      // built-in and registry-known lists, which refresh() would otherwise
+      // never check a balance for.
+      ...dataRef.current.customTokens.filter(
+        (a) => !known.some((k) => k.address.toLowerCase() === a.address.toLowerCase()),
+      ),
     ];
-    const result = await Promise.allSettled([
+    const [balanceResult, pricesResult, tagResult] = await Promise.allSettled([
       balances(address, supported),
-      api("/api/assets/prices"),
+      pricesPromise,
+      tagPromise,
     ]);
     if (version !== vault.sessionVersion()) return;
-    if (result[0].status === "fulfilled") setBalance(result[0].value);
+    if (balanceResult.status === "fulfilled") setBalance(balanceResult.value);
     else
       setError(
         t("Could not refresh balances. Pull again when connected.", "无法刷新余额，请联网后重试。"),
       );
-    if (result[1].status === "fulfilled") setPrices(result[1].value.prices || { USDG: 1 });
+    if (pricesResult.status === "fulfilled") setPrices(pricesResult.value.prices || { USDG: 1 });
     setAssets(supported);
-    // Whether this wallet already has a name. Read from the registry, and a
-    // failure leaves it unknown rather than answering "no" — an owner who
-    // already holds a tag must not be asked to claim one over a dropped call.
-    if (tagsAvailable())
-      await tags
-        .tagOf(address)
-        .then((held) => {
-          if (version === vault.sessionVersion()) setMyTag(held);
-        })
-        .catch(() => {});
+    // A failure leaves the tag unknown rather than answering "no" — an
+    // owner who already holds a tag must not be asked to claim one over a
+    // dropped call.
+    if (tagResult.status === "fulfilled" && tagResult.value !== undefined)
+      setMyTag(tagResult.value);
   }
   async function pullRefresh() {
     setRefreshing(true);
@@ -1188,6 +1261,63 @@ function Wallet() {
     } finally {
       setRefreshing(false);
     }
+  }
+  async function lookupCustomToken() {
+    setImportError("");
+    setImportLookup(null);
+    const address = importAddress.trim();
+    if (!isAddress(address)) {
+      setImportError(t("Enter a valid contract address.", "请输入有效的合约地址。"));
+      return;
+    }
+    if (
+      [...assets, ...data.customTokens].some(
+        (a) => a.address.toLowerCase() === address.toLowerCase(),
+      )
+    )
+      return setImportError(t("This token is already tracked.", "该代币已在追踪列表中。"));
+    try {
+      const [symbol, decimals, name] = await Promise.all([
+        client.readContract({ address, abi: erc20Abi, functionName: "symbol" }),
+        client.readContract({ address, abi: erc20Abi, functionName: "decimals" }),
+        client
+          .readContract({ address, abi: erc20Abi, functionName: "name" })
+          .catch(() => undefined),
+      ]);
+      setImportLookup({ symbol, decimals, address, name });
+    } catch {
+      setImportError(
+        t(
+          "Couldn't read a token at that address. Check it's an ERC-20 contract on this network.",
+          "无法从该地址读取代币信息，请确认这是本链上的 ERC-20 合约。",
+        ),
+      );
+    }
+  }
+  async function addCustomToken() {
+    const token = importLookup;
+    if (!token) return;
+    await store({ ...dataRef.current, customTokens: [...dataRef.current.customTokens, token] });
+    setImportAddress("");
+    setImportLookup(null);
+    setNotice({
+      title: t("Token added", "代币已添加"),
+      body: t(
+        `${token.symbol} will show in your assets once you hold a balance.`,
+        `如果你持有 ${token.symbol}，将显示在资产列表中。`,
+      ),
+      tone: "success",
+    });
+    void refresh();
+  }
+  async function removeCustomToken(address: string) {
+    await store({
+      ...dataRef.current,
+      customTokens: dataRef.current.customTokens.filter(
+        (a) => a.address.toLowerCase() !== address.toLowerCase(),
+      ),
+    });
+    void refresh();
   }
   // Through the shared core rather than summed here. The version this replaced multiplied
   // by `prices[symbol] || 0`, so a holding whose price could not be read was counted as
@@ -1212,6 +1342,24 @@ function Wallet() {
         }))
         .filter(({ amount }) => Number(amount) > 0)
     : [];
+  // Local history first (it has the richer detail — payee, bridge/relay
+  // reference, delivery status — none of which exists on chain), then
+  // whatever confirmed on-chain activity isn't already in it. That gap is
+  // exactly what's missing on a second device or a fresh install of this
+  // same wallet.
+  const combinedHistory = [
+    ...data.history,
+    ...(chainHistory || [])
+      .filter((c) => !data.history.some((h) => h.hash === c.hash))
+      .map((c) => ({
+        hash: c.hash,
+        title: c.title,
+        step: 1,
+        totalSteps: 1,
+        status: c.status,
+        createdAt: c.timestamp,
+      })),
+  ].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
   const selectedAsset = assets.find((a) => a.symbol === assetSymbol) || sources[0];
   const dest = destinations.find((d) => d.id === destination)!;
   const output = dest.tokens.find((a) => a.symbol === outSymbol) || dest.tokens[0];
@@ -2411,6 +2559,7 @@ function Wallet() {
     setFlowStep(0);
     setBridgeStep(0);
     setSwapReceivePicker(false);
+    if (p === "swap") setTrade("BUY");
     if (p === "send") {
       setSendMode(mode);
       if (mode === "private") {
@@ -2802,7 +2951,149 @@ function Wallet() {
       </View>
     );
   }
+  // Shared by the Home screen's compact list and the full Tokens screen, so
+  // a held asset looks identical whichever one it's read from.
+  function assetRow(asset: Asset, amount: string, first: boolean) {
+    return (
+      <View
+        key={asset.symbol}
+        style={{
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 12,
+          paddingVertical: 12,
+          borderTopWidth: first ? 0 : StyleSheet.hairlineWidth,
+          borderColor: colors.line,
+        }}
+      >
+        <TokenIcon symbol={asset.symbol} size={38} chainBadge />
+        <View style={{ flex: 1 }}>
+          <Text style={s.label}>{asset.symbol}</Text>
+          <Text style={s.small} numberOfLines={1}>
+            {shortAmount(amount)}
+          </Text>
+        </View>
+        <Text style={s.label}>
+          {valueCore.format(valueCore.valueOf(amount, prices[asset.symbol]))}
+        </Text>
+      </View>
+    );
+  }
   function main() {
+    if (page === "tokens")
+      return (
+        <>
+          <Header
+            title={t("Tokens", "代币")}
+            onBack={() => setPage("home")}
+            backLabel={t("Wallet", "钱包")}
+            right={
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("Import a token", "导入代币")}
+                hitSlop={8}
+                onPress={() => {
+                  setImportAddress("");
+                  setImportLookup(null);
+                  setImportError("");
+                  setPage("import-token");
+                }}
+                style={({ pressed }) => ({
+                  width: 36,
+                  height: 36,
+                  borderRadius: 18,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: pressed ? colors.raised : colors.wash,
+                })}
+              >
+                <Icon name="plus" size={20} color={colors.ink} />
+              </Pressable>
+            }
+          />
+          {held.length ? (
+            <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
+              {held.map(({ asset, amount }, i) => assetRow(asset, amount, i === 0))}
+            </View>
+          ) : (
+            <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
+              <Text style={s.small}>
+                {t("No balances on this wallet yet.", "此钱包暂无余额。")}
+              </Text>
+            </View>
+          )}
+        </>
+      );
+    if (page === "import-token")
+      return (
+        <>
+          <Header
+            title={t("Import tokens", "导入代币")}
+            onBack={() => setPage("tokens")}
+            backLabel={t("Tokens", "代币")}
+          />
+          <Text style={s.small}>
+            {t(
+              "Add a token by its contract address on Robinhood Chain. It'll show in your assets once you hold a balance.",
+              "输入 Robinhood Chain 上的合约地址以添加代币。持有余额后将显示在资产列表中。",
+            )}
+          </Text>
+          <View style={s.field}>
+            <Text style={s.eyebrow}>{t("Contract address", "合约地址")}</Text>
+            <TextInput
+              value={importAddress}
+              onChangeText={(v) => {
+                setImportAddress(v);
+                setImportLookup(null);
+                setImportError("");
+              }}
+              placeholder="0x…"
+              placeholderTextColor={colors.muted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={s.input}
+            />
+          </View>
+          {importError ? (
+            <Text style={[s.small, { color: colors.danger }]}>{importError}</Text>
+          ) : null}
+          {importLookup ? (
+            <View style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}>
+              <TokenIcon symbol={importLookup.symbol} size={38} />
+              <View style={{ flex: 1 }}>
+                <Text style={s.label}>{importLookup.symbol}</Text>
+                {importLookup.name ? <Text style={s.small}>{importLookup.name}</Text> : null}
+              </View>
+            </View>
+          ) : null}
+          {importLookup
+            ? action("Add token", "添加代币", addCustomToken)
+            : action("Look up token", "查找代币", lookupCustomToken, false)}
+          {data.customTokens.length > 0 && (
+            <Group title={t("Imported tokens", "已导入的代币")}>
+              {data.customTokens.map((token) => (
+                <ListRow
+                  key={token.address}
+                  icon="wallet-outline"
+                  label={token.symbol}
+                  detail={short(token.address)}
+                  right={
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={t("Remove token", "移除代币")}
+                      hitSlop={10}
+                      onPress={() => void removeCustomToken(token.address)}
+                      style={({ pressed }) => ({ padding: 4, opacity: pressed ? 0.5 : 1 })}
+                    >
+                      <Icon name="trash-2" size={18} color={colors.danger} />
+                    </Pressable>
+                  }
+                />
+              ))}
+            </Group>
+          )}
+        </>
+      );
     if (page === "nfts" && owner)
       return (
         <Gallery key={owner} owner={owner} t={t} onBack={() => setPage("home")} onSend={sendNft} />
@@ -3052,11 +3343,13 @@ function Wallet() {
           </View>
           <View ref={tourAssetsRef} collapsable={false} style={{ gap: 10 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-              <Text style={[s.text, { fontWeight: "700" }]}>{t("Assets", "资产")}</Text>
-              <Pressable accessibilityRole="button" onPress={() => setPage("nfts")}>
-                <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
-                  {t("NFTs", "NFT")}
-                </Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setPage("tokens")}
+                style={{ flexDirection: "row", alignItems: "center", gap: 2 }}
+              >
+                <Text style={[s.text, { fontWeight: "700" }]}>{t("Assets", "资产")}</Text>
+                <Icon name="chevron-right" size={16} color={colors.muted} />
               </Pressable>
             </View>
             {!balance ? (
@@ -3065,30 +3358,7 @@ function Wallet() {
               </View>
             ) : held.length ? (
               <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
-                {held.map(({ asset, amount }, i) => (
-                  <View
-                    key={asset.symbol}
-                    style={{
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 12,
-                      paddingVertical: 12,
-                      borderTopWidth: i ? StyleSheet.hairlineWidth : 0,
-                      borderColor: colors.line,
-                    }}
-                  >
-                    <TokenIcon symbol={asset.symbol} size={38} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={s.label}>{asset.symbol}</Text>
-                      <Text style={s.small} numberOfLines={1}>
-                        {shortAmount(amount)}
-                      </Text>
-                    </View>
-                    <Text style={s.label}>
-                      {valueCore.format(valueCore.valueOf(amount, prices[asset.symbol]))}
-                    </Text>
-                  </View>
-                ))}
+                {held.map(({ asset, amount }, i) => assetRow(asset, amount, i === 0))}
               </View>
             ) : (
               <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
@@ -3190,15 +3460,6 @@ function Wallet() {
                 </Text>
               </View>
             )}
-          </View>
-          <View style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}>
-            <Icon name="shield-check-outline" size={22} color={colors.green} />
-            <Text style={[s.small, { flex: 1 }]}>
-              {t(
-                "Tera can prepare an action. Only this wallet can sign it.",
-                "Tera 可以准备操作，只有此钱包可以签名。",
-              )}
-            </Text>
           </View>
         </>
       );
@@ -3672,6 +3933,44 @@ function Wallet() {
       );
     }
     if (page === "swap") {
+      // The backend only ever trades a non-stable asset against USDG
+      // (prepareTrade's actionType is BUY or SELL of `selectedAsset`, not a
+      // free choice of two arbitrary assets) — so "which side is USDG"
+      // is what the direction toggle actually flips, not an open pair
+      // picker. USDG is the fixed side; assetSymbol is the one the picker
+      // below can change.
+      const paySymbol = trade === "BUY" ? "USDG" : assetSymbol;
+      const receiveSymbol = trade === "BUY" ? assetSymbol : "USDG";
+      const payAsset = assets.find((a) => a.symbol === paySymbol) || sources[0];
+      const receiveAsset = assets.find((a) => a.symbol === receiveSymbol) || sources[0];
+      const payBalance = balance
+        ? formatUnits(BigInt(balance[paySymbol] || "0"), payAsset.decimals)
+        : null;
+      const estimated =
+        Number(amount) > 0 && prices[paySymbol] && prices[receiveSymbol]
+          ? String((Number(amount) * prices[paySymbol]) / prices[receiveSymbol])
+          : null;
+      const swapChip = (symbol: string, onPress?: () => void) => (
+        <Pressable
+          disabled={!onPress}
+          onPress={onPress}
+          style={{
+            flexDirection: "row",
+            gap: 8,
+            alignItems: "center",
+            paddingVertical: 7,
+            paddingHorizontal: 10,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: onPress ? colors.green : colors.line,
+            backgroundColor: onPress ? colors.tint : colors.raised,
+          }}
+        >
+          <TokenIcon symbol={symbol} size={24} />
+          <Text style={[s.text, { fontWeight: "700" }]}>{symbol}</Text>
+          {onPress && <Icon name="chevron-down" size={18} color={colors.muted} />}
+        </Pressable>
+      );
       return (
         <>
           <Header
@@ -3683,30 +3982,18 @@ function Wallet() {
             {t("Choose tokens, then review the live route.", "选择代币，然后审核实时路线。")}
           </Text>
           <View style={s.panel}>
-            <Text style={s.eyebrow}>{t("YOU PAY", "你支付")}</Text>
-            <View style={s.wrap}>
-              {[sources[0]].map((asset) => (
-                <Pressable
-                  key={asset.symbol}
-                  onPress={() => setAssetSymbol(asset.symbol)}
-                  style={{
-                    flexDirection: "row",
-                    gap: 8,
-                    alignItems: "center",
-                    paddingVertical: 7,
-                    paddingHorizontal: 10,
-                    borderRadius: 999,
-                    borderWidth: 1,
-                    borderColor: assetSymbol === asset.symbol ? colors.green : colors.line,
-                    backgroundColor: assetSymbol === asset.symbol ? colors.tint : colors.raised,
-                  }}
-                >
-                  <TokenIcon symbol={asset.symbol} size={24} />
-                  <Text style={[s.text, assetSymbol === asset.symbol && { fontWeight: "700" }]}>
-                    {asset.symbol}
+            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+              <Text style={s.eyebrow}>{t("YOU PAY", "你支付")}</Text>
+              {payBalance && (
+                <Pressable onPress={() => setAmount(payBalance)}>
+                  <Text style={s.small}>
+                    {t("Balance", "余额")}: {shortAmount(payBalance)}
                   </Text>
                 </Pressable>
-              ))}
+              )}
+            </View>
+            <View style={s.wrap}>
+              {swapChip(paySymbol, trade === "SELL" ? () => setSwapReceivePicker(true) : undefined)}
             </View>
             <TextInput
               value={amount}
@@ -3717,8 +4004,11 @@ function Wallet() {
               style={{ fontSize: 38, color: colors.ink, fontWeight: "700", paddingTop: 18 }}
             />
           </View>
-          <View
-            style={{
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={t("Swap pay and receive", "交换支付与接收方向")}
+            onPress={() => setTrade((current) => (current === "BUY" ? "SELL" : "BUY"))}
+            style={({ pressed }) => ({
               alignSelf: "center",
               width: 44,
               height: 44,
@@ -3730,32 +4020,25 @@ function Wallet() {
               borderColor: colors.paper,
               alignItems: "center",
               justifyContent: "center",
-            }}
+              opacity: pressed ? 0.8 : 1,
+              transform: [{ scale: pressed ? 0.94 : 1 }],
+            })}
           >
             <Icon name="swap-vertical" color={colors.paper} size={22} />
-          </View>
+          </Pressable>
           <View style={s.panel}>
             <Text style={s.eyebrow}>{t("YOU RECEIVE", "你收到")}</Text>
             <View style={s.wrap}>
-              <Pressable
-                onPress={() => setSwapReceivePicker(true)}
-                style={{
-                  flexDirection: "row",
-                  gap: 8,
-                  alignItems: "center",
-                  paddingVertical: 7,
-                  paddingHorizontal: 10,
-                  borderRadius: 999,
-                  borderWidth: 1,
-                  borderColor: colors.green,
-                  backgroundColor: colors.tint,
-                }}
-              >
-                <TokenIcon symbol={assetSymbol} size={24} />
-                <Text style={[s.text, { fontWeight: "700" }]}>{assetSymbol}</Text>
-                <Icon name="chevron-down" size={18} color={colors.muted} />
-              </Pressable>
+              {swapChip(
+                receiveSymbol,
+                trade === "BUY" ? () => setSwapReceivePicker(true) : undefined,
+              )}
             </View>
+            {estimated && (
+              <Text style={[s.small, { paddingTop: 4 }]}>
+                {"≈"} {shortAmount(estimated)} {receiveSymbol}
+              </Text>
+            )}
           </View>
           {action("Review live route", "审核实时路线", prepareTrade)}
         </>
@@ -4391,7 +4674,7 @@ function Wallet() {
               "源链确认与目标链到账分别跟踪。",
             )}
           </Text>
-          {!data.history.length && (
+          {!combinedHistory.length && (
             <View style={[s.panel, { alignItems: "center", paddingVertical: 28, gap: 8 }]}>
               <Icon name="history" size={32} color={colors.faint} />
               <Text style={s.small}>
@@ -4399,186 +4682,215 @@ function Wallet() {
               </Text>
             </View>
           )}
-          {data.history.map((r) => {
+          {combinedHistory.map((r) => {
             const isBridge = Boolean(
               r.bridgeInput ||
               (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) ||
               r.isPrivateBridge,
             );
-            const isSend = !isBridge && !!r.recipient;
+            const isSend =
+              !isBridge &&
+              (!!r.recipient || r.title.startsWith("Sent") || r.title.startsWith("发送"));
             return (
-              <View key={r.hash} style={s.panel}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-                  <View style={s.iconDisc}>
-                    {isSend ? (
-                      <Icon name="arrow-top-right" size={20} color={colors.ink} />
-                    ) : (
-                      <Icon
-                        name={isBridge ? "bridge" : "swap-vertical"}
-                        size={20}
-                        color={colors.ink}
-                      />
-                    )}
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.label}>{r.title}</Text>
-                    <Text style={s.small}>
-                      {t("Step", "步骤")} {r.step}/{r.totalSteps}
-                    </Text>
-                  </View>
-                  <View
-                    style={{
-                      borderRadius: 999,
-                      paddingHorizontal: 10,
-                      paddingVertical: 4,
-                      backgroundColor:
-                        r.status === "confirmed"
-                          ? colors.tint
-                          : r.status === "failed" || r.status === "reverted"
-                            ? colors.dangerTint
-                            : colors.warnTint,
-                    }}
-                  >
-                    <Text
-                      style={[
-                        s.small,
-                        {
-                          fontWeight: "600",
-                          color:
-                            r.status === "confirmed"
-                              ? colors.green
-                              : r.status === "failed" || r.status === "reverted"
-                                ? colors.danger
-                                : colors.yellow,
-                        },
-                      ]}
-                    >
-                      {r.status}
-                    </Text>
-                  </View>
-                </View>
-                {r.payee ? (
-                  <>
-                    <Text selectable style={s.small}>
-                      {t("To", "发送至")}:{" "}
-                      {contactsCore.nameFor(book, r.payee)
-                        ? `${contactsCore.nameFor(book, r.payee)} · `
-                        : ""}
-                      {r.payee}
-                    </Text>
-                    <Button onPress={() => openContact(r.payee)}>
-                      {contactsCore.nameFor(book, r.payee)
-                        ? t("Rename address", "重命名地址")
-                        : t("Save to contacts", "保存到联系人")}
-                    </Button>
-                  </>
-                ) : null}
-                <Text selectable style={[s.mono, { fontSize: 12, color: colors.muted }]}>
-                  {r.hash}
-                </Text>
-                {r.reference && (
-                  <Text selectable style={s.small}>
-                    {r.isPrivateBridge
-                      ? `Private Bridge: ${r.reference}`
-                      : isBridge
-                        ? `Relay: ${r.reference}`
-                        : `Route: ${r.reference}`}
-                  </Text>
-                )}
-                {action(
-                  "Check status",
-                  "检查状态",
-                  async (g) => {
-                    const sourceStatus = await transactionStatus(r.hash);
-                    g();
-                    let delivery = r.delivery;
-                    let payoutHash = r.payoutHash;
-                    if (r.reference && sourceStatus === "confirmed") {
-                      if (r.isPrivateBridge) {
-                        const result = await api(`/api/bridge/private/jobs/${r.reference}`);
-                        g();
-                        delivery =
-                          result.job?.status === "confirmed"
-                            ? "delivered"
-                            : result.job?.status === "refunded"
-                              ? "refunded"
-                              : (result.job?.status ?? "pending");
-                        if (result.job?.relay_deposit_tx_hash) {
-                          payoutHash = result.job.relay_deposit_tx_hash;
-                        }
-                      } else if (isBridge) {
-                        const result = await api(`/api/bridge/status/${r.reference}`);
-                        g();
-                        delivery = result.status?.status ?? result.status;
-                      } else {
-                        const result = await api(`/api/private-send/jobs/${r.reference}`);
-                        g();
-                        delivery =
-                          result.job?.status === "confirmed"
-                            ? "delivered"
-                            : (result.job?.status ?? "pending");
-                        if (result.job?.payout_tx_hash) {
-                          payoutHash = result.job.payout_tx_hash;
-                        }
-                      }
-                    }
-                    await store({
-                      ...dataRef.current,
-                      history: dataRef.current.history.map((h) =>
-                        h.hash === r.hash
-                          ? { ...h, status: sourceStatus, delivery, payoutHash }
-                          : h,
-                      ),
-                    });
-                    if (r.actionHash && sourceStatus === "confirmed") {
-                      await api("/api/intent/receipt", {
-                        actionHash: r.actionHash,
-                        txHash: r.hash,
-                        recipient: r.recipient,
-                      });
-                    }
-                    setNotice({
-                      title: t("Status updated", "状态已更新"),
-                      body: t(
-                        `Source: ${sourceStatus}${delivery ? ` · Delivery: ${delivery}` : ""}`,
-                        `源交易: ${sourceStatus}${delivery ? ` · 到账: ${delivery}` : ""}`,
-                      ),
-                      tone: "success",
-                    });
+              <Pressable
+                key={r.hash}
+                accessibilityRole="button"
+                onPress={() => {
+                  setActivityDetail(r.hash);
+                  setPage("activity-detail");
+                }}
+                style={({ pressed }) => [
+                  s.panel,
+                  {
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 12,
+                    opacity: pressed ? 0.7 : 1,
                   },
-                  false,
-                )}
-                {r.delivery && (
-                  <Row
-                    label={
-                      isBridge ? t("Relay delivery", "Relay 到账") : t("Route delivery", "路由到账")
-                    }
-                    value={r.delivery}
-                  />
-                )}
-                {r.payoutHash && (
-                  <Button
-                    onPress={() =>
-                      void Linking.openURL(
-                        `https://robinhoodchain.blockscout.com/tx/${r.payoutHash}`,
-                      )
-                    }
-                  >
-                    {t("View payout tx", "查看出资交易")}
-                  </Button>
-                )}
-                <Button
-                  onPress={() =>
-                    void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.hash}`)
-                  }
+                ]}
+              >
+                <View style={s.iconDisc}>
+                  {isSend ? (
+                    <Icon name="arrow-top-right" size={20} color={colors.ink} />
+                  ) : (
+                    <Icon
+                      name={isBridge ? "bridge" : "swap-vertical"}
+                      size={20}
+                      color={colors.ink}
+                    />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.label}>{r.title}</Text>
+                  <Text style={s.small}>
+                    {t("Step", "步骤")} {r.step}/{r.totalSteps}
+                  </Text>
+                </View>
+                <View
+                  style={{
+                    borderRadius: 999,
+                    paddingHorizontal: 10,
+                    paddingVertical: 4,
+                    backgroundColor:
+                      r.status === "confirmed"
+                        ? colors.tint
+                        : r.status === "failed" || r.status === "reverted"
+                          ? colors.dangerTint
+                          : colors.warnTint,
+                  }}
                 >
-                  {t("View on explorer", "在浏览器查看")}
-                </Button>
-              </View>
+                  <Text
+                    style={[
+                      s.small,
+                      {
+                        fontWeight: "600",
+                        color:
+                          r.status === "confirmed"
+                            ? colors.green
+                            : r.status === "failed" || r.status === "reverted"
+                              ? colors.danger
+                              : colors.yellow,
+                      },
+                    ]}
+                  >
+                    {r.status}
+                  </Text>
+                </View>
+              </Pressable>
             );
           })}
         </>
       );
+    if (page === "activity-detail") {
+      const r = combinedHistory.find((h) => h.hash === activityDetail);
+      if (!r) return null;
+      const isBridge = Boolean(
+        r.bridgeInput || (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) || r.isPrivateBridge,
+      );
+      return (
+        <>
+          <Header
+            title={r.title}
+            onBack={() => setPage("activity")}
+            backLabel={t("Activity", "记录")}
+          />
+          {r.payee ? (
+            <View style={[s.panel, { gap: 10 }]}>
+              <Text selectable style={s.small}>
+                {t("To", "发送至")}:{" "}
+                {contactsCore.nameFor(book, r.payee)
+                  ? `${contactsCore.nameFor(book, r.payee)} · `
+                  : ""}
+                {r.payee}
+              </Text>
+              <Button onPress={() => openContact(r.payee)}>
+                {contactsCore.nameFor(book, r.payee)
+                  ? t("Rename address", "重命名地址")
+                  : t("Save to contacts", "保存到联系人")}
+              </Button>
+            </View>
+          ) : null}
+          <View style={[s.panel, { gap: 10 }]}>
+            <Text style={s.eyebrow}>{t("Transaction hash", "交易哈希")}</Text>
+            <Text selectable style={[s.mono, { fontSize: 12, color: colors.muted }]}>
+              {r.hash}
+            </Text>
+            {r.reference && (
+              <Text selectable style={s.small}>
+                {r.isPrivateBridge
+                  ? `Private Bridge: ${r.reference}`
+                  : isBridge
+                    ? `Relay: ${r.reference}`
+                    : `Route: ${r.reference}`}
+              </Text>
+            )}
+          </View>
+          {action(
+            "Check status",
+            "检查状态",
+            async (g) => {
+              const sourceStatus = await transactionStatus(r.hash);
+              g();
+              let delivery = r.delivery;
+              let payoutHash = r.payoutHash;
+              if (r.reference && sourceStatus === "confirmed") {
+                if (r.isPrivateBridge) {
+                  const result = await api(`/api/bridge/private/jobs/${r.reference}`);
+                  g();
+                  delivery =
+                    result.job?.status === "confirmed"
+                      ? "delivered"
+                      : result.job?.status === "refunded"
+                        ? "refunded"
+                        : (result.job?.status ?? "pending");
+                  if (result.job?.relay_deposit_tx_hash) {
+                    payoutHash = result.job.relay_deposit_tx_hash;
+                  }
+                } else if (isBridge) {
+                  const result = await api(`/api/bridge/status/${r.reference}`);
+                  g();
+                  delivery = result.status?.status ?? result.status;
+                } else {
+                  const result = await api(`/api/private-send/jobs/${r.reference}`);
+                  g();
+                  delivery =
+                    result.job?.status === "confirmed"
+                      ? "delivered"
+                      : (result.job?.status ?? "pending");
+                  if (result.job?.payout_tx_hash) {
+                    payoutHash = result.job.payout_tx_hash;
+                  }
+                }
+              }
+              await store({
+                ...dataRef.current,
+                history: dataRef.current.history.map((h) =>
+                  h.hash === r.hash ? { ...h, status: sourceStatus, delivery, payoutHash } : h,
+                ),
+              });
+              if (r.actionHash && sourceStatus === "confirmed") {
+                await api("/api/intent/receipt", {
+                  actionHash: r.actionHash,
+                  txHash: r.hash,
+                  recipient: r.recipient,
+                });
+              }
+              setNotice({
+                title: t("Status updated", "状态已更新"),
+                body: t(
+                  `Source: ${sourceStatus}${delivery ? ` · Delivery: ${delivery}` : ""}`,
+                  `源交易: ${sourceStatus}${delivery ? ` · 到账: ${delivery}` : ""}`,
+                ),
+                tone: "success",
+              });
+            },
+            false,
+          )}
+          {r.delivery && (
+            <Row
+              label={isBridge ? t("Relay delivery", "Relay 到账") : t("Route delivery", "路由到账")}
+              value={r.delivery}
+            />
+          )}
+          {r.payoutHash && (
+            <Button
+              onPress={() =>
+                void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.payoutHash}`)
+              }
+            >
+              {t("View payout tx", "查看出资交易")}
+            </Button>
+          )}
+          <Button
+            onPress={() =>
+              void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.hash}`)
+            }
+          >
+            {t("View on explorer", "在浏览器查看")}
+          </Button>
+        </>
+      );
+    }
     const toSettings = () => setSettingsSection("root");
     if (settingsSection === "root") {
       const active = accounts.find((entry) => entry.active) || { index: 0, name: "" };
@@ -5652,12 +5964,6 @@ function Wallet() {
             label: t("Private", "私密发送"),
             onPress: () => openFlow("send", "private"),
           },
-          {
-            key: "nfts",
-            icon: "image-multiple-outline",
-            label: t("NFTs", "NFT"),
-            onPress: () => setPage("nfts"),
-          },
           ...(tagsAvailable()
             ? [
                 {
@@ -5964,7 +6270,6 @@ function Wallet() {
                   key={a.symbol}
                   onPress={() => {
                     setAssetSymbol(a.symbol);
-                    setTrade("BUY");
                     setSwapReceivePicker(false);
                   }}
                   style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
@@ -6111,7 +6416,10 @@ function Wallet() {
               overflow: "hidden",
             }}
           >
-            <ScrollView contentContainerStyle={[s.content, { paddingTop: 24 }]}>
+            <ScrollView
+              ref={reviewScrollRef}
+              contentContainerStyle={[s.content, { paddingTop: 24 }]}
+            >
               <View
                 style={{
                   alignSelf: "center",
@@ -6198,22 +6506,97 @@ function Wallet() {
                       "输入 PIN 以签署这笔准确交易。",
                     )}
                   </Text>
-                  <Field
-                    label={
-                      pinWallet ? t("Wallet PIN", "钱包 PIN") : t("Wallet password", "钱包密码")
+                  {authError ? (
+                    <Text style={[s.small, { color: colors.danger }]}>{authError}</Text>
+                  ) : null}
+                  {pinWallet ? (
+                    <>
+                      <PinInput label={t("Wallet PIN", "钱包 PIN")} value={authPassword} />
+                      {busy ? (
+                        <View style={{ alignItems: "center", paddingVertical: 12 }}>
+                          <TeraSpinner size={36} />
+                        </View>
+                      ) : (
+                        <Keypad
+                          onDigit={(d) => {
+                            if (authPassword.length >= 6) return;
+                            const next = authPassword + d;
+                            setAuthPassword(next);
+                            if (next.length === 6)
+                              void run(async (g) => {
+                                try {
+                                  await authorize(false, g);
+                                } catch (e) {
+                                  setAuthPassword("");
+                                  setAuthError(
+                                    e instanceof Error
+                                      ? e.message
+                                      : t("Couldn't authorize that.", "无法完成授权。"),
+                                  );
+                                }
+                              });
+                          }}
+                          onBackspace={() => setAuthPassword((p) => p.slice(0, -1))}
+                        />
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <Field
+                        label={t("Wallet password", "钱包密码")}
+                        value={authPassword}
+                        onChangeText={setAuthPassword}
+                        secureTextEntry
+                      />
+                      {action("Sign transaction", "签署交易", async (g) => {
+                        try {
+                          await authorize(false, g);
+                        } catch (e) {
+                          setAuthError(
+                            e instanceof Error
+                              ? e.message
+                              : t("Couldn't authorize that.", "无法完成授权。"),
+                          );
+                        }
+                      })}
+                    </>
+                  )}
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={busy}
+                    onPress={() =>
+                      void run(async (g) => {
+                        try {
+                          await authorize(true, g);
+                        } catch (e) {
+                          setAuthError(
+                            e instanceof Error
+                              ? e.message
+                              : t("Couldn't authorize that.", "无法完成授权。"),
+                          );
+                        }
+                      })
                     }
-                    value={authPassword}
-                    onChangeText={setAuthPassword}
-                    secureTextEntry
-                    keyboardType={pinWallet ? "number-pad" : "default"}
-                    maxLength={pinWallet ? 6 : undefined}
-                  />
-                  {action("Sign transaction", "签署交易", (g) => authorize(false, g))}
+                    style={({ pressed }) => ({
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 6,
+                      paddingVertical: 10,
+                      opacity: busy ? 0.4 : pressed ? 0.6 : 1,
+                    })}
+                  >
+                    <Icon name="fingerprint" size={17} color={colors.green} />
+                    <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                      {t("Use biometrics", "使用生物识别")}
+                    </Text>
+                  </Pressable>
                   <Button
                     disabled={busy}
                     onPress={() => {
                       setAuth(null);
                       setAuthPassword("");
+                      setAuthError("");
                     }}
                   >
                     {t("Cancel signing", "取消签名")}
@@ -6237,7 +6620,7 @@ function Wallet() {
                 {signing ? (
                   <TeraSpinner size={18} />
                 ) : auth ? (
-                  t("Enter PIN below", "在下方输入 PIN")
+                  t("Enter PIN above", "在上方输入 PIN")
                 ) : busy ? (
                   <TeraSpinner size={18} />
                 ) : (
