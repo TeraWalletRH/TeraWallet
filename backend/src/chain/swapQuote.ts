@@ -1,8 +1,8 @@
-import { encodePacked, erc20Abi, formatUnits, parseUnits, type PublicClient } from "viem";
+﻿import { encodePacked, erc20Abi, formatUnits, parseUnits, type PublicClient } from "viem";
 import { createPublicClient, http } from "viem";
 import { findAsset } from "../data/assets";
 import { env } from "../env";
-import { quoteV4Direct, type PoolKey } from "./swapQuoteV4";
+import { quoteTeraPool, quoteV4Direct, type PoolKey } from "./swapQuoteV4";
 const WETH_ADDRESS = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73" as const;
 
 export class SwapQuoteRpcError extends Error {
@@ -291,25 +291,26 @@ export async function quoteSwap(
     const chainId = await client.getChainId();
     if (chainId !== env.rhcChainId) throw new SwapQuoteRpcError(`RPC returned chain ${chainId}; expected ${env.rhcChainId}.`);
     const [decimalsIn, decimalsOut] = await Promise.all([
-      client.readContract({ address: tokenIn.address, abi: erc20Abi, functionName: "decimals" }),
-      client.readContract({ address: tokenOut.address, abi: erc20Abi, functionName: "decimals" }),
+      tokenIn.native ? 18 : client.readContract({ address: tokenIn.address, abi: erc20Abi, functionName: "decimals" }),
+      tokenOut.native ? 18 : client.readContract({ address: tokenOut.address, abi: erc20Abi, functionName: "decimals" }),
     ]);
 
     const amountInWei = parseUnits(amountIn.toString(), decimalsIn);
     const referenceInWei = parseUnits("1", decimalsIn);
 
-    // Quote both venues for the real amount and take whichever actually
-    // pays out more — a v3 pool that technically exists but is thin (or
-    // empty) loses to v4 depth automatically, and vice versa. Neither venue
-    // is preferred by default; only the number wins. v4 execution (see
-    // execution.ts) is only built out for plain ERC20 pairs so far — native
-    // ETH in v4 needs its own settlement path (no Permit2 for native
-    // currency) that hasn't been verified yet, so skip v4 there rather than
-    // quote a price we can't actually deliver.
+    // Native v4 routing is scoped to the verified TERA/ETH pool. Other pairs use the existing venue discovery.
     const skipV4 = tokenIn.native || tokenOut.native;
+    const teraPair = [tokenIn.symbol, tokenOut.symbol].sort().join(":") === "ETH:TERA";
     const [v3, v4] = await Promise.all([
-      bestV3Candidate(client, tokenIn.address, tokenOut.address, amountInWei),
-      skipV4 ? null : bestV4Candidate(client, tokenIn.address, tokenOut.address, amountInWei),
+      teraPair ? null : bestV3Candidate(client, tokenIn.address, tokenOut.address, amountInWei),
+      teraPair
+        ? quoteTeraPool(client, tokenIn.address, amountInWei).then((quote): RouteCandidate | null => quote && ({
+            amountOut: quote.amountOut,
+            route: "TERA / ETH Uniswap v4 pool",
+            routing: { type: "v4", poolKey: quote.poolKey, zeroForOne: quote.zeroForOne, fee: quote.fee, tickSpacing: quote.tickSpacing },
+            requote: async (amount) => (await quoteTeraPool(client, tokenIn.address, amount))?.amountOut ?? 0n,
+          }))
+        : skipV4 ? null : bestV4Candidate(client, tokenIn.address, tokenOut.address, amountInWei),
     ]);
 
     const winner =
