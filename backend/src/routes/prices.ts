@@ -37,30 +37,48 @@ const COINGECKO_HEADERS = {
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
 };
 
+// TEMPORARY — the deployed host can't reach CoinGecko for reasons that
+// don't reproduce locally, and there's no log access to see why. Remove
+// this (and its use below) once that's diagnosed and fixed for real.
+export const lastErrors: Record<string, string> = {};
+
 async function ethUsd() {
-  const response = await fetch(
-    "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd&include_24hr_change=true",
-    { signal: AbortSignal.timeout(8_000), headers: COINGECKO_HEADERS },
-  );
-  if (!response.ok) throw new Error(`CoinGecko price request failed (${response.status}).`);
-  const data = (await response.json()) as {
-    ethereum?: { usd?: number; usd_24h_change?: number };
-  };
-  if (!data.ethereum?.usd || !Number.isFinite(data.ethereum.usd))
-    throw new Error("CoinGecko returned no ETH/USD price.");
-  return { price: data.ethereum.usd, change24h: data.ethereum.usd_24h_change };
+  try {
+    const response = await fetch(
+      "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd&include_24hr_change=true",
+      { signal: AbortSignal.timeout(8_000), headers: COINGECKO_HEADERS },
+    );
+    if (!response.ok) throw new Error(`CoinGecko price request failed (${response.status}).`);
+    const data = (await response.json()) as {
+      ethereum?: { usd?: number; usd_24h_change?: number };
+    };
+    if (!data.ethereum?.usd || !Number.isFinite(data.ethereum.usd))
+      throw new Error("CoinGecko returned no ETH/USD price.");
+    delete lastErrors.ethCoinGecko;
+    return { price: data.ethereum.usd, change24h: data.ethereum.usd_24h_change };
+  } catch (error) {
+    lastErrors.ethCoinGecko = error instanceof Error ? error.message : String(error);
+    throw error;
+  }
 }
 async function coinbaseEthUsd() {
-  const response = await fetch("https://api.coinbase.com/v2/prices/ETH-USD/spot", {
-    signal: AbortSignal.timeout(8_000),
-  });
-  if (!response.ok) throw new Error("Coinbase price request failed.");
-  const data = (await response.json()) as { data?: { amount?: string } };
-  const price = Number(data.data?.amount);
-  if (!Number.isFinite(price) || price <= 0) throw new Error("Coinbase returned no ETH/USD price.");
-  // No 24h change from this fallback; the rolling on-chain snapshot below
-  // still gives ETH a trend even when both primary sources are down.
-  return { price, change24h: undefined as number | undefined };
+  try {
+    const response = await fetch("https://api.coinbase.com/v2/prices/ETH-USD/spot", {
+      signal: AbortSignal.timeout(8_000),
+    });
+    if (!response.ok) throw new Error("Coinbase price request failed.");
+    const data = (await response.json()) as { data?: { amount?: string } };
+    const price = Number(data.data?.amount);
+    if (!Number.isFinite(price) || price <= 0)
+      throw new Error("Coinbase returned no ETH/USD price.");
+    delete lastErrors.ethCoinbase;
+    // No 24h change from this fallback; the rolling on-chain snapshot below
+    // still gives ETH a trend even when both primary sources are down.
+    return { price, change24h: undefined as number | undefined };
+  } catch (error) {
+    lastErrors.ethCoinbase = error instanceof Error ? error.message : String(error);
+    throw error;
+  }
 }
 
 // The last successful catalog read, served again if a fresh fetch fails.
@@ -88,10 +106,13 @@ async function catalogQuotes() {
       if (entry?.usd && Number.isFinite(entry.usd)) prices[symbol] = entry.usd;
       if (Number.isFinite(entry?.usd_24h_change)) change24h[symbol] = entry!.usd_24h_change!;
     }
+    delete lastErrors.catalog;
     lastGoodCatalog = { prices, change24h };
     return lastGoodCatalog;
   } catch (error) {
-    console.error("catalogQuotes failed:", error);
+    lastErrors.catalog =
+      (error instanceof Error ? error.message : String(error)) +
+      (error instanceof Error && error.cause ? ` (cause: ${String(error.cause)})` : "");
     return lastGoodCatalog || { prices: {}, change24h: {} };
   }
 }
@@ -188,6 +209,8 @@ router.get("/api/assets/prices", async (_req: Request, res: Response) => {
       change24h,
       asOf: new Date(readAt).toISOString(),
       cachedForSeconds: Math.round(TTL_MS / 1000),
+      // TEMPORARY diagnostic — see the lastErrors comment above.
+      ...(Object.keys(lastErrors).length ? { _debug: lastErrors } : {}),
     });
   } catch {
     // A transient market-data failure must not prevent the wallet from showing on-chain balances.
