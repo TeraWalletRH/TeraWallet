@@ -35,6 +35,25 @@ const CATALOG_COINGECKO_IDS: Record<string, string> = {
   LINK: "chainlink",
 };
 
+// DexScreener fallback for the same catalog coins, used only for whichever
+// symbols CoinGecko's request didn't come back with. DexScreener has no
+// concept of "the" price of a coin — it only knows about DEX trading pairs —
+// so this points each symbol at a specific, verified, high-liquidity pair
+// rather than trusting a plain symbol search (which readily matches an
+// unrelated token that happens to share the ticker, e.g. searching "BTC"
+// turns up meme coins alongside real Bitcoin wrappers). Verified against
+// CoinGecko's own numbers before being hardcoded here.
+const DEXSCREENER_TOKENS: Record<string, { chain: string; address: string }> = {
+  BTC: { chain: "ethereum", address: "0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599" }, // WBTC
+  SOL: { chain: "solana", address: "So11111111111111111111111111111111111111112" }, // wrapped SOL
+  BNB: { chain: "bsc", address: "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c" }, // WBNB
+  DOGE: { chain: "bsc", address: "0xbA2aE424d960c26247Dd6c32edC70B295c744C43" }, // Binance-Peg DOGE
+  XRP: { chain: "bsc", address: "0x1D2F0da169ceB9fC7B3144628dB156f3F6c60dBE" }, // Binance-Peg XRP
+  ADA: { chain: "bsc", address: "0x3EE2200Efb3400fAbB9AacF31297cBdD1d435D47" }, // Binance-Peg ADA
+  AVAX: { chain: "avalanche", address: "0xB31f66AA3C1e785363F0875A1B74E27b85FD66c7" }, // WAVAX
+  LINK: { chain: "ethereum", address: "0x514910771AF9Ca656af840dff83E8264EcF986CA" },
+};
+
 const COINGECKO_HEADERS: Record<string, string> = {
   accept: "application/json",
   "user-agent":
@@ -110,6 +129,45 @@ async function coinGeckoQuotes() {
       (error instanceof Error && error.cause ? ` (cause: ${String(error.cause)})` : "");
     return lastGoodCoinGecko || { prices: {}, change24h: {} };
   }
+}
+
+// Only called for symbols CoinGecko's request didn't return, so this stays
+// a true fallback rather than doubling the request volume on every refresh.
+async function dexScreenerQuotes(symbols: string[]) {
+  const prices: Record<string, number> = {};
+  const change24h: Record<string, number> = {};
+  const failures: string[] = [];
+  await Promise.allSettled(
+    symbols.map(async (symbol) => {
+      const token = DEXSCREENER_TOKENS[symbol];
+      if (!token) return;
+      try {
+        const response = await fetch(
+          `https://api.dexscreener.com/tokens/v1/${token.chain}/${token.address}`,
+          { signal: AbortSignal.timeout(8_000) },
+        );
+        if (!response.ok) throw new Error(`request failed (${response.status})`);
+        const pairs = (await response.json()) as Array<{
+          priceUsd?: string;
+          priceChange?: { h24?: number };
+          liquidity?: { usd?: number };
+        }>;
+        // A token can have many pairs across different pools; the deepest
+        // one by liquidity is the least likely to be a thin, skewed price.
+        const best = (pairs || [])
+          .filter((pair) => Number(pair.priceUsd) > 0)
+          .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+        if (!best) throw new Error("no priced pair returned");
+        prices[symbol] = Number(best.priceUsd);
+        if (Number.isFinite(best.priceChange?.h24)) change24h[symbol] = best.priceChange!.h24!;
+      } catch (error) {
+        failures.push(`${symbol}: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }),
+  );
+  if (failures.length) lastErrors.dexScreener = failures.join("; ");
+  else delete lastErrors.dexScreener;
+  return { prices, change24h };
 }
 
 // A rolling in-memory history of prices this server has itself observed,
@@ -201,6 +259,14 @@ async function currentPrices() {
     if (result.status !== "fulfilled") continue;
     const [symbol, price] = result.value;
     if (Number.isFinite(price)) prices[symbol] = price;
+  }
+  const missingCatalog = Object.keys(CATALOG_COINGECKO_IDS).filter(
+    (symbol) => !Number.isFinite(prices[symbol]),
+  );
+  if (missingCatalog.length) {
+    const fallback = await dexScreenerQuotes(missingCatalog);
+    Object.assign(prices, fallback.prices);
+    Object.assign(change24h, fallback.change24h);
   }
   if (prices.ETH) {
     try {
