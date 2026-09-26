@@ -20,6 +20,10 @@ import { formatUnits, type Address } from "viem";
 export type ChainHistoryEntry = {
   hash: string;
   title: string;
+  direction: "send" | "receive";
+  amount: string;
+  symbol: string;
+  counterparty: string;
   status: "confirmed" | "failed";
   timestamp: number;
 };
@@ -74,6 +78,10 @@ export async function fetchChainHistory(
     const counterparty = short((out ? item.to?.hash : item.from?.hash) || "");
     entries.set(hash, {
       hash,
+      direction: out ? "send" : "receive",
+      amount,
+      symbol,
+      counterparty,
       status: "confirmed",
       timestamp: new Date(item.timestamp).getTime(),
       title: out
@@ -97,6 +105,10 @@ export async function fetchChainHistory(
     const counterparty = short((out ? item.to?.hash : item.from?.hash) || "");
     entries.set(hash, {
       hash,
+      direction: out ? "send" : "receive",
+      amount,
+      symbol: "ETH",
+      counterparty,
       status: item.status === "ok" ? "confirmed" : "failed",
       timestamp: new Date(item.timestamp).getTime(),
       title: out
