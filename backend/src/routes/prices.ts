@@ -27,12 +27,22 @@ const CATALOG_COINGECKO_IDS: Record<string, string> = {
   LINK: "chainlink",
 };
 
+// CoinGecko's free tier sits behind bot protection that can 403 a plain
+// server-side fetch with no browser-like User-Agent, even though the exact
+// same request works fine from a developer's machine — matching this to a
+// real browser UA is what actually fixed it, not a retry or a longer timeout.
+const COINGECKO_HEADERS = {
+  accept: "application/json",
+  "user-agent":
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+};
+
 async function ethUsd() {
   const response = await fetch(
     "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd&include_24hr_change=true",
-    { signal: AbortSignal.timeout(8_000) },
+    { signal: AbortSignal.timeout(8_000), headers: COINGECKO_HEADERS },
   );
-  if (!response.ok) throw new Error("CoinGecko price request failed.");
+  if (!response.ok) throw new Error(`CoinGecko price request failed (${response.status}).`);
   const data = (await response.json()) as {
     ethereum?: { usd?: number; usd_24h_change?: number };
   };
@@ -53,25 +63,37 @@ async function coinbaseEthUsd() {
   return { price, change24h: undefined as number | undefined };
 }
 
+// The last successful catalog read, served again if a fresh fetch fails.
+// These coins have no on-chain fallback at all (they're not real tokens on
+// this chain, just a discovery catalog), so without this a single rate-limit
+// blip from CoinGecko blanks all eight prices instead of just going stale.
+let lastGoodCatalog: { prices: Record<string, number>; change24h: Record<string, number> } | undefined;
+
 async function catalogQuotes() {
-  const ids = Object.values(CATALOG_COINGECKO_IDS).join(",");
-  const response = await fetch(
-    `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
-    { signal: AbortSignal.timeout(8_000) },
-  );
-  if (!response.ok) throw new Error("CoinGecko catalog request failed.");
-  const data = (await response.json()) as Record<
-    string,
-    { usd?: number; usd_24h_change?: number }
-  >;
-  const prices: Record<string, number> = {};
-  const change24h: Record<string, number> = {};
-  for (const [symbol, id] of Object.entries(CATALOG_COINGECKO_IDS)) {
-    const entry = data[id];
-    if (entry?.usd && Number.isFinite(entry.usd)) prices[symbol] = entry.usd;
-    if (Number.isFinite(entry?.usd_24h_change)) change24h[symbol] = entry!.usd_24h_change!;
+  try {
+    const ids = Object.values(CATALOG_COINGECKO_IDS).join(",");
+    const response = await fetch(
+      `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
+      { signal: AbortSignal.timeout(8_000), headers: COINGECKO_HEADERS },
+    );
+    if (!response.ok) throw new Error(`CoinGecko catalog request failed (${response.status}).`);
+    const data = (await response.json()) as Record<
+      string,
+      { usd?: number; usd_24h_change?: number }
+    >;
+    const prices: Record<string, number> = {};
+    const change24h: Record<string, number> = {};
+    for (const [symbol, id] of Object.entries(CATALOG_COINGECKO_IDS)) {
+      const entry = data[id];
+      if (entry?.usd && Number.isFinite(entry.usd)) prices[symbol] = entry.usd;
+      if (Number.isFinite(entry?.usd_24h_change)) change24h[symbol] = entry!.usd_24h_change!;
+    }
+    lastGoodCatalog = { prices, change24h };
+    return lastGoodCatalog;
+  } catch (error) {
+    console.error("catalogQuotes failed:", error);
+    return lastGoodCatalog || { prices: {}, change24h: {} };
   }
-  return { prices, change24h };
 }
 
 // A rolling history of prices this server has itself observed, kept only
@@ -119,7 +141,7 @@ async function currentPrices() {
       return [asset.symbol, Number(quote.amountOut)] as const;
     }),
   ]);
-  const catalog = await catalogQuotes().catch(() => ({ prices: {}, change24h: {} }));
+  const catalog = await catalogQuotes();
   if (eth.status === "fulfilled") {
     prices.ETH = eth.value.price;
     if (Number.isFinite(eth.value.change24h)) change24h.ETH = eth.value.change24h!;
@@ -140,10 +162,12 @@ async function currentPrices() {
       // Other balances and prices remain available if this pool is unavailable.
     }
   }
-  // Only the swap-quote-derived prices get a snapshot-based trend — the
-  // catalog coins already carry a real 24h change from CoinGecko above.
+  // Only prices with no real market-sourced change yet fall back to the
+  // snapshot-based trend — a symbol that already has one (ETH's CoinGecko
+  // figure, or a catalog coin's) keeps that real value rather than having
+  // this overwrite it with a synthetic one computed from the same price.
   for (const symbol of Object.keys(prices)) {
-    if (symbol in CATALOG_COINGECKO_IDS) continue;
+    if (symbol in change24h) continue;
     const change = recordSnapshot(symbol, prices[symbol]);
     if (change !== undefined) change24h[symbol] = change;
   }
