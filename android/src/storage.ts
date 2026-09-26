@@ -94,6 +94,18 @@ export const currentAccount = () => {
   if (!phrase) throw new Error("Wallet locked. / 钱包已锁定。");
   return walletFromPhrase(phrase, selected);
 };
+export function exportPrivateKey(index: number) {
+  if (!phrase) throw new Error("Wallet locked. / 钱包已锁定。");
+  if (!indices.includes(index)) throw new Error("Unknown account. / 未知账户。");
+  const account = walletFromPhrase(phrase, index);
+  const key = account.getHdKey().privateKey;
+  if (!key) throw new Error("Private key unavailable. / 私钥不可用。");
+  try {
+    return { address: account.address, privateKey: `0x${bytesToHex(key)}` };
+  } finally {
+    key.fill(0);
+  }
+}
 export function lock() {
   phrase = null;
   indices = [0];

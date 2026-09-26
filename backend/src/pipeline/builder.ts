@@ -1,6 +1,6 @@
 import { encodeFunctionData, erc20Abi, formatUnits, keccak256, toHex, stringToBytes } from "viem";
 import { type UserIntent, type GateResult, type PreparedTransaction } from "./types";
-import { USDG, findAsset } from "../data/assets";
+import { ETH, TERA, USDG, findAsset } from "../data/assets";
 import { env } from "../env";
 import { SwapQuoteRpcError } from "../chain/swapQuote";
 
@@ -19,7 +19,8 @@ export class UnsupportedActionError extends Error {
  * Builds the prepared transaction for the owner wallet to sign.
  *
  * IMPORTANT — caller's responsibility for swap amounts:
- *   BUY:      `intent.amount` MUST be in USDG raw units (6 decimals).
+ *   BUY:      `intent.amount` is in USDG raw units (6 decimals), except TERA
+ *             buys, which pay native ETH in 18-decimal raw units.
  *             e.g. to spend $100 USDG → amount = "100000000" (100 * 10^6)
  *   SELL:     `intent.amount` MUST be in the equity token's raw units (18 decimals).
  *             e.g. to sell 1 AAPL token → amount = "1000000000000000000"
@@ -40,8 +41,9 @@ export async function buildPreparedTransaction(
   let expiresAt: string | undefined;
 
   if (intent.actionType === "BUY" || intent.actionType === "SELL") {
-    const input = intent.actionType === "BUY" ? USDG : findAsset(intent.assetAddress);
-    const output = intent.actionType === "BUY" ? findAsset(intent.assetAddress) : USDG;
+    const teraTrade = intent.assetAddress.toLowerCase() === TERA.address.toLowerCase();
+    const input = intent.actionType === "BUY" ? (teraTrade ? ETH : USDG) : findAsset(intent.assetAddress);
+    const output = intent.actionType === "BUY" ? findAsset(intent.assetAddress) : (teraTrade ? ETH : USDG);
     if (!input || !output) throw new UnsupportedActionError("SWAP", "The selected swap asset is not supported.");
     const { planSwap } = await import("../chain/swapPlanner");
     let plan;

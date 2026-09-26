@@ -10,7 +10,6 @@ import {
 import { chain, RPC, sources, type Tx } from "./config";
 import { currentAccount, sessionVersion } from "./storage";
 import { txCheck } from "./validation";
-import { AppState } from "react-native";
 // retryCount: 0 stays on the wallet transport used for sending a
 // transaction (below) — retrying a broadcast is a real idempotency risk.
 // Reading a balance has no such risk, and no retries here means a single
@@ -62,13 +61,10 @@ export async function execute(
   const version = sessionVersion();
   const owner = currentAccount().address;
   const active = () => {
-    // "inactive", not just "background", is a real AppState value on iOS —
-    // the transient state while a system sheet (Face ID/Touch ID, an
-    // alert) has focus, not the app leaving the foreground. Treating it as
-    // backgrounded could abort a transaction the owner is mid-way through
-    // authorizing with biometrics. See the matching fix in App.tsx's run().
+    // Android can briefly report background while a native surface has focus.
+    // The vault session and selected account determine whether the wallet is
+    // actually still available to sign. A real lock increments its version.
     if (
-      AppState.currentState === "background" ||
       version !== sessionVersion() ||
       currentAccount().address !== owner
     )

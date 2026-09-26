@@ -1,4 +1,4 @@
-import {
+﻿import {
   encodeAbiParameters,
   encodeFunctionData,
   encodePacked,
@@ -278,6 +278,7 @@ function buildV4SwapTx(
   routing: Extract<SwapRouting, { type: "v4" }>,
   amountInWei: bigint,
   amountOutMinimum: bigint,
+  nativeInput = false,
 ): UnsignedTx {
   const swapParams = encodeAbiParameters(
     [
@@ -341,7 +342,7 @@ function buildV4SwapTx(
       functionName: "execute",
       args: [V4_SWAP_COMMAND, [v4SwapInput], deadline],
     }),
-    value: "0",
+    value: nativeInput ? amountInWei.toString() : "0",
     chainId: robinhoodChain.id,
   };
 }
@@ -371,12 +372,11 @@ export async function planSwap(
   const amountOutMinimum = (quote.amountOutWei * (10000n - SLIPPAGE_BPS)) / 10000n;
 
   if (quote.routing.type === "v4") {
-    // Never native ETH here — uniswap.ts only considers v4 for plain ERC20
-    // pairs (see the skipV4 guard in quoteSwap).
-    const approvals = await buildV4Approvals(client, tokenIn.address, recipient, amountInWei);
+    // Native ETH goes in transaction value and needs no Permit2 approval.
+    const approvals = tokenIn.native ? [] : await buildV4Approvals(client, tokenIn.address, recipient, amountInWei);
     return {
       approvals,
-      swap: buildV4SwapTx(quote.routing, amountInWei, amountOutMinimum),
+      swap: buildV4SwapTx(quote.routing, amountInWei, amountOutMinimum, tokenIn.native),
       quote,
     };
   }

@@ -7,7 +7,7 @@ export interface RwaAsset {
   decimals: number;
   tokenStandard: "ERC-20" | "ERC-3643" | "native";
   issuer: string;
-  category: "equity" | "stablecoin" | "native" | "etf" | "commodity";
+  category: "equity" | "stablecoin" | "native" | "etf" | "commodity" | "utility";
   currency: string;
   underlyingTicker?: string;
   iconUrl?: string;
@@ -76,6 +76,22 @@ export const USDG: RwaAsset = {
   status: "ACTIVE",
   iconUrl: "https://assets.coingecko.com/coins/images/51281/standard/GDN_USDG_Token_200x200.png",
   description: "Canonical USD-pegged stablecoin on Robinhood Chain issued by Paxos.",
+};
+
+export const TERA: RwaAsset = {
+  symbol: "TERA",
+  name: "Tera",
+  address: "0x3c12E57fa7817a86CE7C254dB9Ea5Fe639e233F8",
+  decimals: 18,
+  tokenStandard: "ERC-20",
+  issuer: "Tera",
+  category: "utility",
+  currency: "TERA",
+  minInvestmentUsd: 1,
+  venueAddress: UNIVERSAL_ROUTER,
+  requiresIdentityClaims: false,
+  status: "ACTIVE",
+  description: "Tera token on Robinhood Chain.",
 };
 
 export const REAL_ROBINHOOD_RWA_ASSETS: RwaAsset[] = [
@@ -255,6 +271,7 @@ export const SUPPORTED_RWA_ASSETS: RwaAsset[] = [
   USDG,
   ETH,
   WETH,
+  TERA,
   ...REAL_ROBINHOOD_RWA_ASSETS,
 ];
 
