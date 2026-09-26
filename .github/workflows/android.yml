@@ -39,6 +39,7 @@ jobs:
       # Everything else only builds.
       PUBLISH_PREVIEW: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.signed_release }}
       PUBLISH_PRODUCTION: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.signed_release }}
+      TERA_SIGNED_RELEASE: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.signed_release && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
       # Fails before anything is built, so a production run never publishes an
