@@ -174,13 +174,13 @@ jobs:
           '
           test -s "$TERA_KEYSTORE_PATH"
           STORE_PASS="${ANDROID_KEYSTORE_PASSWORD:-TeraWallet2026Secure}"
-          if ! keytool -list -keystore "$TERA_KEYSTORE_PATH" -storepass "$STORE_PASS" -storetype PKCS12 >/dev/null 2>&1; then
+          if ! keytool -list -keystore "$TERA_KEYSTORE_PATH" -storepass "$STORE_PASS" >/dev/null 2>&1; then
             STORE_PASS="TeraWallet2026Secure"
           fi
           export ANDROID_KEYSTORE_PASSWORD="$STORE_PASS"
           export ANDROID_KEY_PASSWORD="${ANDROID_KEY_PASSWORD:-$STORE_PASS}"
           export ANDROID_KEY_ALIAS="${ANDROID_KEY_ALIAS:-tera-key-alias}"
-          keytool -list -keystore "$TERA_KEYSTORE_PATH" -storepass "$STORE_PASS" -storetype PKCS12
+          keytool -list -keystore "$TERA_KEYSTORE_PATH" -storepass "$STORE_PASS"
           printf '\napply from: "../../scripts/signing.gradle"\n' >> android/app/build.gradle
           cd android
           ./gradlew assembleRelease bundleRelease --no-daemon
