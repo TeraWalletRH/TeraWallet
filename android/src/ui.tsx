@@ -11,6 +11,7 @@ import {
   type TextInputProps,
   type TextProps,
   type TextStyle,
+  type ViewStyle,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Icon } from "./icons";
@@ -274,6 +275,58 @@ export function TeraSpinner({ size = 20 }: { size?: number }) {
           { rotate: spin.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] }) },
         ],
       }}
+    />
+  );
+}
+/**
+ * A pulsing placeholder block shaped like the content it stands in for —
+ * used while a first load is still in flight, instead of either a blank
+ * screen or a spinner that gives no sense of the layout about to arrive.
+ */
+export function Skeleton({
+  width = "100%",
+  height = 16,
+  borderRadius = 8,
+  style,
+}: {
+  width?: number | `${number}%`;
+  height?: number;
+  borderRadius?: number;
+  style?: StyleProp<ViewStyle>;
+}) {
+  const pulse = React.useRef(new Animated.Value(0)).current;
+  React.useEffect(() => {
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 700,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0,
+          duration: 700,
+          easing: Easing.inOut(Easing.sin),
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [pulse]);
+  return (
+    <Animated.View
+      style={[
+        {
+          width,
+          height,
+          borderRadius,
+          backgroundColor: colors.raised,
+          opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.5, 1] }),
+        },
+        style,
+      ]}
     />
   );
 }
