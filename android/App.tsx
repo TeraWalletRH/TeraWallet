@@ -18,7 +18,13 @@ import {
   View,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
-import Svg, { Path, Defs, RadialGradient, Stop } from "react-native-svg";
+import Svg, {
+  Path,
+  Defs,
+  RadialGradient,
+  LinearGradient as SvgLinearGradient,
+  Stop,
+} from "react-native-svg";
 import { BlurTargetView, BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
@@ -53,6 +59,7 @@ import {
   PinInput,
   Row,
   setColorTheme,
+  Skeleton,
   TeraSpinner,
   setFontsReady,
   Steps,
@@ -99,6 +106,14 @@ const tokenImages: Record<string, any> = {
   USDC: require("./assets/usdc.png"),
   USDT: require("./assets/usdt.png"),
   SOL: require("./assets/solana.png"),
+  BNB: require("./assets/bnb.png"),
+  BTC: require("./assets/bitcoin.png"),
+  DOGE: require("./assets/dogecoin.png"),
+  XRP: require("./assets/xrp.png"),
+  ADA: require("./assets/cardano.png"),
+  AVAX: require("./assets/avalanche.png"),
+  LINK: require("./assets/chainlink.png"),
+  ARC: require("./assets/arc.jpg"),
 };
 const popularTokens = [
   { symbol: "TERA", name: "Tera" },
@@ -111,18 +126,23 @@ const popularTokens = [
   { symbol: "ADA", name: "Cardano" },
   { symbol: "AVAX", name: "Avalanche" },
   { symbol: "LINK", name: "Chainlink" },
+  // Circle's Arc network (chain ID 5042) — live, but gas is paid in USDC
+  // rather than a separate native coin, so there's no "ARC" token or price
+  // anywhere to show. Shown for discovery only; see the marketRow/
+  // canHoldHere logic for how a symbol with no price source degrades to a
+  // name-only "Coming soon" row instead of a broken one.
+  { symbol: "ARC", name: "Arc" },
 ] as const;
 const popularSymbols = new Set<string>(popularTokens.map(({ symbol }) => symbol));
 const HOLD_TO_SIGN_MS = 700;
-const tokenMonograms: Record<string, { label: string; background: string; foreground: string }> = {
-  BTC: { label: "₿", background: "#F7931A", foreground: "#FFFFFF" },
-  BNB: { label: "B", background: "#F3BA2F", foreground: "#17191C" },
-  DOGE: { label: "Ð", background: "#C2A633", foreground: "#FFFFFF" },
-  XRP: { label: "X", background: "#23292F", foreground: "#FFFFFF" },
-  ADA: { label: "A", background: "#2154C9", foreground: "#FFFFFF" },
-  AVAX: { label: "A", background: "#E84142", foreground: "#FFFFFF" },
-  LINK: { label: "L", background: "#2A5ADA", foreground: "#FFFFFF" },
-};
+// Temporary: the assistant is being held back from release. Flip this back
+// to true to reopen it — the screen underneath is untouched.
+const ASSISTANT_ENABLED = false;
+// Fallback for a token shown before its real logo has been sourced. Empty
+// now that every token in popularTokens has a real image in tokenImages —
+// kept as the landing place for the next one that doesn't yet.
+const tokenMonograms: Record<string, { label: string; background: string; foreground: string }> =
+  {};
 
 const logoMark = require("./assets/logo-mark.png");
 
@@ -504,22 +524,35 @@ function TokenIcon({
   return (
     <View style={{ width: size, height: size }}>
       {tokenMonograms[symbol] && !tokenImages[symbol] ? (
-        <View style={{
-          width: size,
-          height: size,
-          borderRadius: size / 2,
-          backgroundColor: tokenMonograms[symbol].background,
-          alignItems: "center",
-          justifyContent: "center",
-        }}>
-          <Text style={{ color: tokenMonograms[symbol].foreground, fontWeight: "800", fontSize: size * 0.54 }}>
+        <View
+          style={{
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+            backgroundColor: tokenMonograms[symbol].background,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Text
+            style={{
+              color: tokenMonograms[symbol].foreground,
+              fontWeight: "800",
+              fontSize: size * 0.54,
+            }}
+          >
             {tokenMonograms[symbol].label}
           </Text>
         </View>
       ) : (
         <Image
           source={tokenImages[symbol] || require("./assets/RH-RWA-Assets-Media/rh-icon.png")}
-          style={{ width: size, height: size, borderRadius: size / 2, backgroundColor: colors.wash }}
+          style={{
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+            backgroundColor: colors.wash,
+          }}
         />
       )}
       {chainBadge && (
@@ -573,6 +606,14 @@ function Wallet() {
   const holdProgress = useRef(new Animated.Value(0)).current;
   const [balance, setBalance] = useState<Record<string, string> | null>(null),
     [prices, setPrices] = useState<Record<string, number>>({ USDG: 1 }),
+    [priceChanges, setPriceChanges] = useState<Record<string, number>>({}),
+    // Same-day trend lines for the token list, keyed by symbol. Only ever
+    // populated for symbols with a real external market (see the backend
+    // comment on coinGeckoSparklines) — absent, not faked, for everything else.
+    [sparklines, setSparklines] = useState<Record<string, { t: number; p: number }[]>>({}),
+    // Market cap rank, same source and same real-market-only scope as
+    // sparklines above.
+    [ranks, setRanks] = useState<Record<string, number>>({}),
     [refreshing, setRefreshing] = useState(false),
     [flowStep, setFlowStep] = useState(0),
     [amountInvalid, setAmountInvalid] = useState(false),
@@ -619,6 +660,10 @@ function Wallet() {
   const [assets, setAssets] = useState<Asset[]>(sources),
     [listedSymbols, setListedSymbols] = useState<string[]>([]),
     [bridgeTargetSymbol, setBridgeTargetSymbol] = useState("BTC"),
+    [tokenDetailSymbol, setTokenDetailSymbol] = useState(""),
+    [chartRange, setChartRange] = useState<"1D" | "1W" | "1M" | "1Y">("1D"),
+    [chartPoints, setChartPoints] = useState<{ t: number; p: number }[]>([]),
+    [chartLoading, setChartLoading] = useState(false),
     [marketReturnPage, setMarketReturnPage] = useState("tokens"),
     [swapReturnPage, setSwapReturnPage] = useState("home"),
     [bridgeReturnPage, setBridgeReturnPage] = useState("home"),
@@ -749,6 +794,30 @@ function Wallet() {
   useEffect(() => {
     if (auth) reviewScrollRef.current?.scrollToEnd({ animated: true });
   }, [auth]);
+  // Keeps a recipient's balance current without a manual pull-to-refresh. A
+  // plain send settles on-chain the moment it confirms, and a private
+  // send/bridge already pays out through its own backend interval job (see
+  // backend/src/private-send.ts and private-bridge.ts) — neither depends on
+  // anyone tapping "Check status" in the sender's Activity; that button only
+  // ever re-reads the sender's own local history entry. What was actually
+  // missing was this side ever re-reading its own balance without being
+  // told to. Foreground-only, and on the slow side (25s), to avoid
+  // multiplying load the way the CoinGecko rate limit already did once this
+  // session — this only reduces staleness, not eliminate it; a push/socket
+  // channel would be the instant version if that's ever worth building.
+  useEffect(() => {
+    if (!owner) return;
+    const interval = setInterval(() => {
+      if (AppState.currentState === "active") void refresh();
+    }, 25_000);
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refresh();
+    });
+    return () => {
+      clearInterval(interval);
+      subscription.remove();
+    };
+  }, [owner]);
   useEffect(() => {
     if (page !== "activity" || !owner) return;
     let live = true;
@@ -759,6 +828,18 @@ function Wallet() {
       live = false;
     };
   }, [page, owner]);
+  useEffect(() => {
+    if (page !== "token-detail" || !tokenDetailSymbol) return;
+    let live = true;
+    setChartLoading(true);
+    void api(`/api/assets/prices/history?symbol=${tokenDetailSymbol}&range=${chartRange}`)
+      .then((result) => live && setChartPoints(result.points || []))
+      .catch(() => live && setChartPoints([]))
+      .finally(() => live && setChartLoading(false));
+    return () => {
+      live = false;
+    };
+  }, [page, tokenDetailSymbol, chartRange]);
   // A wallet-menu action that itself opens a Modal can't run right away —
   // the menu is still a Modal mid-close at that point. It's queued here and
   // fired from the menu's onClosed, once its Modal has actually unmounted.
@@ -845,7 +926,10 @@ function Wallet() {
     if (!ExpoSpeechRecognitionModule) {
       setNotice({
         title: t("Voice input unavailable", "语音输入不可用"),
-        body: t("Voice input is available in the installed Tera app. Type your message in Expo Go.", "语音输入可在已安装的 Tera 应用中使用。请在 Expo Go 中输入消息。"),
+        body: t(
+          "Voice input is available in the installed Tera app. Type your message in Expo Go.",
+          "语音输入可在已安装的 Tera 应用中使用。请在 Expo Go 中输入消息。",
+        ),
         tone: "error",
       });
       return;
@@ -1111,7 +1195,7 @@ function Wallet() {
       scrollable: true,
       label: t("Balance", "余额"),
       body: t(
-        "Your total balance across assets, with USD estimates where prices are available.",
+        "Your total balance across every asset, plus the ETH you're holding for gas.",
         "这里显示你所有资产的总价值，以及用于支付燃料费的 ETH。",
       ),
     },
@@ -1283,6 +1367,10 @@ function Wallet() {
     // turning three independent requests into three sequential round-trips.
     const registryPromise = api("/api/assets").catch(() => ({ assets: [] }));
     const pricesPromise = api("/api/assets/prices");
+    const sparklinesPromise = api("/api/assets/prices/sparklines").catch(() => ({
+      sparklines: {},
+      ranks: {},
+    }));
     const tagPromise = tagsAvailable()
       ? tags.tagOf(address).catch(() => undefined)
       : Promise.resolve(undefined);
@@ -1309,12 +1397,15 @@ function Wallet() {
       const priority = ["TERA", "ETH", "USDG", "WETH", "BTC", "SOL"];
       const ai = priority.indexOf(a.symbol.toUpperCase());
       const bi = priority.indexOf(b.symbol.toUpperCase());
-      return (ai < 0 ? priority.length : ai) - (bi < 0 ? priority.length : bi) ||
-        a.symbol.localeCompare(b.symbol);
+      return (
+        (ai < 0 ? priority.length : ai) - (bi < 0 ? priority.length : bi) ||
+        a.symbol.localeCompare(b.symbol)
+      );
     });
-    const [balanceResult, pricesResult, tagResult] = await Promise.allSettled([
+    const [balanceResult, pricesResult, sparklinesResult, tagResult] = await Promise.allSettled([
       balances(address, supported),
       pricesPromise,
+      sparklinesPromise,
       tagPromise,
     ]);
     if (version !== vault.sessionVersion()) return;
@@ -1324,7 +1415,14 @@ function Wallet() {
       setError(
         t("Could not refresh balances. Pull again when connected.", "无法刷新余额，请联网后重试。"),
       );
-    if (pricesResult.status === "fulfilled") setPrices(pricesResult.value.prices || { USDG: 1 });
+    if (pricesResult.status === "fulfilled") {
+      setPrices(pricesResult.value.prices || { USDG: 1 });
+      setPriceChanges(pricesResult.value.change24h || {});
+    }
+    if (sparklinesResult.status === "fulfilled") {
+      setSparklines(sparklinesResult.value.sparklines || {});
+      setRanks(sparklinesResult.value.ranks || {});
+    }
     setAssets(supported);
     // A failure leaves the tag unknown rather than answering "no" — an
     // owner who already holds a tag must not be asked to claim one over a
@@ -1485,19 +1583,32 @@ function Wallet() {
     if (useUsd === amountInUsd || (useUsd && !usablePrice(symbol))) return;
     if (useUsd) {
       const estimate = Number(amount || 0) * (usablePrice(symbol) || 0);
-      setUsdAmountInput(amount && Number.isFinite(estimate) ? String(Number(estimate.toFixed(8))) : "");
+      setUsdAmountInput(
+        amount && Number.isFinite(estimate) ? String(Number(estimate.toFixed(8))) : "",
+      );
     }
     setAmountInUsd(useUsd);
   }
   function amountModeToggle(symbol: string) {
     const priceAvailable = !!usablePrice(symbol);
     return (
-      <View style={{ flexDirection: "row", padding: 4, borderRadius: 14, backgroundColor: colors.wash, gap: 4 }}>
+      <View
+        style={{
+          flexDirection: "row",
+          padding: 4,
+          borderRadius: 14,
+          backgroundColor: colors.wash,
+          gap: 4,
+        }}
+      >
         {([false, true] as const).map((useUsd) => (
           <Pressable
             key={useUsd ? "usd" : "token"}
             accessibilityRole="button"
-            accessibilityState={{ selected: amountInUsd === useUsd, disabled: useUsd && !priceAvailable }}
+            accessibilityState={{
+              selected: amountInUsd === useUsd,
+              disabled: useUsd && !priceAvailable,
+            }}
             disabled={useUsd && !priceAvailable}
             onPress={() => selectAmountMode(symbol, useUsd)}
             style={{
@@ -1510,7 +1621,12 @@ function Wallet() {
               opacity: useUsd && !priceAvailable ? 0.4 : 1,
             }}
           >
-            <Text style={[s.small, { fontWeight: "700", color: amountInUsd === useUsd ? colors.ink : colors.muted }]}>
+            <Text
+              style={[
+                s.small,
+                { fontWeight: "700", color: amountInUsd === useUsd ? colors.ink : colors.muted },
+              ]}
+            >
               {useUsd ? "USD" : symbol}
             </Text>
           </Pressable>
@@ -1533,7 +1649,8 @@ function Wallet() {
   function usdReviewRow(symbol: string, tokenAmount: string): [string, string] {
     return [
       t("Estimated USD", "\u9884\u8ba1\u7f8e\u5143\u4ef7\u503c"),
-      usdEstimate(symbol, tokenAmount) || t("Price unavailable", "\u4ef7\u683c\u6682\u4e0d\u53ef\u7528"),
+      usdEstimate(symbol, tokenAmount) ||
+        t("Price unavailable", "\u4ef7\u683c\u6682\u4e0d\u53ef\u7528"),
     ];
   }
   /**
@@ -1765,7 +1882,7 @@ function Wallet() {
     const teraTrade = asset.symbol === "TERA";
     const input = i.actionType === "BUY" ? (teraTrade ? sources[1] : sources[0]) : asset;
     const q = p.preparedTransaction.quote;
-    if (q) check(q.decimalsOut === (i.actionType === "BUY" ? asset.decimals : (teraTrade ? 18 : 6)));
+    if (q) check(q.decimalsOut === (i.actionType === "BUY" ? asset.decimals : teraTrade ? 18 : 6));
     const rows: [string, string][] = [
       [t("Action", "操作"), i.actionType],
       [t("Send", "发送"), `${formatUnits(BigInt(i.amount), input.decimals)} ${input.symbol}`],
@@ -1778,7 +1895,7 @@ function Wallet() {
     if (q) {
       rows.push([
         t("Expected output", "预计收到"),
-        `${formatUnits(BigInt(q.amountOutWei), q.decimalsOut)} ${i.actionType === "BUY" ? asset.symbol : (teraTrade ? "ETH" : "USDG")}`,
+        `${formatUnits(BigInt(q.amountOutWei), q.decimalsOut)} ${i.actionType === "BUY" ? asset.symbol : teraTrade ? "ETH" : "USDG"}`,
       ]);
       rows.push([
         t("Minimum output", "最低收到"),
@@ -1812,7 +1929,10 @@ function Wallet() {
       accountAddress: owner,
       assetAddress: selectedAsset.address,
       actionType: trade,
-      amount: units(amount, trade === "BUY" ? (selectedAsset.symbol === "TERA" ? 18 : 6) : selectedAsset.decimals),
+      amount: units(
+        amount,
+        trade === "BUY" ? (selectedAsset.symbol === "TERA" ? 18 : 6) : selectedAsset.decimals,
+      ),
     };
     const checked = await policyFor(input);
     guard();
@@ -2031,7 +2151,10 @@ function Wallet() {
       forget();
       setNotice({
         title: t("Wallet locked", "钱包已锁定"),
-        body: t("Unlock your wallet and review the transaction again.", "请解锁钱包并重新审核交易。"),
+        body: t(
+          "Unlock your wallet and review the transaction again.",
+          "请解锁钱包并重新审核交易。",
+        ),
         tone: "error",
       });
       return;
@@ -2772,7 +2895,10 @@ function Wallet() {
       if (!popularSymbols.has(symbol)) {
         setNotice({
           title: t("Trading unavailable", "\u4ea4\u6613\u6682\u4e0d\u53ef\u7528"),
-          body: t(`There is no verified trade route for ${symbol} yet.`, `\u76ee\u524d\u6ca1\u6709 ${symbol} \u7684\u53ef\u9a8c\u8bc1\u4ea4\u6613\u8def\u7ebf\u3002`),
+          body: t(
+            `There is no verified trade route for ${symbol} yet.`,
+            `\u76ee\u524d\u6ca1\u6709 ${symbol} \u7684\u53ef\u9a8c\u8bc1\u4ea4\u6613\u8def\u7ebf\u3002`,
+          ),
         });
         return;
       }
@@ -2786,6 +2912,16 @@ function Wallet() {
     clearAmount();
     setSwapReturnPage(page);
     setPage("swap");
+  }
+  function openTokenDetail(symbol: string) {
+    // Jumping to another token from the "More tokens" carousel while
+    // already on a detail page must not overwrite where Back goes to with
+    // "token-detail" itself — that's what made Back loop in place instead
+    // of returning to wherever the flow was first opened from.
+    if (page !== "token-detail") setMarketReturnPage(page);
+    setTokenDetailSymbol(symbol);
+    setChartRange("1D");
+    setPage("token-detail");
   }
   const contactNote = t(
     contactsCore.PRIVACY_NOTE,
@@ -2915,6 +3051,31 @@ function Wallet() {
    * column.
    */
   function assistantScreen() {
+    if (!ASSISTANT_ENABLED)
+      return (
+        <View style={{ flex: 1 }}>
+          <Header
+            title={t("Tera assistant", "Tera 助手")}
+            onBack={() => setPage("home")}
+            backLabel={t("Wallet", "钱包")}
+          />
+          <View
+            style={[
+              s.panel,
+              { alignItems: "center", gap: 10, paddingVertical: 40, marginHorizontal: 20 },
+            ]}
+          >
+            <Icon name="message-text-outline" size={32} color={colors.faint} />
+            <Text style={[s.label, { fontSize: 17 }]}>{t("Coming soon", "即将上线")}</Text>
+            <Text style={[s.small, { textAlign: "center" }]}>
+              {t(
+                "The Tera assistant isn't available yet. Check back soon.",
+                "Tera 助手暂未上线，敬请期待。",
+              )}
+            </Text>
+          </View>
+        </View>
+      );
     const teraAvatar = (
       <View style={[s.iconDisc, { width: 28, height: 28, borderRadius: 14 }]}>
         <Image
@@ -3163,61 +3324,269 @@ function Wallet() {
       </View>
     );
   }
-  // Shared by the Home screen's compact list and the full Tokens screen, so
-  // a held asset looks identical whichever one it's read from.
-  function assetRow(asset: Asset, amount: string, first: boolean) {
+  // A hand-rolled line chart (no charting library — react-native-svg is
+  // already a dependency, and a plain line + gradient fill is all this
+  // needs) for the token detail page. Coming-soon catalog coins get real
+  // CoinGecko history; every other token's chart is only as long as this
+  // server has actually been observing its on-chain quote, so a freshly
+  // deployed backend or a token nobody's viewed before can look sparse —
+  // that's a real limit of deriving history from a live process rather
+  // than a data warehouse, not a bug to hide.
+  function TokenChart({ points, up }: { points: { t: number; p: number }[]; up: boolean }) {
+    if (chartLoading)
+      return (
+        <View style={{ height: 120, alignItems: "center", justifyContent: "center" }}>
+          <TeraSpinner size={22} />
+        </View>
+      );
+    if (points.length < 2)
+      return (
+        <View style={{ height: 120, alignItems: "center", justifyContent: "center" }}>
+          <Text style={s.small}>{t("Not enough history yet", "历史数据尚不足")}</Text>
+        </View>
+      );
+    const width = 320;
+    const height = 120;
+    const prices = points.map((point) => point.p);
+    const minPrice = Math.min(...prices);
+    const maxPrice = Math.max(...prices);
+    const spanPrice = maxPrice - minPrice || 1;
+    const minTime = points[0].t;
+    const spanTime = points[points.length - 1].t - minTime || 1;
+    const coords = points.map((point) => ({
+      x: ((point.t - minTime) / spanTime) * width,
+      y: height - ((point.p - minPrice) / spanPrice) * height,
+    }));
+    const linePath = coords
+      .map((c, i) => `${i === 0 ? "M" : "L"} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`)
+      .join(" ");
+    const areaPath = `${linePath} L ${width} ${height} L 0 ${height} Z`;
+    const color = up ? colors.green : colors.danger;
+    return (
+      <Svg
+        width="100%"
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+      >
+        <Defs>
+          <SvgLinearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1">
+            <Stop offset="0%" stopColor={color} stopOpacity={0.3} />
+            <Stop offset="100%" stopColor={color} stopOpacity={0} />
+          </SvgLinearGradient>
+        </Defs>
+        <Path d={areaPath} fill="url(#chartFill)" stroke="none" />
+        <Path
+          d={linePath}
+          fill="none"
+          stroke={color}
+          strokeWidth={2}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+      </Svg>
+    );
+  }
+  // A placeholder row shaped like assetRow/marketRow, shown in their place
+  // while the first balance/price fetch is still in flight.
+  function tokenRowSkeleton(key: string | number, first: boolean) {
     return (
       <View
-        key={asset.symbol}
+        key={`skeleton-${key}`}
         style={{
           flexDirection: "row",
           alignItems: "center",
           gap: 12,
           paddingVertical: 12,
           borderTopWidth: first ? 0 : StyleSheet.hairlineWidth,
-          borderColor: colors.line,
+          borderColor: colors.line + "4d",
         }}
       >
-        <TokenIcon symbol={asset.symbol} size={38} chainBadge={asset.symbol !== "ETH"} />
+        <Skeleton width={38} height={38} borderRadius={19} />
+        <View style={{ flex: 1, gap: 6 }}>
+          <Skeleton width={64} height={13} />
+          <Skeleton width={44} height={11} />
+        </View>
+        <Skeleton width={56} height={13} />
+      </View>
+    );
+  }
+  // A tiny same-day line, drawn from real hourly points — never from just
+  // the two endpoints of the 24h change, which would draw a straight
+  // diagonal that looks like data but isn't.
+  function Sparkline({
+    points,
+    up,
+    width = 40,
+    height = 20,
+  }: {
+    points: { t: number; p: number }[];
+    up: boolean;
+    width?: number;
+    height?: number;
+  }) {
+    if (points.length < 2) return null;
+    const values = points.map((point) => point.p);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = max - min || 1;
+    const stepX = width / (points.length - 1);
+    const path = points
+      .map(
+        (point, i) =>
+          `${i === 0 ? "M" : "L"} ${(i * stepX).toFixed(1)} ${(height - ((point.p - min) / span) * height).toFixed(1)}`,
+      )
+      .join(" ");
+    return (
+      <Svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+        <Path
+          d={path}
+          fill="none"
+          stroke={up ? colors.green : colors.danger}
+          strokeWidth={1.5}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+      </Svg>
+    );
+  }
+  // Shared by the activity list row and its detail page, so a status badge
+  // never reads differently depending on which screen drew it.
+  function statusTone(status: string) {
+    return status === "confirmed"
+      ? { bg: colors.tint, color: colors.green }
+      : status === "failed" || status === "reverted"
+        ? { bg: colors.dangerTint, color: colors.danger }
+        : { bg: colors.warnTint, color: colors.yellow };
+  }
+  // A small colored up/down indicator next to a token's price, from the
+  // backend's rolling 24h change, with a same-day sparkline beside it when
+  // one is available (real markets only — see the sparklines state comment).
+  // Omitted (not zero) when there's no change data yet, e.g. right after the
+  // server restarts.
+  function trendTag(symbol: string) {
+    const change = priceChanges[symbol];
+    if (!Number.isFinite(change)) return null;
+    const up = change >= 0;
+    const points = sparklines[symbol];
+    return (
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+        {points?.length > 1 ? <Sparkline points={points} up={up} /> : null}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 1 }}>
+          <Icon
+            name={up ? "arrow-up" : "arrow-down"}
+            size={11}
+            color={up ? colors.green : colors.danger}
+          />
+          <Text style={[s.small, { color: up ? colors.green : colors.danger, fontWeight: "700" }]}>
+            {Math.abs(change).toFixed(2)}%
+          </Text>
+        </View>
+      </View>
+    );
+  }
+  // Shared by the Home screen's compact list and the full Tokens screen, so
+  // a held asset looks identical whichever one it's read from. Rows sit in
+  // one shared panel from the caller, separated by a top hairline rather
+  // than each being its own card — tapping the row opens the token's detail
+  // page.
+  function assetRow(asset: Asset, amount: string, first: boolean) {
+    return (
+      <Pressable
+        key={asset.symbol}
+        accessibilityRole="button"
+        onPress={() => openTokenDetail(asset.symbol)}
+        style={({ pressed }) => ({
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 12,
+          paddingVertical: 12,
+          borderTopWidth: first ? 0 : StyleSheet.hairlineWidth,
+          borderColor: colors.line + "4d",
+          opacity: pressed ? 0.7 : 1,
+        })}
+      >
+        <TokenIcon symbol={asset.symbol} size={38} chainBadge />
         <View style={{ flex: 1 }}>
           <Text style={s.label}>{asset.symbol}</Text>
           <Text style={s.small} numberOfLines={1}>
             {shortAmount(amount)}
           </Text>
         </View>
-        <Text style={s.label}>
-          {valueCore.format(valueCore.valueOf(amount, prices[asset.symbol]))}
-        </Text>
-      </View>
+        <View style={{ alignItems: "flex-end", gap: 2 }}>
+          <Text style={s.label}>
+            {valueCore.format(valueCore.valueOf(amount, prices[asset.symbol]))}
+          </Text>
+          {trendTag(asset.symbol)}
+        </View>
+      </Pressable>
     );
   }
-  function marketRow(token: { symbol: string; name: string }) {
-    const isListed = token.symbol === "ETH" || token.symbol === "TERA" || listedSymbols.includes(token.symbol);
-    const canHoldHere = token.symbol === "TERA" || assets.some((asset) => asset.symbol === token.symbol);
+  // Rows sit in one shared panel from the caller (same convention as
+  // assetRow above), not one card per token. Tapping the row opens the
+  // token's detail page; tapping Buy — a nested Pressable — goes straight
+  // to the buy flow without also opening the detail page underneath it.
+  function marketRow(token: { symbol: string; name: string }, first: boolean) {
+    const isListed =
+      token.symbol === "ETH" || token.symbol === "TERA" || listedSymbols.includes(token.symbol);
+    const canHoldHere =
+      token.symbol === "TERA" || assets.some((asset) => asset.symbol === token.symbol);
     const price = prices[token.symbol];
-    const actionLabel = token.symbol === "USDG"
-      ? t("Add", "\u6dfb\u52a0")
-      : isListed
-        ? t("Buy", "\u4e70\u5165")
-        : t("Coming soon", "\u5373\u5c06\u4e0a\u7ebf");
-    const detail = isListed || token.symbol === "TERA"
-      ? t("Robinhood Chain", "Robinhood Chain")
-      : canHoldHere
-        ? t("Trading coming soon", "\u4ea4\u6613\u5373\u5c06\u4e0a\u7ebf")
-        : t("In-wallet support coming soon", "\u94b1\u5305\u5185\u652f\u6301\u5373\u5c06\u4e0a\u7ebf");
+    const actionLabel =
+      token.symbol === "USDG"
+        ? t("Add", "\u6dfb\u52a0")
+        : isListed
+          ? t("Buy", "\u4e70\u5165")
+          : t("Coming soon", "\u5373\u5c06\u4e0a\u7ebf");
+    // The Robinhood Chain badge on the icon already says where this token
+    // lives; spelling it out again in text here was redundant. Only the
+    // not-yet-tradable states still need words, since there's no icon cue
+    // for those.
+    const detail =
+      isListed || token.symbol === "TERA"
+        ? ""
+        : canHoldHere
+          ? t("Trading coming soon", "\u4ea4\u6613\u5373\u5c06\u4e0a\u7ebf")
+          : t(
+              "In-wallet support coming soon",
+              "\u94b1\u5305\u5185\u652f\u6301\u5373\u5c06\u4e0a\u7ebf",
+            );
     return (
-      <View
+      <Pressable
         key={"market-" + token.symbol}
-        style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12 }]}
+        accessibilityRole="button"
+        onPress={() => openTokenDetail(token.symbol)}
+        style={({ pressed }) => ({
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 12,
+          paddingVertical: 12,
+          borderTopWidth: first ? 0 : StyleSheet.hairlineWidth,
+          borderColor: colors.line + "4d",
+          opacity: pressed ? 0.7 : 1,
+        })}
       >
-        <TokenIcon symbol={token.symbol} size={38} chainBadge={canHoldHere && token.symbol !== "ETH"} />
+        <TokenIcon symbol={token.symbol} size={38} chainBadge={canHoldHere} />
         <View style={{ flex: 1 }}>
-          <Text style={s.label} numberOfLines={1}>{token.name}</Text>
+          <Text style={s.label} numberOfLines={1}>
+            {token.name}
+            {/* Market cap rank, only for the not-yet-tradable catalog coins —
+                real ones sourced from CoinGecko alongside the sparkline, not
+                shown for ETH/TERA (already tradable) or Arc (no market yet). */}
+            {!isListed && ranks[token.symbol] ? (
+              <Text style={{ color: colors.faint, fontWeight: "600" }}>
+                {" "}
+                · #{ranks[token.symbol]}
+              </Text>
+            ) : null}
+          </Text>
           <Text style={s.small} numberOfLines={1}>
-            {Number.isFinite(price) && price > 0 ? `${valueCore.format(price)} · ` : ""}
-            {detail}
+            {[Number.isFinite(price) && price > 0 ? valueCore.format(price) : "", detail]
+              .filter(Boolean)
+              .join(" · ")}
           </Text>
         </View>
+        {trendTag(token.symbol)}
         {isListed || token.symbol === "USDG" ? (
           <Pressable
             accessibilityRole="button"
@@ -3240,7 +3609,7 @@ function Wallet() {
             {actionLabel}
           </Text>
         )}
-      </View>
+      </Pressable>
     );
   }
   function main() {
@@ -3277,7 +3646,9 @@ function Wallet() {
           />
           <View style={{ gap: 10, marginTop: 16 }}>
             <Text style={s.eyebrow}>{t("Popular tokens", "\u70ed\u95e8\u4ee3\u5e01")}</Text>
-            {popularTokens.map(marketRow)}
+            <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
+              {popularTokens.map((token, i) => marketRow(token, i === 0))}
+            </View>
           </View>
           <View style={{ gap: 10, marginTop: 16 }}>
             <Text style={s.eyebrow}>{t("Your assets", "\u4f60\u7684\u8d44\u4ea7")}</Text>
@@ -3287,15 +3658,21 @@ function Wallet() {
               </View>
             ) : (
               <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
-                <Text style={s.small}>{t("No balances on this wallet yet.", "此钱包暂无余额。")}</Text>
+                <Text style={s.small}>
+                  {t("No balances on this wallet yet.", "此钱包暂无余额。")}
+                </Text>
               </View>
             )}
           </View>
           <View style={{ gap: 10, marginTop: 16 }}>
             <Text style={s.eyebrow}>{t("All tokens", "\u6240\u6709\u4ee3\u5e01")}</Text>
-            {assets
-              .filter((asset) => !popularSymbols.has(asset.symbol))
-              .map((asset) => marketRow({ symbol: asset.symbol, name: asset.name || asset.symbol }))}
+            <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
+              {assets
+                .filter((asset) => !popularSymbols.has(asset.symbol))
+                .map((asset, i) =>
+                  marketRow({ symbol: asset.symbol, name: asset.name || asset.symbol }, i === 0),
+                )}
+            </View>
           </View>
         </>
       );
@@ -3549,17 +3926,26 @@ function Wallet() {
                 <Text style={[s.small, { color: colors.ink, opacity: 0.7 }]}>
                   {t("Total balance", "资产总值")}
                 </Text>
-                <Text
-                  style={{
-                    color: colors.ink,
-                    fontSize: 38,
-                    lineHeight: 46,
-                    fontWeight: "700",
-                    letterSpacing: -1,
-                  }}
-                >
-                  {valueCore.format(valuation.total)}
-                </Text>
+                {!balance ? (
+                  <Skeleton
+                    width={140}
+                    height={38}
+                    borderRadius={8}
+                    style={{ marginVertical: 4, backgroundColor: "#ffffff26" }}
+                  />
+                ) : (
+                  <Text
+                    style={{
+                      color: colors.ink,
+                      fontSize: 38,
+                      lineHeight: 46,
+                      fontWeight: "700",
+                      letterSpacing: -1,
+                    }}
+                  >
+                    {valueCore.format(valuation.total)}
+                  </Text>
+                )}
                 {valuation.coverage !== valueCore.COMPLETE ? (
                   <Text
                     style={[s.small, { color: colors.ink, opacity: 0.75, textAlign: "center" }]}
@@ -3596,15 +3982,27 @@ function Wallet() {
             ))}
           </View>
           <View style={{ gap: 10 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-              <Text style={[s.text, { fontWeight: "700" }]}>{t("Popular tokens", "\u70ed\u95e8\u4ee3\u5e01")}</Text>
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <Text style={[s.text, { fontWeight: "700" }]}>
+                {t("Popular tokens", "\u70ed\u95e8\u4ee3\u5e01")}
+              </Text>
               <Pressable accessibilityRole="button" onPress={() => setPage("tokens")}>
                 <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
                   {t("View all", "\u67e5\u770b\u5168\u90e8")}
                 </Text>
               </Pressable>
             </View>
-            {popularTokens.slice(0, 5).map(marketRow)}
+            <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
+              {!balance
+                ? [0, 1, 2, 3, 4].map((i) => tokenRowSkeleton(i, i === 0))
+                : popularTokens.slice(0, 5).map((token, i) => marketRow(token, i === 0))}
+            </View>
           </View>
           <View ref={tourAssetsRef} collapsable={false} style={{ gap: 10 }}>
             <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
@@ -3618,8 +4016,8 @@ function Wallet() {
               </Pressable>
             </View>
             {!balance ? (
-              <View style={[s.panel, { alignItems: "center" }]}>
-                <TeraSpinner size={26} />
+              <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
+                {[0, 1].map((i) => tokenRowSkeleton(i, i === 0))}
               </View>
             ) : held.length ? (
               <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
@@ -4165,7 +4563,10 @@ function Wallet() {
               />
               <Row label={t("Asset", "资产")} value={selectedAsset.symbol} />
               <Row label={t("Amount", "金额")} value={`${amount || "0"} ${selectedAsset.symbol}`} />
-              <Row label={t("Estimated USD", "\u9884\u8ba1\u7f8e\u5143\u4ef7\u503c")} value={usdReviewRow(selectedAsset.symbol, amount || "0")[1]} />
+              <Row
+                label={t("Estimated USD", "\u9884\u8ba1\u7f8e\u5143\u4ef7\u503c")}
+                value={usdReviewRow(selectedAsset.symbol, amount || "0")[1]}
+              />
               {tagLookup.state === "found" && (
                 <Row label={t("Tag", "标签")} value={tags.display(tagLookup.tag)} />
               )}
@@ -4209,7 +4610,7 @@ function Wallet() {
       // picker. USDG is the fixed side; assetSymbol is the one the picker
       // below can change.
       const paySymbol = trade === "BUY" ? (assetSymbol === "TERA" ? "ETH" : "USDG") : assetSymbol;
-      const receiveSymbol = trade === "BUY" ? assetSymbol : (assetSymbol === "TERA" ? "ETH" : "USDG");
+      const receiveSymbol = trade === "BUY" ? assetSymbol : assetSymbol === "TERA" ? "ETH" : "USDG";
       const payAsset = assets.find((a) => a.symbol === paySymbol) || sources[0];
       const receiveAsset = assets.find((a) => a.symbol === receiveSymbol) || sources[0];
       const payBalance = balance
@@ -4254,17 +4655,23 @@ function Wallet() {
             <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
               <Text style={s.eyebrow}>{t("YOU PAY", "你支付")}</Text>
               {payBalance && (
-                <Pressable onPress={() => { setAmountInUsd(false); setUsdAmountInput(""); setAmount(payBalance); }}>
+                <Pressable
+                  onPress={() => {
+                    setAmountInUsd(false);
+                    setUsdAmountInput("");
+                    setAmount(payBalance);
+                  }}
+                >
                   <Text style={s.small}>
                     {t("Balance", "余额")}: {shortAmount(payBalance)}
                   </Text>
                 </Pressable>
               )}
             </View>
-            <View style={s.wrap}>
-              {swapChip(paySymbol, () => setSwapPayPicker(true))}
+            <View style={s.wrap}>{swapChip(paySymbol, () => setSwapPayPicker(true))}</View>
+            <View style={{ alignSelf: "flex-end", marginTop: 12 }}>
+              {amountModeToggle(paySymbol)}
             </View>
-            <View style={{ alignSelf: "flex-end", marginTop: 12 }}>{amountModeToggle(paySymbol)}</View>
             <TextInput
               value={amountDisplay()}
               onChangeText={(value) => setAmountDisplay(paySymbol, payAsset.decimals, value)}
@@ -4278,7 +4685,10 @@ function Wallet() {
           <Pressable
             accessibilityRole="button"
             accessibilityLabel={t("Swap pay and receive", "交换支付与接收方向")}
-            onPress={() => { clearAmount(); setTrade((current) => (current === "BUY" ? "SELL" : "BUY")); }}
+            onPress={() => {
+              clearAmount();
+              setTrade((current) => (current === "BUY" ? "SELL" : "BUY"));
+            }}
             style={({ pressed }) => ({
               alignSelf: "center",
               width: 44,
@@ -4315,12 +4725,186 @@ function Wallet() {
         </>
       );
     }
+    if (page === "token-detail") {
+      const detailToken =
+        popularTokens.find(({ symbol }) => symbol === tokenDetailSymbol) ||
+        assets.find((asset) => asset.symbol === tokenDetailSymbol);
+      const name = detailToken?.name || tokenDetailSymbol;
+      const price = prices[tokenDetailSymbol];
+      const change = priceChanges[tokenDetailSymbol];
+      const up = Number.isFinite(change) && change! >= 0;
+      const heldEntry = held.find(({ asset }) => asset.symbol === tokenDetailSymbol);
+      const isListed =
+        tokenDetailSymbol === "ETH" ||
+        tokenDetailSymbol === "TERA" ||
+        listedSymbols.includes(tokenDetailSymbol);
+      const canHoldHere =
+        tokenDetailSymbol === "TERA" || assets.some((asset) => asset.symbol === tokenDetailSymbol);
+      // Arc (Circle's chain) pays gas in USDC rather than a native coin — the
+      // absence of a price here isn't "not fetched yet", it's structural,
+      // so the price line, trend and chart (which would only ever show
+      // "not enough history") are left out instead of implying they might
+      // fill in later.
+      const noMarket = tokenDetailSymbol === "ARC";
+      return (
+        <>
+          <Header
+            title={name}
+            onBack={() => setPage(marketReturnPage)}
+            backLabel={t("Back", "返回")}
+          />
+          <View style={[s.panel, { alignItems: "center", gap: 10, paddingVertical: 28 }]}>
+            <TokenIcon
+              symbol={tokenDetailSymbol}
+              size={56}
+              chainBadge={canHoldHere}
+            />
+            <Text style={[s.label, { fontSize: 17 }]}>{name}</Text>
+            {noMarket ? null : (
+              <Text style={{ fontSize: 34, fontWeight: "700", color: colors.ink }}>
+                {Number.isFinite(price) && price! > 0 ? valueCore.format(price) : "—"}
+              </Text>
+            )}
+            {!noMarket && Number.isFinite(change) ? (
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
+                <Icon
+                  name={up ? "arrow-up" : "arrow-down"}
+                  size={14}
+                  color={up ? colors.green : colors.danger}
+                />
+                <Text style={{ color: up ? colors.green : colors.danger, fontWeight: "700" }}>
+                  {Math.abs(change!).toFixed(2)}% {t("today", "今日")}
+                </Text>
+              </View>
+            ) : null}
+            {isListed || tokenDetailSymbol === "USDG" ? (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => openTokenBuy(tokenDetailSymbol)}
+                style={({ pressed }) => ({
+                  marginTop: 6,
+                  alignSelf: "center",
+                  paddingVertical: 9,
+                  paddingHorizontal: 22,
+                  borderRadius: 14,
+                  backgroundColor: colors.tint,
+                  opacity: pressed ? 0.65 : 1,
+                })}
+              >
+                <Text style={{ color: colors.green, fontWeight: "800" }}>
+                  {tokenDetailSymbol === "USDG" ? t("Add", "添加") : t("Buy", "买入")}
+                </Text>
+              </Pressable>
+            ) : null}
+          </View>
+          {noMarket ? null : (
+            <View style={[s.panel, { gap: 12 }]}>
+              <TokenChart points={chartPoints} up={up} />
+              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                {(["1D", "1W", "1M", "1Y"] as const).map((range) => (
+                  <Pressable
+                    key={range}
+                    accessibilityRole="button"
+                    onPress={() => setChartRange(range)}
+                    style={({ pressed }) => ({
+                      flex: 1,
+                      marginHorizontal: 3,
+                      paddingVertical: 7,
+                      borderRadius: 10,
+                      alignItems: "center",
+                      backgroundColor: range === chartRange ? colors.tint : "transparent",
+                      opacity: pressed ? 0.7 : 1,
+                    })}
+                  >
+                    <Text
+                      style={[
+                        s.small,
+                        {
+                          fontWeight: "700",
+                          color: range === chartRange ? colors.green : colors.muted,
+                        },
+                      ]}
+                    >
+                      {range}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            </View>
+          )}
+          {heldEntry ? (
+            <View style={[s.panel, { gap: 6 }]}>
+              <Text style={s.eyebrow}>{t("Your balance", "你的余额")}</Text>
+              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                <Text style={s.label}>
+                  {shortAmount(heldEntry.amount)} {tokenDetailSymbol}
+                </Text>
+                <Text style={s.small}>
+                  {valueCore.format(valueCore.valueOf(heldEntry.amount, price))}
+                </Text>
+              </View>
+            </View>
+          ) : null}
+          <View style={[s.panel, { gap: 6 }]}>
+            <Text style={s.eyebrow}>{t("About", "关于")}</Text>
+            <Text style={s.small}>
+              {noMarket
+                ? t(
+                    "Arc is Circle's EVM-compatible chain for stablecoin finance. Gas is paid in USDC rather than a separate native coin, so there's no ARC token or price to show.",
+                    "Arc 是 Circle 推出的、面向稳定币金融的兼容 EVM 链。手续费以 USDC 支付，没有独立的原生代币，因此没有 ARC 代币或价格可显示。",
+                  )
+                : isListed || tokenDetailSymbol === "TERA"
+                  ? t(
+                      "Tradable on Robinhood Chain inside Tera Wallet.",
+                      "可在 Tera 钱包内于 Robinhood Chain 上交易。",
+                    )
+                  : t("Not yet tradable inside Tera Wallet.", "暂不支持在 Tera 钱包内交易。")}
+            </Text>
+          </View>
+          <View style={{ gap: 10 }}>
+            <Text style={s.eyebrow}>{t("More tokens", "更多代币")}</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ gap: 10 }}
+            >
+              {popularTokens
+                .filter((token) => token.symbol !== tokenDetailSymbol)
+                .map((token) => (
+                  <Pressable
+                    key={token.symbol}
+                    accessibilityRole="button"
+                    onPress={() => openTokenDetail(token.symbol)}
+                    style={({ pressed }) => [
+                      s.panel,
+                      { width: 92, alignItems: "center", gap: 6, opacity: pressed ? 0.7 : 1 },
+                    ]}
+                  >
+                    <TokenIcon symbol={token.symbol} size={36} />
+                    <Text style={[s.small, { fontWeight: "700" }]} numberOfLines={1}>
+                      {token.symbol}
+                    </Text>
+                    <Text style={s.small} numberOfLines={1}>
+                      {Number.isFinite(prices[token.symbol]) && prices[token.symbol] > 0
+                        ? valueCore.format(prices[token.symbol])
+                        : "—"}
+                    </Text>
+                  </Pressable>
+                ))}
+            </ScrollView>
+          </View>
+        </>
+      );
+    }
     if (page === "bridge-pending") {
       const token = popularTokens.find(({ symbol }) => symbol === bridgeTargetSymbol);
       return (
         <>
           <Header
-            title={t("Bridge to " + (token?.name || bridgeTargetSymbol), "\u8de8\u94fe\u81f3 " + (token?.name || bridgeTargetSymbol))}
+            title={t(
+              "Bridge to " + (token?.name || bridgeTargetSymbol),
+              "\u8de8\u94fe\u81f3 " + (token?.name || bridgeTargetSymbol),
+            )}
             onBack={() => setPage(marketReturnPage)}
             backLabel={t("Back", "\u8fd4\u56de")}
           />
@@ -4341,17 +4925,26 @@ function Wallet() {
                   )}
             </Text>
           </View>
-          <Button primary onPress={() => {
-            openFlow("bridge");
-            if (bridgeTargetSymbol === "SOL") {
-              setDestination(792703809);
-              setOutSymbol("SOL");
-              setBridgeStep(1);
-            }
-          }}>
+          <Button
+            primary
+            onPress={() => {
+              openFlow("bridge");
+              if (bridgeTargetSymbol === "SOL") {
+                setDestination(792703809);
+                setOutSymbol("SOL");
+                setBridgeStep(1);
+              }
+            }}
+          >
             {bridgeTargetSymbol === "SOL"
-              ? t("Bridge SOL to an external wallet", "\u5c06 SOL \u8de8\u94fe\u81f3\u5916\u90e8\u94b1\u5305")
-              : t("View supported external routes", "\u67e5\u770b\u652f\u6301\u7684\u5916\u90e8\u8de8\u94fe\u8def\u7ebf")}
+              ? t(
+                  "Bridge SOL to an external wallet",
+                  "\u5c06 SOL \u8de8\u94fe\u81f3\u5916\u90e8\u94b1\u5305",
+                )
+              : t(
+                  "View supported external routes",
+                  "\u67e5\u770b\u652f\u6301\u7684\u5916\u90e8\u8de8\u94fe\u8def\u7ebf",
+                )}
           </Button>
         </>
       );
@@ -4372,11 +4965,15 @@ function Wallet() {
         <>
           <Header
             title={t("Bridge", "跨链")}
-            onBack={() => (bridgeStep > 0 ? setBridgeStep((step) => step - 1) : setPage(bridgeReturnPage))}
+            onBack={() =>
+              bridgeStep > 0 ? setBridgeStep((step) => step - 1) : setPage(bridgeReturnPage)
+            }
             backLabel={t("Back", "返回")}
           />
           <View style={[s.panel, { gap: 5, backgroundColor: colors.wash }]}>
-            <Text style={s.label}>{t("Bridge to an external wallet", "\u8de8\u94fe\u81f3\u5916\u90e8\u94b1\u5305")}</Text>
+            <Text style={s.label}>
+              {t("Bridge to an external wallet", "\u8de8\u94fe\u81f3\u5916\u90e8\u94b1\u5305")}
+            </Text>
             <Text style={s.small}>
               {t(
                 "Holding Solana, Base and Arc assets inside Tera Wallet is coming soon. Check the recipient address before signing.",
@@ -4532,7 +5129,10 @@ function Wallet() {
                           </Text>
                           <Text style={s.small}>{d.tokens.map((t) => t.symbol).join(" · ")}</Text>
                           <Text style={s.small}>
-                            {t("In-wallet holding: Coming soon", "\u94b1\u5305\u5185\u4fdd\u5b58\uff1a\u5373\u5c06\u4e0a\u7ebf")}
+                            {t(
+                              "In-wallet holding: Coming soon",
+                              "\u94b1\u5305\u5185\u4fdd\u5b58\uff1a\u5373\u5c06\u4e0a\u7ebf",
+                            )}
                           </Text>
                         </View>
                         {isSelected && <Icon name="check-circle" size={20} color={colors.green} />}
@@ -4590,7 +5190,10 @@ function Wallet() {
                   {bridgeSourceAssets.map((asset) => (
                     <Pressable
                       key={asset.symbol}
-                      onPress={() => { setAssetSymbol(asset.symbol); clearAmount(); }}
+                      onPress={() => {
+                        setAssetSymbol(asset.symbol);
+                        clearAmount();
+                      }}
                       style={[
                         {
                           flexDirection: "row",
@@ -4748,7 +5351,10 @@ function Wallet() {
                 label={t("Pay amount", "支付金额")}
                 value={`${amount || "0"} ${selectedSource.symbol}`}
               />
-              <Row label={t("Estimated USD", "\u9884\u8ba1\u7f8e\u5143\u4ef7\u503c")} value={usdReviewRow(selectedSource.symbol, amount || "0")[1]} />
+              <Row
+                label={t("Estimated USD", "\u9884\u8ba1\u7f8e\u5143\u4ef7\u503c")}
+                value={usdReviewRow(selectedSource.symbol, amount || "0")[1]}
+              />
               <Row label={t("Recipient", "收款地址")} value={recipient || "—"} />
               {isPrivate && (
                 <>
@@ -5058,27 +5664,11 @@ function Wallet() {
                     borderRadius: 999,
                     paddingHorizontal: 10,
                     paddingVertical: 4,
-                    backgroundColor:
-                      r.status === "confirmed"
-                        ? colors.tint
-                        : r.status === "failed" || r.status === "reverted"
-                          ? colors.dangerTint
-                          : colors.warnTint,
+                    backgroundColor: statusTone(r.status).bg,
                   }}
                 >
                   <Text
-                    style={[
-                      s.small,
-                      {
-                        fontWeight: "600",
-                        color:
-                          r.status === "confirmed"
-                            ? colors.green
-                            : r.status === "failed" || r.status === "reverted"
-                              ? colors.danger
-                              : colors.yellow,
-                      },
-                    ]}
+                    style={[s.small, { fontWeight: "600", color: statusTone(r.status).color }]}
                   >
                     {r.status}
                   </Text>
@@ -5094,127 +5684,157 @@ function Wallet() {
       const isBridge = Boolean(
         r.bridgeInput || (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) || r.isPrivateBridge,
       );
+      const isSend =
+        !isBridge && (!!r.recipient || r.title.startsWith("Sent") || r.title.startsWith("发送"));
+      const tone = statusTone(r.status);
+      const savedName = r.payee ? contactsCore.nameFor(book, r.payee) : "";
       return (
         <>
-          <Header
-            title={r.title}
-            onBack={() => setPage("activity")}
-            backLabel={t("Activity", "记录")}
-          />
+          <Header title={r.title} onBack={() => setPage("activity")} backLabel={t("Activity", "记录")} />
+          <View style={[s.panel, { alignItems: "center", gap: 8, paddingVertical: 28 }]}>
+            <View style={[s.iconDisc, { width: 56, height: 56, borderRadius: 28 }]}>
+              {isSend ? (
+                <Icon name="arrow-top-right" size={26} color={colors.ink} />
+              ) : (
+                <Icon name={isBridge ? "bridge" : "swap-vertical"} size={26} color={colors.ink} />
+              )}
+            </View>
+            <Text style={[s.label, { fontSize: 17, textAlign: "center" }]}>{r.title}</Text>
+            {r.createdAt ? (
+              <Text style={s.small}>{new Date(r.createdAt).toLocaleString()}</Text>
+            ) : null}
+            <View
+              style={{
+                marginTop: 4,
+                borderRadius: 999,
+                paddingHorizontal: 12,
+                paddingVertical: 5,
+                backgroundColor: tone.bg,
+              }}
+            >
+              <Text style={[s.small, { fontWeight: "700", color: tone.color }]}>{r.status}</Text>
+            </View>
+          </View>
           {r.payee ? (
             <View style={[s.panel, { gap: 10 }]}>
-              <Text selectable style={s.small}>
-                {t("To", "发送至")}:{" "}
-                {contactsCore.nameFor(book, r.payee)
-                  ? `${contactsCore.nameFor(book, r.payee)} · `
-                  : ""}
-                {r.payee}
+              <Text style={s.eyebrow}>{t("To", "发送至")}</Text>
+              <Text selectable style={s.text}>
+                {savedName ? `${savedName} · ` : ""}
+                {short(r.payee)}
               </Text>
               <Button onPress={() => openContact(r.payee)}>
-                {contactsCore.nameFor(book, r.payee)
-                  ? t("Rename address", "重命名地址")
-                  : t("Save to contacts", "保存到联系人")}
+                {savedName ? t("Rename address", "重命名地址") : t("Save to contacts", "保存到联系人")}
               </Button>
             </View>
           ) : null}
-          <View style={[s.panel, { gap: 10 }]}>
-            <Text style={s.eyebrow}>{t("Transaction hash", "交易哈希")}</Text>
-            <Text selectable style={[s.mono, { fontSize: 12, color: colors.muted }]}>
+          {r.delivery ? (
+            <Group title={t("Delivery", "到账")}>
+              <Row
+                label={isBridge ? t("Relay delivery", "Relay 到账") : t("Route delivery", "路由到账")}
+                value={r.delivery}
+              />
+            </Group>
+          ) : null}
+          <Group title={t("Actions", "操作")}>
+            <ListRow
+              icon="refresh"
+              label={t("Check status", "检查状态")}
+              onPress={() =>
+                void run(async (g) => {
+                  const sourceStatus = await transactionStatus(r.hash);
+                  g();
+                  let delivery = r.delivery;
+                  let payoutHash = r.payoutHash;
+                  if (r.reference && sourceStatus === "confirmed") {
+                    if (r.isPrivateBridge) {
+                      const result = await api(`/api/bridge/private/jobs/${r.reference}`);
+                      g();
+                      delivery =
+                        result.job?.status === "confirmed"
+                          ? "delivered"
+                          : result.job?.status === "refunded"
+                            ? "refunded"
+                            : (result.job?.status ?? "pending");
+                      if (result.job?.relay_deposit_tx_hash) {
+                        payoutHash = result.job.relay_deposit_tx_hash;
+                      }
+                    } else if (isBridge) {
+                      const result = await api(`/api/bridge/status/${r.reference}`);
+                      g();
+                      delivery = result.status?.status ?? result.status;
+                    } else {
+                      const result = await api(`/api/private-send/jobs/${r.reference}`);
+                      g();
+                      delivery =
+                        result.job?.status === "confirmed"
+                          ? "delivered"
+                          : (result.job?.status ?? "pending");
+                      if (result.job?.payout_tx_hash) {
+                        payoutHash = result.job.payout_tx_hash;
+                      }
+                    }
+                  }
+                  await store({
+                    ...dataRef.current,
+                    history: dataRef.current.history.map((h) =>
+                      h.hash === r.hash ? { ...h, status: sourceStatus, delivery, payoutHash } : h,
+                    ),
+                  });
+                  if (r.actionHash && sourceStatus === "confirmed") {
+                    await api("/api/intent/receipt", {
+                      actionHash: r.actionHash,
+                      txHash: r.hash,
+                      recipient: r.recipient,
+                    });
+                  }
+                  setNotice({
+                    title: t("Status updated", "状态已更新"),
+                    body: t(
+                      `Source: ${sourceStatus}${delivery ? ` · Delivery: ${delivery}` : ""}`,
+                      `源交易: ${sourceStatus}${delivery ? ` · 到账: ${delivery}` : ""}`,
+                    ),
+                    tone: "success",
+                  });
+                })
+              }
+              right={busy ? <TeraSpinner size={18} /> : <Icon name="chevron-right" size={22} color={colors.faint} />}
+            />
+            {r.payoutHash && (
+              <ListRow
+                icon="open-in-new"
+                label={t("View payout tx", "查看出资交易")}
+                onPress={() =>
+                  void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.payoutHash}`)
+                }
+              />
+            )}
+            <ListRow
+              icon="open-in-new"
+              label={t("View on explorer", "在浏览器查看")}
+              onPress={() =>
+                void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.hash}`)
+              }
+            />
+          </Group>
+          <View style={[s.panel, { gap: 8 }]}>
+            <Text style={s.eyebrow}>{t("Technical details", "技术详情")}</Text>
+            <Row label={t("Hash", "哈希")} value={short(r.hash)} />
+            {r.reference && (
+              <Row
+                label={
+                  r.isPrivateBridge
+                    ? t("Private Bridge", "私密跨链")
+                    : isBridge
+                      ? t("Relay", "Relay")
+                      : t("Route", "路由")
+                }
+                value={short(r.reference)}
+              />
+            )}
+            <Text selectable style={[s.mono, { fontSize: 11, color: colors.faint }]}>
               {r.hash}
             </Text>
-            {r.reference && (
-              <Text selectable style={s.small}>
-                {r.isPrivateBridge
-                  ? `Private Bridge: ${r.reference}`
-                  : isBridge
-                    ? `Relay: ${r.reference}`
-                    : `Route: ${r.reference}`}
-              </Text>
-            )}
           </View>
-          {action(
-            "Check status",
-            "检查状态",
-            async (g) => {
-              const sourceStatus = await transactionStatus(r.hash);
-              g();
-              let delivery = r.delivery;
-              let payoutHash = r.payoutHash;
-              if (r.reference && sourceStatus === "confirmed") {
-                if (r.isPrivateBridge) {
-                  const result = await api(`/api/bridge/private/jobs/${r.reference}`);
-                  g();
-                  delivery =
-                    result.job?.status === "confirmed"
-                      ? "delivered"
-                      : result.job?.status === "refunded"
-                        ? "refunded"
-                        : (result.job?.status ?? "pending");
-                  if (result.job?.relay_deposit_tx_hash) {
-                    payoutHash = result.job.relay_deposit_tx_hash;
-                  }
-                } else if (isBridge) {
-                  const result = await api(`/api/bridge/status/${r.reference}`);
-                  g();
-                  delivery = result.status?.status ?? result.status;
-                } else {
-                  const result = await api(`/api/private-send/jobs/${r.reference}`);
-                  g();
-                  delivery =
-                    result.job?.status === "confirmed"
-                      ? "delivered"
-                      : (result.job?.status ?? "pending");
-                  if (result.job?.payout_tx_hash) {
-                    payoutHash = result.job.payout_tx_hash;
-                  }
-                }
-              }
-              await store({
-                ...dataRef.current,
-                history: dataRef.current.history.map((h) =>
-                  h.hash === r.hash ? { ...h, status: sourceStatus, delivery, payoutHash } : h,
-                ),
-              });
-              if (r.actionHash && sourceStatus === "confirmed") {
-                await api("/api/intent/receipt", {
-                  actionHash: r.actionHash,
-                  txHash: r.hash,
-                  recipient: r.recipient,
-                });
-              }
-              setNotice({
-                title: t("Status updated", "状态已更新"),
-                body: t(
-                  `Source: ${sourceStatus}${delivery ? ` · Delivery: ${delivery}` : ""}`,
-                  `源交易: ${sourceStatus}${delivery ? ` · 到账: ${delivery}` : ""}`,
-                ),
-                tone: "success",
-              });
-            },
-            false,
-          )}
-          {r.delivery && (
-            <Row
-              label={isBridge ? t("Relay delivery", "Relay 到账") : t("Route delivery", "路由到账")}
-              value={r.delivery}
-            />
-          )}
-          {r.payoutHash && (
-            <Button
-              onPress={() =>
-                void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.payoutHash}`)
-              }
-            >
-              {t("View payout tx", "查看出资交易")}
-            </Button>
-          )}
-          <Button
-            onPress={() =>
-              void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.hash}`)
-            }
-          >
-            {t("View on explorer", "在浏览器查看")}
-          </Button>
         </>
       );
     }
@@ -5659,7 +6279,10 @@ function Wallet() {
             <ListRow
               icon="key-variant"
               label={t("Show private key", "显示私钥")}
-              detail={t("For this wallet only · authentication required", "仅适用于此钱包 · 需要身份验证")}
+              detail={t(
+                "For this wallet only · authentication required",
+                "仅适用于此钱包 · 需要身份验证",
+              )}
               disabled={busy}
               onPress={() => requestPrivateKey(vault.selectedIndex())}
             />
@@ -6598,71 +7221,85 @@ function Wallet() {
         animationType="slide"
         onRequestClose={() => setSwapPayPicker(false)}
       >
-        <SafeAreaView style={s.page}>
-          <Header
-            title={t("Choose a token to pay", "\u9009\u62e9\u652f\u4ed8\u4ee3\u5e01")}
-            onBack={() => setSwapPayPicker(false)}
-            backLabel={t("Cancel", "\u53d6\u6d88")}
-          />
-          <ScrollView contentContainerStyle={s.content}>
-            {assets
-              .filter((a) => a.symbol !== "USDG" && (a.symbol === "ETH" || a.symbol === "TERA" || listedSymbols.includes(a.symbol)))
-              .map((a) => (
-                <Pressable
-                  key={a.symbol}
-                  onPress={() => {
-                    setAssetSymbol(a.symbol);
-                    setTrade("SELL");
-                    clearAmount();
-                    setSwapPayPicker(false);
-                  }}
-                  style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
-                >
-                  <TokenIcon symbol={a.symbol} size={32} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[s.text, { fontWeight: "600" }]}>{a.name || a.symbol}</Text>
-                    <Text style={s.small}>{a.symbol}</Text>
-                  </View>
-                  {assetSymbol === a.symbol && trade === "SELL" && (
-                    <Icon name="check" size={20} color={colors.green} />
-                  )}
-                </Pressable>
-              ))}
-          </ScrollView>
-        </SafeAreaView>
+        <SafeAreaProvider>
+          <SafeAreaView style={s.page}>
+            <Header
+              title={t("Choose a token to pay", "\u9009\u62e9\u652f\u4ed8\u4ee3\u5e01")}
+              onBack={() => setSwapPayPicker(false)}
+              backLabel={t("Cancel", "\u53d6\u6d88")}
+            />
+            <ScrollView contentContainerStyle={s.content}>
+              {assets
+                .filter(
+                  (a) =>
+                    a.symbol !== "USDG" &&
+                    (a.symbol === "ETH" || a.symbol === "TERA" || listedSymbols.includes(a.symbol)),
+                )
+                .map((a) => (
+                  <Pressable
+                    key={a.symbol}
+                    onPress={() => {
+                      setAssetSymbol(a.symbol);
+                      setTrade("SELL");
+                      clearAmount();
+                      setSwapPayPicker(false);
+                    }}
+                    style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
+                  >
+                    <TokenIcon symbol={a.symbol} size={32} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.text, { fontWeight: "600" }]}>{a.name || a.symbol}</Text>
+                      <Text style={s.small}>{a.symbol}</Text>
+                    </View>
+                    {assetSymbol === a.symbol && trade === "SELL" && (
+                      <Icon name="check" size={20} color={colors.green} />
+                    )}
+                  </Pressable>
+                ))}
+            </ScrollView>
+          </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
       <Modal
         visible={swapReceivePicker && !!owner}
         animationType="slide"
         onRequestClose={() => setSwapReceivePicker(false)}
       >
-        <SafeAreaView style={s.page}>
-          <Header
-            title={t("Choose a token", "选择代币")}
-            onBack={() => setSwapReceivePicker(false)}
-            backLabel={t("Cancel", "取消")}
-          />
-          <ScrollView contentContainerStyle={s.content}>
-            {assets
-              .filter((a) => a.symbol !== "USDG" && (a.symbol === "ETH" || a.symbol === "TERA" || listedSymbols.includes(a.symbol)))
-              .map((a) => (
-                <Pressable
-                  key={a.symbol}
-                  onPress={() => {
-                    setAssetSymbol(a.symbol);
-                    setTrade("BUY");
-                    clearAmount();
-                    setSwapReceivePicker(false);
-                  }}
-                  style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
-                >
-                  <TokenIcon symbol={a.symbol} size={32} />
-                  <Text style={[s.text, { flex: 1, fontWeight: "600" }]}>{a.symbol}</Text>
-                  {assetSymbol === a.symbol && <Icon name="check" size={20} color={colors.green} />}
-                </Pressable>
-              ))}
-          </ScrollView>
-        </SafeAreaView>
+        <SafeAreaProvider>
+          <SafeAreaView style={s.page}>
+            <Header
+              title={t("Choose a token", "选择代币")}
+              onBack={() => setSwapReceivePicker(false)}
+              backLabel={t("Cancel", "取消")}
+            />
+            <ScrollView contentContainerStyle={s.content}>
+              {assets
+                .filter(
+                  (a) =>
+                    a.symbol !== "USDG" &&
+                    (a.symbol === "ETH" || a.symbol === "TERA" || listedSymbols.includes(a.symbol)),
+                )
+                .map((a) => (
+                  <Pressable
+                    key={a.symbol}
+                    onPress={() => {
+                      setAssetSymbol(a.symbol);
+                      setTrade("BUY");
+                      clearAmount();
+                      setSwapReceivePicker(false);
+                    }}
+                    style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
+                  >
+                    <TokenIcon symbol={a.symbol} size={32} />
+                    <Text style={[s.text, { flex: 1, fontWeight: "600" }]}>{a.symbol}</Text>
+                    {assetSymbol === a.symbol && (
+                      <Icon name="check" size={20} color={colors.green} />
+                    )}
+                  </Pressable>
+                ))}
+            </ScrollView>
+          </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
       <Modal
         visible={voiceMode && !!owner}
@@ -6719,67 +7356,69 @@ function Wallet() {
         animationType="slide"
         onRequestClose={() => !busy && setMinimisePlan(null)}
       >
-        <SafeAreaView style={s.page}>
-          <ScrollView contentContainerStyle={s.content}>
-            {title(
-              "Review private prompt",
-              "Review private prompt",
-              t(
-                "Your message is processed on this phone first. Placeholder values are restored only in the reply shown here.",
-                "Your message is processed on this phone first. Placeholder values are restored only in the reply shown here.",
-              ),
-            )}
-            <Text style={s.eyebrow}>{t("WHAT YOU TYPED", "WHAT YOU TYPED")}</Text>
-            <View style={s.panel}>
-              <Text selectable style={s.text}>
-                {minimisePlan?.text}
-              </Text>
-            </View>
-            <Text style={s.eyebrow}>{t("WHAT LEAVES THIS PHONE", "WHAT LEAVES THIS PHONE")}</Text>
-            <View style={[s.panel, { backgroundColor: colors.dark }]}>
-              <Text selectable style={[s.text, { color: "#ffffff" }]}>
-                {minimisePlan?.skeleton}
-              </Text>
-            </View>
-            <Text style={s.small}>
-              {t(
-                `${minimisePlan?.placeholders.length || 0} values are replaced locally. This removes literal values from the message; it does not make you anonymous.`,
-                `${minimisePlan?.placeholders.length || 0} values are replaced locally. This removes literal values from the message; it does not make you anonymous.`,
+        <SafeAreaProvider>
+          <SafeAreaView style={s.page}>
+            <ScrollView contentContainerStyle={s.content}>
+              {title(
+                "Review private prompt",
+                "Review private prompt",
+                t(
+                  "Your message is processed on this phone first. Placeholder values are restored only in the reply shown here.",
+                  "Your message is processed on this phone first. Placeholder values are restored only in the reply shown here.",
+                ),
               )}
-            </Text>
-            {!!minimisePlan?.kept.length && (
+              <Text style={s.eyebrow}>{t("WHAT YOU TYPED", "WHAT YOU TYPED")}</Text>
+              <View style={s.panel}>
+                <Text selectable style={s.text}>
+                  {minimisePlan?.text}
+                </Text>
+              </View>
+              <Text style={s.eyebrow}>{t("WHAT LEAVES THIS PHONE", "WHAT LEAVES THIS PHONE")}</Text>
+              <View style={[s.panel, { backgroundColor: colors.dark }]}>
+                <Text selectable style={[s.text, { color: "#ffffff" }]}>
+                  {minimisePlan?.skeleton}
+                </Text>
+              </View>
               <Text style={s.small}>
                 {t(
-                  "A transaction proposal keeps its recipient and amount so it can be prepared. They are shown above.",
-                  "A transaction proposal keeps its recipient and amount so it can be prepared. They are shown above.",
+                  `${minimisePlan?.placeholders.length || 0} values are replaced locally. This removes literal values from the message; it does not make you anonymous.`,
+                  `${minimisePlan?.placeholders.length || 0} values are replaced locally. This removes literal values from the message; it does not make you anonymous.`,
                 )}
               </Text>
-            )}
-            <Button
-              primary
-              disabled={busy}
-              onPress={() => {
-                const plan = minimisePlan;
-                setMinimisePlan(null);
-                if (plan) void run((guard) => deliverAssistantMessage(guard, plan));
-              }}
-            >
-              {t("Send minimised", "Send minimised")}
-            </Button>
-            <Button
-              disabled={busy}
-              onPress={() => {
-                setMinimisePlan(null);
-                void run((guard) => deliverAssistantMessage(guard));
-              }}
-            >
-              {t("Send as typed", "Send as typed")}
-            </Button>
-            <Button disabled={busy} onPress={() => setMinimisePlan(null)}>
-              {t("Cancel", "Cancel")}
-            </Button>
-          </ScrollView>
-        </SafeAreaView>
+              {!!minimisePlan?.kept.length && (
+                <Text style={s.small}>
+                  {t(
+                    "A transaction proposal keeps its recipient and amount so it can be prepared. They are shown above.",
+                    "A transaction proposal keeps its recipient and amount so it can be prepared. They are shown above.",
+                  )}
+                </Text>
+              )}
+              <Button
+                primary
+                disabled={busy}
+                onPress={() => {
+                  const plan = minimisePlan;
+                  setMinimisePlan(null);
+                  if (plan) void run((guard) => deliverAssistantMessage(guard, plan));
+                }}
+              >
+                {t("Send minimised", "Send minimised")}
+              </Button>
+              <Button
+                disabled={busy}
+                onPress={() => {
+                  setMinimisePlan(null);
+                  void run((guard) => deliverAssistantMessage(guard));
+                }}
+              >
+                {t("Send as typed", "Send as typed")}
+              </Button>
+              <Button disabled={busy} onPress={() => setMinimisePlan(null)}>
+                {t("Cancel", "Cancel")}
+              </Button>
+            </ScrollView>
+          </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
       <Modal
         visible={!!review && !!owner}
@@ -6847,20 +7486,30 @@ function Wallet() {
                 accessibilityRole="button"
                 accessibilityState={{ expanded: reviewDetailsOpen }}
                 onPress={() => setReviewDetailsOpen((open) => !open)}
-                style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 10 }}
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  paddingVertical: 10,
+                }}
               >
                 <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
                   {t("Transaction details", "\u4ea4\u6613\u8be6\u60c5")}
                 </Text>
-                <Icon name={reviewDetailsOpen ? "chevron-up" : "chevron-down"} size={18} color={colors.green} />
-              </Pressable>
-              {reviewDetailsOpen && review?.steps.map((step, index) => (
-                <Row
-                  key={`${step.to}-${index}`}
-                  label={`${t("Step", "步骤")} ${index + 1}`}
-                  value={`${step.data === "0x" ? t("Native transfer", "原生转账") : t("Contract call", "合约调用")} · ${step.to.slice(0, 8)}…${step.to.slice(-4)}`}
+                <Icon
+                  name={reviewDetailsOpen ? "chevron-up" : "chevron-down"}
+                  size={18}
+                  color={colors.green}
                 />
-              ))}
+              </Pressable>
+              {reviewDetailsOpen &&
+                review?.steps.map((step, index) => (
+                  <Row
+                    key={`${step.to}-${index}`}
+                    label={`${t("Step", "步骤")} ${index + 1}`}
+                    value={`${step.data === "0x" ? t("Native transfer", "原生转账") : t("Contract call", "合约调用")} · ${step.to.slice(0, 8)}…${step.to.slice(-4)}`}
+                  />
+                ))}
               {signing && (
                 <View
                   style={[
@@ -7003,8 +7652,14 @@ function Wallet() {
               </Text>
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel={t("Hold to sign transaction", "\u6309\u4f4f\u4ee5\u7b7e\u7f72\u4ea4\u6613")}
-                accessibilityHint={t("Keep holding briefly to approve this reviewed transaction.", "\u6301\u7eed\u6309\u4f4f\u4ee5\u6279\u51c6\u5df2\u5ba1\u6838\u7684\u4ea4\u6613\u3002")}
+                accessibilityLabel={t(
+                  "Hold to sign transaction",
+                  "\u6309\u4f4f\u4ee5\u7b7e\u7f72\u4ea4\u6613",
+                )}
+                accessibilityHint={t(
+                  "Keep holding briefly to approve this reviewed transaction.",
+                  "\u6301\u7eed\u6309\u4f4f\u4ee5\u6279\u51c6\u5df2\u5ba1\u6838\u7684\u4ea4\u6613\u3002",
+                )}
                 delayLongPress={HOLD_TO_SIGN_MS}
                 disabled={busy || signing || review?.simulation === "checking" || !review}
                 onLongPress={() => {
@@ -7019,12 +7674,20 @@ function Wallet() {
                 onPressIn={() => {
                   holdProgress.stopAnimation();
                   holdProgress.setValue(0);
-                  Animated.timing(holdProgress, { toValue: 1, duration: HOLD_TO_SIGN_MS, useNativeDriver: false }).start();
+                  Animated.timing(holdProgress, {
+                    toValue: 1,
+                    duration: HOLD_TO_SIGN_MS,
+                    useNativeDriver: false,
+                  }).start();
                   void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                 }}
                 onPressOut={() => {
                   holdProgress.stopAnimation();
-                  Animated.timing(holdProgress, { toValue: 0, duration: 120, useNativeDriver: false }).start();
+                  Animated.timing(holdProgress, {
+                    toValue: 0,
+                    duration: 120,
+                    useNativeDriver: false,
+                  }).start();
                 }}
                 style={({ pressed }) => ({
                   minHeight: 56,
@@ -7033,7 +7696,8 @@ function Wallet() {
                   alignItems: "center",
                   justifyContent: "center",
                   overflow: "hidden",
-                  opacity: busy || signing || review?.simulation === "checking" ? 0.5 : pressed ? 0.82 : 1,
+                  opacity:
+                    busy || signing || review?.simulation === "checking" ? 0.5 : pressed ? 0.82 : 1,
                 })}
               >
                 <Animated.View
@@ -7043,7 +7707,10 @@ function Wallet() {
                     left: 0,
                     top: 0,
                     bottom: 0,
-                    width: holdProgress.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }),
+                    width: holdProgress.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: ["0%", "100%"],
+                    }),
                     backgroundColor: colors.lime,
                     opacity: 0.35,
                   }}
@@ -7333,69 +8000,172 @@ function Wallet() {
           </View>
         </View>
       </Modal>
-      <Modal visible={!!revealed && !!owner} onRequestClose={() => { setRevealed(""); setPhraseCopied(false); }}>
-        <SafeAreaView style={s.page}>
-          <View style={s.content}>
-            {title("Recovery phrase.", "助记词。")}
-            <Text style={s.small}>
-              {t(
-                "Write this down privately. Never send it to anyone.",
-                "请私下记好，切勿发送给任何人。",
-              )}
-            </Text>
-            <Text style={[s.mono, { fontSize: 20, lineHeight: 36 }]}>{revealed}</Text>
+      <Modal
+        visible={biometricSheet && !!owner}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !busy && setBiometricSheet(false)}
+      >
+        <View
+          style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "center", padding: 24 }}
+        >
+          <View style={[s.panel, { backgroundColor: colors.sheet, gap: 14 }]}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+              <View style={s.iconDisc}>
+                <Icon name="fingerprint" size={20} color={colors.green} />
+              </View>
+              <Text style={[s.text, { fontWeight: "700", flex: 1 }]}>
+                {t("Enable biometric unlock", "启用生物识别解锁")}
+              </Text>
+            </View>
+            <Field
+              label={t("Password to enable biometrics", "启用生物识别所需的密码")}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+            />
+            {biometricError ? (
+              <Text style={[s.small, { color: colors.danger }]}>{biometricError}</Text>
+            ) : null}
+            {action("Enable biometric unlock", "启用生物识别解锁", async () => {
+              // Caught here, not left to `run`: a thrown error would route
+              // through the global `error` state, which opens the shared
+              // notice Modal on top of this still-open one and hangs iOS.
+              try {
+                await vault.enableBiometrics(password);
+                setPassword("");
+                setBiometricSheet(false);
+                setNotice({
+                  title: t("Biometric unlock enabled", "已启用生物识别解锁"),
+                  body: t(
+                    "Use Face ID or a fingerprint to unlock next time.",
+                    "下次可使用 Face ID 或指纹解锁。",
+                  ),
+                  tone: "success",
+                });
+              } catch (e) {
+                setBiometricError(
+                  e instanceof Error ? e.message : t("Couldn't enable that.", "无法启用该功能。"),
+                );
+              }
+            })}
             <Button
-              onPress={() => void Clipboard.setStringAsync(revealed).then(() => setPhraseCopied(true))}
+              disabled={busy}
+              onPress={() => {
+                setBiometricSheet(false);
+                setPassword("");
+                setBiometricError("");
+              }}
             >
-              {t(
-                phraseCopied ? "Copied" : "Copy recovery phrase",
-                phraseCopied ? "\u5df2\u590d\u5236" : "\u590d\u5236\u52a9\u8bb0\u8bcd",
-              )}
+              {t("Cancel", "取消")}
             </Button>
-<Button onPress={() => setRevealed("")}>{t("Done", "完成")}</Button>
           </View>
-        </SafeAreaView>
+        </View>
+      </Modal>
+      <Modal
+        visible={!!revealed && !!owner}
+        onRequestClose={() => {
+          setRevealed("");
+          setPhraseCopied(false);
+        }}
+      >
+        <SafeAreaProvider>
+          <SafeAreaView style={s.page}>
+            <View style={s.content}>
+              {title("Recovery phrase.", "助记词。")}
+              <Text style={s.small}>
+                {t(
+                  "Write this down privately. Never send it to anyone.",
+                  "请私下记好，切勿发送给任何人。",
+                )}
+              </Text>
+              <Text style={[s.mono, { fontSize: 20, lineHeight: 36 }]}>{revealed}</Text>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() =>
+                  void Clipboard.setStringAsync(revealed).then(() => setPhraseCopied(true))
+                }
+                style={({ pressed }) => [s.button, { opacity: pressed ? 0.8 : 1 }]}
+              >
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 8,
+                  }}
+                >
+                  <Icon name="copy" size={16} color={colors.ink} />
+                  <Text style={s.buttonText}>
+                    {t(
+                      phraseCopied ? "Copied" : "Copy recovery phrase",
+                      phraseCopied ? "\u5df2\u590d\u5236" : "\u590d\u5236\u52a9\u8bb0\u8bcd",
+                    )}
+                  </Text>
+                </View>
+              </Pressable>
+              <Button onPress={() => setRevealed("")}>{t("Done", "完成")}</Button>
+            </View>
+          </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
       <Modal
         visible={!!revealedKey && !!owner}
-        onRequestClose={() => { setRevealedKey(null); setKeyCopied(false); }}
+        onRequestClose={() => {
+          setRevealedKey(null);
+          setKeyCopied(false);
+        }}
       >
-        <SafeAreaView style={s.page}>
-          <ScrollView contentContainerStyle={s.content}>
-            {title("Private key.", "私钥。")}
-            <Text style={s.small}>
-              {t(
-                "This key controls this wallet only. Anyone who gets it can move its funds. Keep it private.",
-                "此私钥仅控制此钱包。获取私钥的人可以转走其中的资金，请妥善保管。",
-              )}
-            </Text>
-            <View style={s.panel}>
-              <Text style={s.eyebrow}>
-                {t("Wallet address", "钱包地址")}{revealedKey ? ` · ${walletName({ index: revealedKey.index, name: accounts.find((entry) => entry.index === revealedKey.index)?.name || "" })}` : ""}
+        <SafeAreaProvider>
+          <SafeAreaView style={s.page}>
+            <ScrollView contentContainerStyle={s.content}>
+              {title("Private key.", "私钥。")}
+              <Text style={s.small}>
+                {t(
+                  "This key controls this wallet only. Anyone who gets it can move its funds. Keep it private.",
+                  "此私钥仅控制此钱包。获取私钥的人可以转走其中的资金，请妥善保管。",
+                )}
               </Text>
-              <Text style={s.mono} selectable>{revealedKey?.address}</Text>
-            </View>
-            <View style={s.panel}>
-              <Text style={s.eyebrow}>{t("Private key", "私钥")}</Text>
-              <Text style={[s.mono, { fontSize: 17, lineHeight: 27 }]} selectable>
-                {revealedKey?.privateKey}
-              </Text>
-            </View>
-            <Button
-              primary
-              onPress={() => {
-                if (revealedKey) {
-                  void Clipboard.setStringAsync(revealedKey.privateKey).then(() => setKeyCopied(true));
-                }
-              }}
-            >
-              {keyCopied ? t("Copied", "已复制") : t("Copy private key", "复制私钥")}
-            </Button>
-            <Button onPress={() => { setRevealedKey(null); setKeyCopied(false); }}>
-              {t("Done", "完成")}
-            </Button>
-          </ScrollView>
-        </SafeAreaView>
+              <View style={s.panel}>
+                <Text style={s.eyebrow}>
+                  {t("Wallet address", "钱包地址")}
+                  {revealedKey
+                    ? ` · ${walletName({ index: revealedKey.index, name: accounts.find((entry) => entry.index === revealedKey.index)?.name || "" })}`
+                    : ""}
+                </Text>
+                <Text style={s.mono} selectable>
+                  {revealedKey?.address}
+                </Text>
+              </View>
+              <View style={s.panel}>
+                <Text style={s.eyebrow}>{t("Private key", "私钥")}</Text>
+                <Text style={[s.mono, { fontSize: 17, lineHeight: 27 }]} selectable>
+                  {revealedKey?.privateKey}
+                </Text>
+              </View>
+              <Button
+                primary
+                onPress={() => {
+                  if (revealedKey) {
+                    void Clipboard.setStringAsync(revealedKey.privateKey).then(() =>
+                      setKeyCopied(true),
+                    );
+                  }
+                }}
+              >
+                {keyCopied ? t("Copied", "已复制") : t("Copy private key", "复制私钥")}
+              </Button>
+              <Button
+                onPress={() => {
+                  setRevealedKey(null);
+                  setKeyCopied(false);
+                }}
+              >
+                {t("Done", "完成")}
+              </Button>
+            </ScrollView>
+          </SafeAreaView>
+        </SafeAreaProvider>
       </Modal>
     </SafeAreaView>
   );

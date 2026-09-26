@@ -48,8 +48,10 @@ export function verifyProposal(proposal: any, owner: string, now = Date.now()): 
   const amount = positive(intent.amount),
     minimum = (positive(q.amountOutWei) * 9900n) / 10000n;
   check(minimum > 0n);
-  const tokenIn: Address = intent.actionType === "BUY" ? (teraTrade ? zeroAddress : USDG) : intent.assetAddress;
-  const tokenOut: Address = intent.actionType === "BUY" ? intent.assetAddress : (teraTrade ? zeroAddress : USDG);
+  const tokenIn: Address =
+    intent.actionType === "BUY" ? (teraTrade ? zeroAddress : USDG) : intent.assetAddress;
+  const tokenOut: Address =
+    intent.actionType === "BUY" ? intent.assetAddress : teraTrade ? zeroAddress : USDG;
   check(BigInt(tx.value) === (tokenIn === zeroAddress ? amount : 0n));
   const routing = q.routing;
   let expected: Hex;
@@ -103,7 +105,11 @@ export function verifyProposal(proposal: any, owner: string, now = Date.now()): 
     );
     check(
       teraTrade
-        ? same(p.currency0, zeroAddress) && same(p.currency1, TERA) && p.fee === 0 && p.tickSpacing === 200 && same(p.hooks, TERA_HOOK)
+        ? same(p.currency0, zeroAddress) &&
+            same(p.currency1, TERA) &&
+            p.fee === 0 &&
+            p.tickSpacing === 200 &&
+            same(p.hooks, TERA_HOOK)
         : same(p.hooks, zeroAddress),
       "This pool uses a hook not supported in the Android release. / 此池使用的钩子暂不受 Android 版本支持。",
     );

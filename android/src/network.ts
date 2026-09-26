@@ -64,10 +64,7 @@ export async function execute(
     // Android can briefly report background while a native surface has focus.
     // The vault session and selected account determine whether the wallet is
     // actually still available to sign. A real lock increments its version.
-    if (
-      version !== sessionVersion() ||
-      currentAccount().address !== owner
-    )
+    if (version !== sessionVersion() || currentAccount().address !== owner)
       throw new Error("Wallet locked. Review again. / 钱包已锁定，请重新审核。");
     verify();
   };

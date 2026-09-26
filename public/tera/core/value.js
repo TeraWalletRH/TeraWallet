@@ -164,14 +164,19 @@ export function summarise(result = {}, { asOf = "" } = {}) {
 /** A figure for display. Never returns "0.00" for an absent total. */
 export function format(value, { currency = "USD" } = {}) {
   if (value === null || value === undefined || !Number.isFinite(value)) return "—";
+  // A sub-cent token (a new listing, or one priced in a fraction of a cent
+  // like TERA) rounds to "$0.00" at the standard two decimal places, which
+  // reads as no price at all rather than a very small one. Extra precision
+  // only kicks in under $1, so an ordinary price is unaffected.
+  const small = value !== 0 && Math.abs(value) < 1;
   try {
     return new Intl.NumberFormat("en-US", {
       style: "currency",
       currency,
-      maximumFractionDigits: 2,
+      maximumFractionDigits: small ? 8 : 2,
     }).format(value);
   } catch {
-    return `$${value.toFixed(2)}`;
+    return `$${value.toFixed(small ? 8 : 2)}`;
   }
 }
 
