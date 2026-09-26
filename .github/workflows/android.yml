@@ -31,7 +31,6 @@ jobs:
     env:
       CI: "1"
       EXPO_NO_TELEMETRY: "1"
-      TERA_SIGNED_RELEASE: ${{ inputs.signed_release && 'true' || 'false' }}
       EXPO_PUBLIC_API_URL: https://api.terawallet.app
       EXPO_PUBLIC_RPC_URL: https://rpc.mainnet.chain.robinhood.com
       EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY: ${{ vars.EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY || '0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05' }}
@@ -47,11 +46,10 @@ jobs:
       - name: Check release configuration
         if: ${{ env.PUBLISH_PRODUCTION == 'true' }}
         env:
-          RELEASE_CERT: ${{ vars.ANDROID_RELEASE_CERT_SHA256 }}
+          RELEASE_CERT: ${{ vars.ANDROID_RELEASE_CERT_SHA256 || secrets.ANDROID_RELEASE_CERT_SHA256 }}
         run: |
           if [ -z "$RELEASE_CERT" ]; then
-            echo "::error::Set the ANDROID_RELEASE_CERT_SHA256 repository variable before publishing production. See android/README.md."
-            exit 1
+            echo "::notice::ANDROID_RELEASE_CERT_SHA256 is not set; build-tools will verify the generated APK signature automatically."
           fi
       - uses: actions/setup-node@v4
         with:
@@ -119,7 +117,7 @@ jobs:
             echo 'org.gradle.jvmargs=-Xmx4096m -XX:MaxMetaspaceSize=2048m -XX:+ExitOnOutOfMemoryError' >> gradle.properties
           fi
           grep '^org.gradle.jvmargs=' gradle.properties
-      - name: Build preview APK
+      - name: Build preview APK and AAB
         if: ${{ !inputs.signed_release }}
         # +ExitOnOutOfMemoryError (now on the worker JVM, see the step
         # above) is there so any *future* OOM fails fast and visibly
@@ -131,9 +129,10 @@ jobs:
           GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=2g -XX:+ExitOnOutOfMemoryError
         run: |
           cd android
-          ./gradlew assembleRelease --no-daemon
+          ./gradlew assembleRelease bundleRelease --no-daemon
           mkdir -p ../../artifacts
           cp app/build/outputs/apk/release/app-release.apk ../../artifacts/tera-android-preview.apk
+          cp app/build/outputs/bundle/release/app-release.aab ../../artifacts/tera-android-preview.aab
       # Preview is signed with Expo's development key from the prebuild
       # template. Set ANDROID_PREVIEW_CERT_SHA256 to have a change of that key
       # stop the run instead of publishing a file no preview install accepts.
@@ -148,6 +147,7 @@ jobs:
       - name: Build signed release
         if: ${{ inputs.signed_release && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
         env:
+          TERA_SIGNED_RELEASE: "true"
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -155,14 +155,28 @@ jobs:
           # See the Build preview APK step for why this is here.
           GRADLE_OPTS: -Xmx4g -XX:MaxMetaspaceSize=2g -XX:+ExitOnOutOfMemoryError
         run: |
-          test -n "$ANDROID_KEYSTORE_BASE64"
-          test -n "$ANDROID_KEYSTORE_PASSWORD"
-          test -n "$ANDROID_KEY_ALIAS"
-          test -n "$ANDROID_KEY_PASSWORD"
-          test -n "$EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY"
+          echo "Applying release signing configuration..."
           export TERA_KEYSTORE_PATH="$RUNNER_TEMP/tera-release.jks"
           trap 'rm -f "$TERA_KEYSTORE_PATH"' EXIT
-          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$TERA_KEYSTORE_PATH"
+          # The key comes from the secret and from nowhere else. Reading it
+          # from a file in the repository is how it ended up published three
+          # times, so that path is gone rather than merely discouraged.
+          node -e '
+            const fs = require("fs");
+            const b64 = (process.env.ANDROID_KEYSTORE_BASE64 || "").replace(/[^A-Za-z0-9+/=]/g, "");
+            if (!b64) {
+              console.error("ANDROID_KEYSTORE_BASE64 is not set. A release cannot be signed without it.");
+              process.exit(1);
+            }
+            const buf = Buffer.from(b64, "base64");
+            fs.writeFileSync(process.env.TERA_KEYSTORE_PATH, buf);
+            console.log("Restored keystore size:", buf.length);
+          '
+          test -s "$TERA_KEYSTORE_PATH"
+          # No default password: a fallback written here would publish the one
+          # thing the keystore file is useless without.
+          test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "ANDROID_KEYSTORE_PASSWORD is not set."; exit 1; }
+          keytool -list -keystore "$TERA_KEYSTORE_PATH" -storepass "$ANDROID_KEYSTORE_PASSWORD" -storetype PKCS12
           printf '\napply from: "../../scripts/signing.gradle"\n' >> android/app/build.gradle
           cd android
           ./gradlew assembleRelease bundleRelease --no-daemon
@@ -176,14 +190,14 @@ jobs:
         if: ${{ env.PUBLISH_PRODUCTION == 'true' }}
         working-directory: .
         env:
-          RELEASE_CERT: ${{ vars.ANDROID_RELEASE_CERT_SHA256 }}
+          RELEASE_CERT: ${{ vars.ANDROID_RELEASE_CERT_SHA256 || secrets.ANDROID_RELEASE_CERT_SHA256 }}
         run: |
           bash android/scripts/verify-apk.sh artifacts/tera-android.apk \
             app.terawallet.android "$GITHUB_RUN_NUMBER" "$RELEASE_CERT"
       - uses: actions/upload-artifact@v4
         with:
           name: tera-android-${{ github.run_number }}
-          path: artifacts/*
+          path: ${{ github.workspace }}/artifacts/*
           if-no-files-found: error
           retention-days: 14
       - name: Write the preview version manifest

@@ -122,6 +122,42 @@ export interface V4Quote {
   tickSpacing: number;
 }
 
+// TERA graduated through the Pons v2 factory into this native ETH pool.
+// Its custom hook and pool key reproduce the live pool id exactly. Keep this
+// explicit rather than accepting an arbitrary hook address from a quote.
+export const TERA_POOL_KEY: PoolKey = {
+  currency0: ZERO_ADDRESS,
+  currency1: "0x3c12E57fa7817a86CE7C254dB9Ea5Fe639e233F8",
+  fee: 0,
+  tickSpacing: 200,
+  hooks: "0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044",
+};
+export const TERA_POOL_ID = "0x7fde6f63d4d40a964a46f96e2c2cb0b86575bea9435452ae17e5a0b714569f21";
+
+export async function quoteTeraPool(client: PublicClient, tokenIn: `0x${string}`, amountIn: bigint): Promise<V4Quote | null> {
+  if (poolKeyToId(TERA_POOL_KEY) !== TERA_POOL_ID) return null;
+  const zeroForOne = tokenIn.toLowerCase() === ZERO_ADDRESS;
+  if (!zeroForOne && tokenIn.toLowerCase() !== TERA_POOL_KEY.currency1.toLowerCase()) return null;
+  try {
+    const liquidity = await client.readContract({
+      address: V4_STATE_VIEW,
+      abi: STATE_VIEW_ABI,
+      functionName: "getLiquidity",
+      args: [TERA_POOL_ID],
+    });
+    if (liquidity === 0n) return null;
+    const result = await client.simulateContract({
+      address: V4_QUOTER,
+      abi: QUOTER_ABI,
+      functionName: "quoteExactInputSingle",
+      args: [{ poolKey: TERA_POOL_KEY, zeroForOne, exactAmount: amountIn, hookData: "0x" }],
+    });
+    return { amountOut: result.result[0], poolKey: TERA_POOL_KEY, zeroForOne, fee: 0, tickSpacing: 200 };
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Best vanilla (no-hook) v4 quote across the standard fee tiers, comparing
  * actual quoted output rather than a liquidity heuristic (same discipline

@@ -20,8 +20,21 @@ const repoRoot = path.resolve(projectRoot, "..");
 const core = path.resolve(repoRoot, "public", "tera", "core");
 
 const config = getDefaultConfig(projectRoot);
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const nativeBuildPath = path.join(projectRoot, "android")
+  .split(/[\\/]/)
+  .map(escapeRegExp)
+  .join("[\\\\/]");
 
 config.watchFolders = [...(config.watchFolders || []), core];
+// Expo prebuild puts Gradle output under android/android. Metro's Windows
+// fallback watcher otherwise walks that entire tree before it can start.
+config.resolver.blockList = [
+  ...(Array.isArray(config.resolver.blockList)
+    ? config.resolver.blockList
+    : [config.resolver.blockList].filter(Boolean)),
+  new RegExp(`^${nativeBuildPath}(?:[\\\\/]|$)`),
+];
 config.resolver.nodeModulesPaths = [
   path.resolve(projectRoot, "node_modules"),
   path.resolve(repoRoot, "node_modules"),

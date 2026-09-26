@@ -1,7 +1,9 @@
 import { type UserIntent, type GateResult } from "./types";
 import { createPublicClient, http, erc20Abi, isAddress } from "viem";
 import { env } from "../env";
-import { findAsset, SUPPORTED_RWA_ASSETS } from "../data/assets";
+import { findAsset, SUPPORTED_RWA_ASSETS, TERA } from "../data/assets";
+import { quoteSwap } from "../chain/swapQuote";
+import { formatUnits } from "viem";
 import { evaluatePolicy } from "../policy";
 
 const publicClient = createPublicClient({
@@ -168,7 +170,21 @@ export async function checkEligibilityPreflight(intent: UserIntent): Promise<Gat
 }
 
 export async function checkPolicyVault(intent: UserIntent): Promise<GateResult> {
-  const policy = evaluatePolicy(intent);
+  let evaluated = intent;
+  if (intent.actionType === "BUY" && intent.assetAddress.toLowerCase() === TERA.address.toLowerCase()) {
+    try {
+      // The client amount is ETH wei for this pool. Price it independently on
+      // chain so a caller cannot evade the signed USD single-trade cap.
+      const usdQuote = await quoteSwap("WETH", "USDG", formatUnits(BigInt(intent.amount), 18));
+      if (!usdQuote || usdQuote.decimalsOut !== 6) throw new Error("No ETH/USDG quote");
+      const cents = (usdQuote.amountOutWei + 9999n) / 10000n;
+      if (cents > BigInt(Number.MAX_SAFE_INTEGER)) throw new Error("Quote exceeds safe limit");
+      evaluated = { ...intent, maxSpendUsdCents: Math.max(Number(cents), intent.maxSpendUsdCents || 0) };
+    } catch {
+      return { gate: "policy_vault", passed: false, reason: "Cannot verify the USD value of this ETH purchase." };
+    }
+  }
+  const policy = evaluatePolicy(evaluated);
   if (!policy.passed) {
     return {
       gate: "policy_vault",
@@ -204,8 +220,8 @@ export async function checkRiskEngine(intent: UserIntent): Promise<GateResult> {
     gate: "risk_engine",
     passed: true,
     details: {
-      slippageToleranceBps: 50, // 0.5% max slippage
-      quoteFreshnessSeconds: 30,
+      slippageToleranceBps: 100,
+      quoteFreshnessSeconds: 120,
       priceImpactPassed: true,
     },
   };

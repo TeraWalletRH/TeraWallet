@@ -2,7 +2,7 @@ import { entropyToMnemonic, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { mnemonicToAccount } from "viem/accounts";
 import { gcm } from "@noble/ciphers/aes";
-import { pbkdf2Sync } from "react-native-quick-crypto";
+import { pbkdf2Async } from "@noble/hashes/pbkdf2";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils";
 export const normalizePhrase = (s: string) =>
@@ -68,6 +68,17 @@ export const passwordKey = async (
   password: string,
   salt: Uint8Array,
   iterations = PASSWORD_ITERATIONS,
-) => pbkdf2Sync(password.normalize("NFKD"), salt, iterations, 32, "sha256");
+) => {
+  const normalized = password.normalize("NFKD");
+  let nativePbkdf2: typeof import("react-native-quick-crypto").pbkdf2Sync | undefined;
+  try {
+    nativePbkdf2 = require("react-native-quick-crypto").pbkdf2Sync;
+  } catch {
+    // NitroModules is absent in Expo Go; the same KDF runs in JavaScript.
+  }
+  return nativePbkdf2
+    ? nativePbkdf2(normalized, salt, iterations, 32, "sha256")
+    : pbkdf2Async(sha256, utf8ToBytes(normalized), salt, { c: iterations, dkLen: 32 });
+};
 export const dataKey = (phrase: string) =>
   sha256(utf8ToBytes(`tera-mobile-data-v1:${normalizePhrase(phrase)}`));
