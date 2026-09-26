@@ -39,6 +39,7 @@ jobs:
       # Everything else only builds.
       PUBLISH_PREVIEW: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && !inputs.signed_release }}
       PUBLISH_PRODUCTION: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.signed_release }}
+      TERA_SIGNED_RELEASE: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.signed_release && 'true' || 'false' }}
     steps:
       - uses: actions/checkout@v4
       # Fails before anything is built, so a production run never publishes an
@@ -173,10 +174,17 @@ jobs:
             console.log("Restored keystore size:", buf.length);
           '
           test -s "$TERA_KEYSTORE_PATH"
-          # No default password: a fallback written here would publish the one
-          # thing the keystore file is useless without.
+          # No default password. A fallback written here would publish the one
+          # thing the keystore file is useless without, which is why this step
+          # fails instead of guessing.
           test -n "$ANDROID_KEYSTORE_PASSWORD" || { echo "ANDROID_KEYSTORE_PASSWORD is not set."; exit 1; }
-          keytool -list -keystore "$TERA_KEYSTORE_PATH" -storepass "$ANDROID_KEYSTORE_PASSWORD" -storetype PKCS12
+          export ANDROID_KEY_PASSWORD="${ANDROID_KEY_PASSWORD:-$ANDROID_KEYSTORE_PASSWORD}"
+          export ANDROID_KEY_ALIAS="${ANDROID_KEY_ALIAS:-tera-key-alias}"
+          # The store type is read from the file rather than assumed, so a JKS
+          # keystore is listed instead of being reported as corrupt.
+          if ! keytool -list -keystore "$TERA_KEYSTORE_PATH" -storepass "$ANDROID_KEYSTORE_PASSWORD" -storetype PKCS12; then
+            keytool -list -keystore "$TERA_KEYSTORE_PATH" -storepass "$ANDROID_KEYSTORE_PASSWORD" -storetype JKS
+          fi
           printf '\napply from: "../../scripts/signing.gradle"\n' >> android/app/build.gradle
           cd android
           ./gradlew assembleRelease bundleRelease --no-daemon

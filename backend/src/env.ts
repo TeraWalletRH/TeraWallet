@@ -10,6 +10,13 @@ export const env = {
   rhcChainId: Number(process.env.RHC_CHAIN_ID ?? process.env.RHC_ID ?? 4663),
   groqApiKey: process.env.GROQ_API_KEY ?? "",
   relayApiKey: process.env.RELAY_API_KEY ?? "",
+  // Free "Demo" key from coingecko.com/en/api/pricing — without one, every
+  // request shares CoinGecko's anonymous-IP rate limit with everyone else
+  // on the same host, which is what was 429ing the catalog/ETH price calls.
+  // Hardcoded at the owner's explicit request, after being told this repo
+  // is public and the key will be readable by anyone — COINGECKO_API_KEY
+  // still overrides it if set, so rotating it later doesn't need a deploy.
+  coingeckoApiKey: process.env.COINGECKO_API_KEY ?? "EXAMPLE_REDACTED_FIXTURE",
   groqModel: process.env.GROQ_MODEL ?? "qwen/qwen3.8-27b",
   policySignerPrivateKey: process.env.POLICY_SIGNER_PRIVATE_KEY ?? "",
   policySignerAddress: process.env.POLICY_SIGNER_ADDRESS ?? "",
