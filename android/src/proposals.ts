@@ -14,6 +14,8 @@ const ROUTER = "0xcaf681a66d020601342297493863e78c959e5cb2";
 const UNIVERSAL = "0x8876789976decbfcbbbe364623c63652db8c0904";
 const PERMIT = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 const WETH = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73";
+const TERA = "0x3c12E57fa7817a86CE7C254dB9Ea5Fe639e233F8";
+const TERA_HOOK = "0xE5e702641Ea86F4ae6cC3cDaeD2B886f976Be044";
 export const swapAbi = parseAbi([
   "function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96) params) payable returns (uint256)",
   "function exactInput((bytes path,address recipient,uint256 amountIn,uint256 amountOutMinimum) params) payable returns (uint256)",
@@ -33,7 +35,7 @@ export function verifyProposal(proposal: any, owner: string, now = Date.now()): 
     return [tx];
   }
   check(["BUY", "SELL"].includes(intent.actionType));
-  check(BigInt(tx.value) === 0n);
+  const teraTrade = same(intent.assetAddress, TERA);
   const q = tx.quote;
   check(
     q &&
@@ -46,9 +48,11 @@ export function verifyProposal(proposal: any, owner: string, now = Date.now()): 
   const amount = positive(intent.amount),
     minimum = (positive(q.amountOutWei) * 9900n) / 10000n;
   check(minimum > 0n);
-  const tokenIn: Address = intent.actionType === "BUY" ? USDG : intent.assetAddress;
-  const tokenOut: Address = intent.actionType === "BUY" ? intent.assetAddress : USDG;
-  check(tokenIn !== zeroAddress && tokenOut !== zeroAddress);
+  const tokenIn: Address =
+    intent.actionType === "BUY" ? (teraTrade ? zeroAddress : USDG) : intent.assetAddress;
+  const tokenOut: Address =
+    intent.actionType === "BUY" ? intent.assetAddress : teraTrade ? zeroAddress : USDG;
+  check(BigInt(tx.value) === (tokenIn === zeroAddress ? amount : 0n));
   const routing = q.routing;
   let expected: Hex;
   let spender: Address = ROUTER;
@@ -100,7 +104,13 @@ export function verifyProposal(proposal: any, owner: string, now = Date.now()): 
         same(routing.zeroForOne ? p.currency1 : p.currency0, tokenOut),
     );
     check(
-      same(p.hooks, zeroAddress),
+      teraTrade
+        ? same(p.currency0, zeroAddress) &&
+            same(p.currency1, TERA) &&
+            p.fee === 0 &&
+            p.tickSpacing === 200 &&
+            same(p.hooks, TERA_HOOK)
+        : same(p.hooks, zeroAddress),
       "This pool uses a hook not supported in the Android release. / 此池使用的钩子暂不受 Android 版本支持。",
     );
     const decoded = decodeFunctionData({ abi: swapAbi, data: tx.data });
@@ -166,6 +176,7 @@ export function verifyProposal(proposal: any, owner: string, now = Date.now()): 
   }
   check(tx.data.toLowerCase() === expected.toLowerCase());
   check(Array.isArray(tx.approvals) && tx.approvals.length <= (spender === PERMIT ? 2 : 1));
+  if (tokenIn === zeroAddress) check(tx.approvals.length === 0);
   let seenToken = false,
     seenPermit = false;
   for (const approval of tx.approvals) {

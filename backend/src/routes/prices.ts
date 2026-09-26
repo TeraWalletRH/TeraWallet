@@ -43,7 +43,7 @@ async function currentPrices() {
         return Number(quote.amountOut);
       }),
     ...SUPPORTED_RWA_ASSETS.filter(
-      (asset) => ![USDG.symbol, ETH.symbol, "WETH"].includes(asset.symbol),
+      (asset) => ![USDG.symbol, ETH.symbol, "WETH", "TERA"].includes(asset.symbol),
     ).map(async (asset) => {
       const quote = await quoteSwap(asset.symbol, USDG.symbol, "1");
       if (!quote) throw new Error(`No USDG route for ${asset.symbol}.`);
@@ -54,6 +54,15 @@ async function currentPrices() {
   for (const result of rwa) {
     if (result.status === "fulfilled" && Number.isFinite(result.value[1]))
       prices[result.value[0]] = result.value[1];
+  }
+  if (prices.ETH) {
+    try {
+      const teraQuote = await quoteSwap("ETH", "TERA", "0.001");
+      const teraOut = Number(teraQuote?.amountOut);
+      if (Number.isFinite(teraOut) && teraOut > 0) prices.TERA = (prices.ETH * 0.001) / teraOut;
+    } catch {
+      // Other balances and prices remain available if this pool is unavailable.
+    }
   }
   cached = { prices, readAt: Date.now(), expiresAt: Date.now() + TTL_MS };
   return cached;
