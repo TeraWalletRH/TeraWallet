@@ -1,10 +1,17 @@
 import { Router, type Request, type Response } from "express";
 import { ETH, SUPPORTED_RWA_ASSETS, USDG } from "../data/assets";
 import { quoteSwap } from "../chain/swapQuote";
+import { env } from "../env";
 import pool from "../db";
 
 const router = Router();
-const TTL_MS = 30_000;
+// CoinGecko's free tier rate-limits by IP, shared with every other tenant on
+// this host — the actual cause of the 429s seen in production (confirmed via
+// the _debug field below, not guessed). A longer cache means far fewer
+// requests reach it; a real COINGECKO_API_KEY (see env.ts) gives this app
+// its own dedicated limit instead of a shared anonymous one, and is the
+// real fix once one is set.
+const TTL_MS = 120_000;
 let cached:
   | {
       expiresAt: number;
@@ -28,19 +35,18 @@ const CATALOG_COINGECKO_IDS: Record<string, string> = {
   LINK: "chainlink",
 };
 
-// CoinGecko's free tier sits behind bot protection that can 403 a plain
-// server-side fetch with no browser-like User-Agent, even though the exact
-// same request works fine from a developer's machine — matching this to a
-// real browser UA is what actually fixed it, not a retry or a longer timeout.
-const COINGECKO_HEADERS = {
+const COINGECKO_HEADERS: Record<string, string> = {
   accept: "application/json",
   "user-agent":
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  ...(env.coingeckoApiKey ? { "x-cg-demo-api-key": env.coingeckoApiKey } : {}),
 };
 
-// TEMPORARY — the deployed host can't reach CoinGecko for reasons that
-// don't reproduce locally, and there's no log access to see why. Remove
-// this (and its use below) once that's diagnosed and fixed for real.
+// Diagnosed via this same field in production: CoinGecko was returning 429
+// (rate-limited), not blocking the request outright. Kept for now — without
+// a real API key configured, this is the one place that shows whether the
+// longer cache actually keeps this under CoinGecko's shared anonymous limit,
+// or whether a COINGECKO_API_KEY is needed to fix it for good.
 export const lastErrors: Record<string, string> = {};
 
 async function ethUsd() {
@@ -135,8 +141,9 @@ async function catalogQuotes() {
 const SNAPSHOT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const snapshotHistory = new Map<string, { t: number; p: number }[]>();
 // The last time each symbol was written to price_snapshots, so a busy
-// server doesn't insert a new row every 30s forever — one sample every five
-// minutes is more than enough resolution for a 1D/1W/1M/1Y chart, and keeps
+// server doesn't insert a new row on every cache refresh forever — one
+// sample every five minutes is more than enough resolution for a
+// 1D/1W/1M/1Y chart, and keeps
 // a year of history for every RWA symbol to a few hundred thousand rows.
 const lastPersisted = new Map<string, number>();
 const PERSIST_INTERVAL_MS = 5 * 60 * 1000;
@@ -231,7 +238,7 @@ router.get("/api/assets/prices", async (_req: Request, res: Response) => {
     // When these prices were actually read, not when this response was built. A wallet
     // that shows a valuation owes the owner the age of it, and without this the client
     // can only assume the worst case of the cache window and describe every price as
-    // thirty seconds old — including the one it just missed the refresh of.
+    // two minutes old — including the one it just missed the refresh of.
     res.json({
       success: true,
       prices,
