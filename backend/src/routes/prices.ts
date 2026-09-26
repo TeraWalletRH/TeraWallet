@@ -49,25 +49,6 @@ const COINGECKO_HEADERS: Record<string, string> = {
 // or whether a COINGECKO_API_KEY is needed to fix it for good.
 export const lastErrors: Record<string, string> = {};
 
-async function ethUsd() {
-  try {
-    const response = await fetch(
-      "https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd&include_24hr_change=true",
-      { signal: AbortSignal.timeout(8_000), headers: COINGECKO_HEADERS },
-    );
-    if (!response.ok) throw new Error(`CoinGecko price request failed (${response.status}).`);
-    const data = (await response.json()) as {
-      ethereum?: { usd?: number; usd_24h_change?: number };
-    };
-    if (!data.ethereum?.usd || !Number.isFinite(data.ethereum.usd))
-      throw new Error("CoinGecko returned no ETH/USD price.");
-    delete lastErrors.ethCoinGecko;
-    return { price: data.ethereum.usd, change24h: data.ethereum.usd_24h_change };
-  } catch (error) {
-    lastErrors.ethCoinGecko = error instanceof Error ? error.message : String(error);
-    throw error;
-  }
-}
 async function coinbaseEthUsd() {
   try {
     const response = await fetch("https://api.coinbase.com/v2/prices/ETH-USD/spot", {
@@ -88,39 +69,46 @@ async function coinbaseEthUsd() {
   }
 }
 
-// The last successful catalog read, served again if a fresh fetch fails.
-// These coins have no on-chain fallback at all (they're not real tokens on
-// this chain, just a discovery catalog), so without this a single rate-limit
-// blip from CoinGecko blanks all eight prices instead of just going stale.
-let lastGoodCatalog: { prices: Record<string, number>; change24h: Record<string, number> } | undefined;
+// ETH and the catalog placeholders in one request, not two — CoinGecko's
+// free tier caps monthly calls as well as per-minute rate, and this app
+// polls often enough that two calls per refresh could burn through that cap
+// well before the end of a month even with a dedicated key.
+const COINGECKO_IDS: Record<string, string> = { ETH: "ethereum", ...CATALOG_COINGECKO_IDS };
 
-async function catalogQuotes() {
+// The last successful read, served again if a fresh fetch fails. The catalog
+// coins have no on-chain fallback at all (they're not real tokens on this
+// chain, just a discovery catalog) — without this, a single rate-limit blip
+// blanks all of them instead of just going stale. ETH has its own fallback
+// chain below and doesn't need this, but there's no harm in it having one too.
+let lastGoodCoinGecko: { prices: Record<string, number>; change24h: Record<string, number> } | undefined;
+
+async function coinGeckoQuotes() {
   try {
-    const ids = Object.values(CATALOG_COINGECKO_IDS).join(",");
+    const ids = Object.values(COINGECKO_IDS).join(",");
     const response = await fetch(
       `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd&include_24hr_change=true`,
       { signal: AbortSignal.timeout(8_000), headers: COINGECKO_HEADERS },
     );
-    if (!response.ok) throw new Error(`CoinGecko catalog request failed (${response.status}).`);
+    if (!response.ok) throw new Error(`CoinGecko request failed (${response.status}).`);
     const data = (await response.json()) as Record<
       string,
       { usd?: number; usd_24h_change?: number }
     >;
     const prices: Record<string, number> = {};
     const change24h: Record<string, number> = {};
-    for (const [symbol, id] of Object.entries(CATALOG_COINGECKO_IDS)) {
+    for (const [symbol, id] of Object.entries(COINGECKO_IDS)) {
       const entry = data[id];
       if (entry?.usd && Number.isFinite(entry.usd)) prices[symbol] = entry.usd;
       if (Number.isFinite(entry?.usd_24h_change)) change24h[symbol] = entry!.usd_24h_change!;
     }
-    delete lastErrors.catalog;
-    lastGoodCatalog = { prices, change24h };
-    return lastGoodCatalog;
+    delete lastErrors.coinGecko;
+    lastGoodCoinGecko = { prices, change24h };
+    return lastGoodCoinGecko;
   } catch (error) {
-    lastErrors.catalog =
+    lastErrors.coinGecko =
       (error instanceof Error ? error.message : String(error)) +
       (error instanceof Error && error.cause ? ` (cause: ${String(error.cause)})` : "");
-    return lastGoodCatalog || { prices: {}, change24h: {} };
+    return lastGoodCoinGecko || { prices: {}, change24h: {} };
   }
 }
 
@@ -181,15 +169,8 @@ async function currentPrices() {
   if (cached && cached.expiresAt > Date.now()) return cached;
   const prices: Record<string, number> = { USDG: 1 };
   const change24h: Record<string, number> = {};
-  const [eth, ...rwa] = await Promise.allSettled([
-    // CoinGecko is the primary ETH/USD source. If it rate-limits or has a
-    // transient outage, retain a live route-derived USDG fallback instead of
-    // omitting ETH from the wallet’s total.
-    ethUsd().catch(coinbaseEthUsd).catch(async () => {
-      const quote = await quoteSwap(ETH.symbol, USDG.symbol, "1");
-      if (!quote) throw new Error("No ETH/USDG fallback route.");
-      return { price: Number(quote.amountOut), change24h: undefined as number | undefined };
-    }),
+  const [coinGecko, ...rwa] = await Promise.allSettled([
+    coinGeckoQuotes(),
     ...SUPPORTED_RWA_ASSETS.filter(
       (asset) => ![USDG.symbol, ETH.symbol, "WETH", "TERA"].includes(asset.symbol),
     ).map(async (asset) => {
@@ -198,18 +179,29 @@ async function currentPrices() {
       return [asset.symbol, Number(quote.amountOut)] as const;
     }),
   ]);
-  const catalog = await catalogQuotes();
-  if (eth.status === "fulfilled") {
-    prices.ETH = eth.value.price;
-    if (Number.isFinite(eth.value.change24h)) change24h.ETH = eth.value.change24h!;
+  const combined = coinGecko.status === "fulfilled" ? coinGecko.value : { prices: {}, change24h: {} };
+  Object.assign(prices, combined.prices);
+  Object.assign(change24h, combined.change24h);
+  if (!Number.isFinite(prices.ETH)) {
+    // CoinGecko's batched call didn't come through and there was no prior
+    // cache to fall back on — Coinbase, then the ETH/USDG swap quote
+    // itself, keep ETH from silently dropping out of the wallet's total.
+    try {
+      prices.ETH = (await coinbaseEthUsd()).price;
+    } catch {
+      try {
+        const quote = await quoteSwap(ETH.symbol, USDG.symbol, "1");
+        if (quote) prices.ETH = Number(quote.amountOut);
+      } catch {
+        // No price source at all for ETH this cycle.
+      }
+    }
   }
   for (const result of rwa) {
     if (result.status !== "fulfilled") continue;
     const [symbol, price] = result.value;
     if (Number.isFinite(price)) prices[symbol] = price;
   }
-  Object.assign(prices, catalog.prices);
-  Object.assign(change24h, catalog.change24h);
   if (prices.ETH) {
     try {
       const teraQuote = await quoteSwap("ETH", "TERA", "0.001");
