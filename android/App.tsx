@@ -41,6 +41,7 @@ import { balances, client, execute, transactionStatus } from "./src/network";
 import { fetchChainHistory, type ChainHistoryEntry } from "./src/explorer";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
+import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
 import { contacts as contactsCore, UNVERIFIABLE, value as valueCore } from "./src/core";
 import { check, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -90,6 +91,8 @@ type Review = {
   isPrivateBridge?: boolean;
   /** The address the owner chose to pay. Read by the address book only. */
   payee?: string;
+  intelligenceInput?: IntelligenceInput;
+  intelligence?: ReviewIntelligence;
 };
 const tokenImages: Record<string, any> = {
   USDG: require("./assets/RH-RWA-Assets-Media/usdg_logo.png"),
@@ -135,9 +138,6 @@ const popularTokens = [
 ] as const;
 const popularSymbols = new Set<string>(popularTokens.map(({ symbol }) => symbol));
 const HOLD_TO_SIGN_MS = 700;
-// Temporary: the assistant is being held back from release. Flip this back
-// to true to reopen it — the screen underneath is untouched.
-const ASSISTANT_ENABLED = false;
 // Fallback for a token shown before its real logo has been sourced. Empty
 // now that every token in popularTokens has a real image in tokenImages —
 // kept as the landing place for the next one that doesn't yet.
@@ -1914,6 +1914,24 @@ function Wallet() {
       title: t("Review proposal", "审核提案"),
       rows,
       steps,
+      intelligenceInput: {
+        language,
+        action: language === "zh"
+          ? i.actionType === "TRANSFER" ? "发送" : i.actionType === "BUY" ? `买入 ${asset.symbol}，支付` : `卖出 ${asset.symbol}，数量`
+          : i.actionType === "TRANSFER" ? "send" : `${i.actionType.toLowerCase()} ${asset.symbol} using`,
+        send: `${formatUnits(BigInt(i.amount), input.decimals)} ${input.symbol}`,
+        recipient: payee,
+        owner,
+        knownRecipient: !!savedAs || !!data.history.some((h) => h.payee?.toLowerCase() === payee?.toLowerCase()),
+        steps: steps.length,
+        quote: q ? {
+          route: q.route,
+          comparedRoutes: q.comparedRoutes,
+          priceImpactPct: q.priceImpactPct,
+          amountOut: `${q.amountOut} ${i.actionType === "BUY" ? asset.symbol : teraTrade ? "ETH" : "USDG"}`,
+          minimumOut: `${formatUnits((BigInt(q.amountOutWei) * 9900n) / 10000n, q.decimalsOut)} ${i.actionType === "BUY" ? asset.symbol : teraTrade ? "ETH" : "USDG"}`,
+        } : undefined,
+      },
       verify: () => {
         verifyProposal(p, owner);
       },
@@ -2129,7 +2147,28 @@ function Wallet() {
   async function presentReview(next: Review) {
     setReviewDetailsOpen(false);
     holdProgress.setValue(0);
-    setReview({ ...next, simulation: "checking" });
+    const shownRecipient = next.rows.find(([label]) =>
+      label === t("Recipient", "收款地址") || label === t("Recipient", "收款方"))?.[1];
+    const intelligenceRecipient = next.payee || shownRecipient || next.recipient;
+    const input = next.intelligenceInput ?? {
+      language,
+      action: next.title === t("Review private route", "审核私密路由")
+        ? t("send privately", "私密发送")
+        : next.title === t("Review private bridge", "审核私密跨链")
+          ? t("bridge privately", "私密跨链")
+          : next.title === t("Review bridge", "审核跨链")
+            ? t("bridge", "跨链转移")
+            : next.title === t("Send NFT", "发送 NFT")
+              ? t("send NFT", "发送 NFT")
+              : next.title.replace(/^Review\s+/i, ""),
+      send: next.rows.find(([label]) => label === t("Send", "发送") || label === t("Amount", "金额"))?.[1],
+      recipient: intelligenceRecipient,
+      owner,
+      checkRecipientContract: next.title !== t("Review bridge", "审核跨链") && next.title !== t("Review private bridge", "审核私密跨链"),
+      knownRecipient: !!intelligenceRecipient && (!!contactsCore.nameFor(book, intelligenceRecipient) || data.history.some((h) => h.payee?.toLowerCase() === intelligenceRecipient.toLowerCase())),
+      steps: next.steps.length,
+    };
+    setReview({ ...next, simulation: "checking", intelligence: reviewIntelligence({ ...input, simulation: "checking" }) });
     try {
       await Promise.all(
         next.steps.map((tx) =>
@@ -2141,9 +2180,21 @@ function Wallet() {
           }),
         ),
       );
-      setReview({ ...next, simulation: "passed" });
+      const [codeResult, gasResult] = await Promise.allSettled([
+        input.checkRecipientContract !== false && input.recipient && input.recipient.toLowerCase() !== owner.toLowerCase() && isAddress(input.recipient)
+          ? client.getCode({ address: input.recipient as Address }) : Promise.resolve(undefined),
+        Promise.all([
+          client.getGasPrice(),
+          Promise.all(next.steps.map((tx) => client.estimateGas({ account: owner as Address, to: tx.to, data: tx.data, value: BigInt(tx.value) }))),
+        ]),
+      ]);
+      const estimatedFeeEth = gasResult.status === "fulfilled"
+        ? (Number(gasResult.value[0] * gasResult.value[1].reduce((sum, gas) => sum + gas, 0n)) / 1e18).toFixed(6)
+        : undefined;
+      const recipientHasCode = codeResult.status === "fulfilled" && !!codeResult.value && codeResult.value !== "0x";
+      setReview({ ...next, simulation: "passed", intelligence: reviewIntelligence({ ...input, simulation: "passed", recipientHasCode, recipientCodeUnavailable: codeResult.status === "rejected", estimatedFeeEth, gasEstimateUnavailable: gasResult.status === "rejected" }) });
     } catch {
-      setReview({ ...next, simulation: "needs-attention" });
+      setReview({ ...next, simulation: "needs-attention", intelligence: reviewIntelligence({ ...input, simulation: "needs-attention" }) });
     }
   }
   async function signReview(r: Review) {
@@ -3051,31 +3102,6 @@ function Wallet() {
    * column.
    */
   function assistantScreen() {
-    if (!ASSISTANT_ENABLED)
-      return (
-        <View style={{ flex: 1 }}>
-          <Header
-            title={t("Tera assistant", "Tera 助手")}
-            onBack={() => setPage("home")}
-            backLabel={t("Wallet", "钱包")}
-          />
-          <View
-            style={[
-              s.panel,
-              { alignItems: "center", gap: 10, paddingVertical: 40, marginHorizontal: 20 },
-            ]}
-          >
-            <Icon name="message-text-outline" size={32} color={colors.faint} />
-            <Text style={[s.label, { fontSize: 17 }]}>{t("Coming soon", "即将上线")}</Text>
-            <Text style={[s.small, { textAlign: "center" }]}>
-              {t(
-                "The Tera assistant isn't available yet. Check back soon.",
-                "Tera 助手暂未上线，敬请期待。",
-              )}
-            </Text>
-          </View>
-        </View>
-      );
     const teraAvatar = (
       <View style={[s.iconDisc, { width: 28, height: 28, borderRadius: 14 }]}>
         <Image
@@ -7479,6 +7505,20 @@ function Wallet() {
                       )}
                 </Text>
               </View>
+              {review?.intelligence && (
+                <View style={[s.panel, { gap: 8 }]}>
+                  <Text style={s.eyebrow}>{t("TERA INTELLIGENCE", "TERA 智能分析")}</Text>
+                  <Text style={s.text}>{review.intelligence.preview}</Text>
+                  {review.intelligence.risks.map((risk, index) => (
+                    <Text key={`risk-${index}`} style={[s.small, { color: colors.danger }]}>{risk}</Text>
+                  ))}
+                  {review.intelligence.safer.map((tip, index) => (
+                    <Text key={`safer-${index}`} style={s.small}>{tip}</Text>
+                  ))}
+                  {review.intelligence.route && <Text style={s.small}>{review.intelligence.route}</Text>}
+                  {review.intelligence.networkFee && <Text style={s.small}>{review.intelligence.networkFee}</Text>}
+                </View>
+              )}
               {review?.rows.map(([label, value], i) => (
                 <Row key={i} label={label} value={value} />
               ))}

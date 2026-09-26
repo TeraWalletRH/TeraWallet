@@ -20,6 +20,7 @@ describe("AI Agent Proposal Layer", () => {
     expect(res.body.preparedTransaction).toBeDefined();
     expect(res.body.preparedTransaction.to).toBeDefined();
     expect(res.body.preparedTransaction.data).toStartWith("0x");
+    expect(res.body.preparedTransaction.quote.comparedRoutes.length).toBeGreaterThan(0);
   }, 15000);
 
   it("POST /api/agent/chat answers questions about RWA compliance", async () => {
@@ -86,4 +87,20 @@ describe("AI Agent Proposal Layer", () => {
     expect(res.status).toBe(422);
     expect(res.body.error).toBe("Transfers require a valid recipient address in the request.");
   }, 15000);
+
+  it("does not invent an asset or amount for an unclear proposal", async () => {
+    const res = await request(app).post("/api/agent/propose").send({
+      prompt: "Buy something for me",
+      ownerAddress: sampleOwner,
+    });
+    expect(res.status).toBe(422);
+    expect(res.body.error).toBe("Specify an action, supported asset, and exact amount.");
+  });
+
+  it("does not treat a chain ID or two different numbers as the spend amount", async () => {
+    for (const prompt of ["Buy SpaceX on Chain 4663", "Buy 2 SpaceX for $100"]) {
+      const res = await request(app).post("/api/agent/propose").send({ prompt, ownerAddress: sampleOwner });
+      expect(res.status).toBe(422);
+    }
+  });
 });
