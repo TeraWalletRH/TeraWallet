@@ -114,6 +114,7 @@ export interface SwapQuote {
   decimalsOut: number;
   priceImpactPct: number;
   route: string;
+  comparedRoutes?: Array<{ route: string; amountOut: string }>;
   routing: SwapRouting;
 }
 
@@ -204,6 +205,7 @@ interface RouteCandidate {
   amountOut: bigint;
   route: string;
   routing: SwapRouting;
+  compared?: Array<{ route: string; amountOut: bigint }>;
   // Re-quotes the same route for a different amount — used to get a
   // reference (1-unit) quote from the exact same pool the real amount was
   // quoted against, so the price-impact ratio is internally consistent.
@@ -217,14 +219,12 @@ async function bestV3Candidate(
   amountInWei: bigint
 ): Promise<RouteCandidate | null> {
   const direct = await findBestV3DirectQuote(client, tokenIn, tokenOut, amountInWei);
-  if (direct) {
-    return {
+  const directCandidate: RouteCandidate | null = direct ? {
       amountOut: direct.amountOut,
       route: `direct (${direct.fee / 10000}% fee)`,
       routing: { type: "direct", fee: direct.fee },
       requote: (amount) => quoteSingleHop(client, tokenIn, tokenOut, amount, direct.fee),
-    };
-  }
+    } : null;
 
   // Existence-only tier pick for each leg (not a best-actual-quote search
   // like the direct-pool case above) — the combined quoteExactInput call
@@ -234,18 +234,22 @@ async function bestV3Candidate(
     findPoolFeeTiers(client, tokenIn, WETH_ADDRESS).then((fees) => fees[0] ?? null),
     findPoolFeeTiers(client, WETH_ADDRESS, tokenOut).then((fees) => fees[0] ?? null),
   ]);
-  if (feeIn === null || feeOut === null) return null;
+  if (feeIn === null || feeOut === null) return directCandidate;
 
   try {
     const amountOut = await quoteViaWeth(client, tokenIn, tokenOut, amountInWei, feeIn, feeOut);
-    return {
+    const viaCandidate: RouteCandidate = {
       amountOut,
       route: `via WETH (${feeIn / 10000}% + ${feeOut / 10000}% fees)`,
       routing: { type: "via-weth", feeIn, feeOut },
       requote: (amount) => quoteViaWeth(client, tokenIn, tokenOut, amount, feeIn, feeOut),
     };
+    const winner = directCandidate && directCandidate.amountOut >= viaCandidate.amountOut ? directCandidate : viaCandidate;
+    winner.compared = [directCandidate, viaCandidate].filter((candidate): candidate is RouteCandidate => !!candidate)
+      .map((candidate) => ({ route: candidate.route, amountOut: candidate.amountOut }));
+    return winner;
   } catch {
-    return null;
+    return directCandidate;
   }
 }
 
@@ -330,6 +334,10 @@ export async function quoteSwap(
       decimalsOut,
       priceImpactPct: Number(priceImpactPct.toFixed(4)),
       route: winner.route,
+      comparedRoutes: [
+        ...(v3?.compared ?? (v3 ? [{ route: v3.route, amountOut: v3.amountOut }] : [])),
+        ...(v4 ? [{ route: v4.route, amountOut: v4.amountOut }] : []),
+      ].map((candidate) => ({ route: candidate.route, amountOut: formatUnits(candidate.amountOut, decimalsOut) })),
       routing: winner.routing,
     };
   } catch (error) {
