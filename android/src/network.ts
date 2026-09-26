@@ -54,7 +54,6 @@ export async function execute(
   steps: Tx[],
   verify: () => void,
   record: (row: any) => Promise<void>,
-  progress: (s: string) => void,
 ) {
   if (sending) throw new Error("A transaction is already in progress.");
   sending = true;
@@ -74,7 +73,6 @@ export async function execute(
       if ((await client.getChainId()) !== chain.id) throw new Error("RPC network mismatch.");
       const tx = steps[index];
       txCheck(tx);
-      progress(`${index + 1}/${steps.length} · Checking transaction / 正在检查交易`);
       if (tx.data !== "0x" && !(await client.getCode({ address: tx.to })))
         throw new Error("Contract unavailable. / 合约不可用。");
       const simulation = await client.call({
@@ -129,7 +127,6 @@ export async function execute(
         createdAt: Date.now(),
       });
       active();
-      progress("Submitting / 正在提交");
       await client.sendRawTransaction({ serializedTransaction: serialized });
       await record({
         hash,
@@ -139,7 +136,6 @@ export async function execute(
         createdAt: Date.now(),
       });
       if (index < steps.length - 1) {
-        progress("Waiting for approval confirmation / 等待授权确认");
         const receipt = await client.waitForTransactionReceipt({ hash, timeout: 90000 });
         if (receipt.status !== "success") throw new Error("Approval reverted. / 授权交易失败。");
         active();

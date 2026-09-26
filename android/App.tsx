@@ -93,7 +93,11 @@ type Review = {
   payee?: string;
   intelligenceInput?: IntelligenceInput;
   intelligence?: ReviewIntelligence;
+  historical?: boolean;
+  historyNote?: string;
+  activityType?: "send" | "swap" | "bridge";
 };
+type ReviewSnapshot = Pick<Review, "rows" | "steps">;
 const tokenImages: Record<string, any> = {
   USDG: require("./assets/RH-RWA-Assets-Media/usdg_logo.png"),
   ETH: require("./assets/RH-RWA-Assets-Media/eth.jpeg"),
@@ -599,8 +603,7 @@ function Wallet() {
     [voiceMode, setVoiceMode] = useState(false),
     [liveTranscript, setLiveTranscript] = useState(""),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState(""),
-    [progress, setProgress] = useState("");
+    [error, setError] = useState("");
   const [data, setData] = useState(vault.emptyData());
   const dataRef = useRef(data);
   const holdProgress = useRef(new Animated.Value(0)).current;
@@ -1093,7 +1096,6 @@ function Wallet() {
     } finally {
       pending.current = false;
       setBusy(false);
-      setProgress("");
     }
   }
   async function store(next: vault.LocalData) {
@@ -1524,18 +1526,62 @@ function Wallet() {
   // exactly what's missing on a second device or a fresh install of this
   // same wallet.
   const combinedHistory = [
-    ...data.history,
+    ...data.history.filter((h) => !h.totalSteps || h.step === h.totalSteps),
     ...(chainHistory || [])
       .filter((c) => !data.history.some((h) => h.hash === c.hash))
       .map((c) => ({
         hash: c.hash,
         title: c.title,
+        direction: c.direction,
+        amount: c.amount,
+        symbol: c.symbol,
+        counterparty: c.counterparty,
         step: 1,
         totalSteps: 1,
         status: c.status,
         createdAt: c.timestamp,
       })),
   ].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  function activityKind(row: any): "send" | "receive" | "swap" | "bridge" {
+    if (row.direction === "send" || row.direction === "receive") return row.direction;
+    if (row.activityType === "send" || row.activityType === "swap" || row.activityType === "bridge") return row.activityType;
+    if (row.bridgeInput || row.isPrivateBridge) return "bridge";
+    if (row.payee || (row.recipient && row.recipient.toLowerCase() !== owner.toLowerCase())) return "send";
+    if (row.actionHash || row.title?.includes("proposal") || row.title?.includes("提案")) return "swap";
+    return "send";
+  }
+  function activityTitle(row: any) {
+    if (!/^(Review |审核)/.test(row.title || "")) return row.title;
+    const kind = activityKind(row);
+    return kind === "bridge" ? t("Bridged assets", "已跨链转移")
+      : kind === "swap" ? t("Swapped assets", "已兑换资产")
+      : t("Sent assets", "已发送资产");
+  }
+  function activityStatus(status: string) {
+    return status === "confirmed" ? t("Completed", "已完成")
+      : status === "broadcasting" ? t("Sending", "发送中")
+      : status === "pending" ? t("Pending", "待确认")
+      : status === "failed" || status === "reverted" ? t("Failed", "失败")
+      : status;
+  }
+  function openActivityReview(row: any) {
+    const snapshot = row.reviewSnapshot as ReviewSnapshot | undefined;
+    setReviewDetailsOpen(false);
+    setReview({
+      title: t("Transaction review", "交易审核"),
+      historical: true,
+      historyNote: snapshot
+        ? t("Saved review from before this transaction was signed.", "此交易签名前保存的审核记录。")
+        : t("The original proposal is not saved on this device. These are the recorded transaction details.", "此设备没有保存原始提案。以下为已记录的交易详情。"),
+      rows: snapshot?.rows ?? [
+        [t("Transaction", "交易"), activityTitle(row)],
+        [t("Status", "状态"), row.status],
+        [t("Hash", "交易哈希"), row.hash],
+      ],
+      steps: snapshot?.steps ?? [],
+      verify: () => {},
+    });
+  }
   const selectedAsset = assets.find((a) => a.symbol === assetSymbol) || sources[0];
   const dest = destinations.find((d) => d.id === destination)!;
   const output = dest.tokens.find((a) => a.symbol === outSymbol) || dest.tokens[0];
@@ -1912,6 +1958,7 @@ function Wallet() {
       rows.push([`${t("Unproven", "未证实")} · ${verdict.gate}`, verdict.detail]);
     void presentReview({
       title: t("Review proposal", "审核提案"),
+      activityType: i.actionType === "TRANSFER" ? "send" : "swap",
       rows,
       steps,
       intelligenceInput: {
@@ -2216,6 +2263,17 @@ function Wallet() {
     setSigning(true);
     try {
       let submittedHash = "";
+      const activityType = r.activityType ?? (r.bridgeInput || r.isPrivateBridge ? "bridge" : "send");
+      const amountLabel = r.rows.find(([label]) =>
+        label === t("Send", "发送") || label === t("Amount", "金额"))?.[1]
+        ?? r.rows.find(([label]) => label === t("NFT", "NFT"))?.[1];
+      const activityTitle = activityType === "swap"
+        ? t(`Swapped${amountLabel ? ` ${amountLabel}` : ""}`, `已兑换${amountLabel ? ` ${amountLabel}` : ""}`)
+        : activityType === "bridge"
+          ? t(`Bridged${amountLabel ? ` ${amountLabel}` : ""}`, `已跨链转移${amountLabel ? ` ${amountLabel}` : ""}`)
+          : t(`Sent${amountLabel ? ` ${amountLabel}` : ""}`, `已发送${amountLabel ? ` ${amountLabel}` : ""}`);
+      const displayedRecipient = r.payee ?? r.rows.find(([label]) =>
+        label === t("Recipient", "收款地址") || label === t("Recipient", "收款方"))?.[1];
       await execute(
         r.steps,
         r.verify,
@@ -2223,7 +2281,12 @@ function Wallet() {
           if (record.step === record.totalSteps) submittedHash = record.hash;
           const row = {
             ...record,
-            title: r.title,
+            title: record.step === record.totalSteps ? activityTitle : t("Approval", "授权"),
+            activityType: record.step === record.totalSteps ? activityType : "approval",
+            activityAmount: record.step === record.totalSteps ? amountLabel : undefined,
+            counterparty: record.step === record.totalSteps ? displayedRecipient : undefined,
+            reviewSnapshot: record.step === record.totalSteps
+              ? ({ rows: r.rows, steps: r.steps } satisfies ReviewSnapshot) : undefined,
             recipient: r.recipient,
             reference: record.step === record.totalSteps ? r.reference : undefined,
             bridgeInput: record.step === record.totalSteps ? r.bridgeInput : undefined,
@@ -2237,7 +2300,6 @@ function Wallet() {
             drafts: dataRef.current.drafts.filter((d) => !r.draftId || d.createdAt !== r.draftId),
           });
         },
-        setProgress,
       );
       if (r.afterSubmitted && submittedHash) await r.afterSubmitted(submittedHash);
       setPage("activity");
@@ -4067,7 +4129,7 @@ function Wallet() {
               <Text style={[s.text, { fontWeight: "700" }]}>
                 {t("Recent activity", "最近记录")}
               </Text>
-              {data.history.length ? (
+              {combinedHistory.length ? (
                 <Pressable accessibilityRole="button" onPress={() => setPage("activity")}>
                   <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
                     {t("View all", "查看全部")}
@@ -4075,14 +4137,9 @@ function Wallet() {
                 </Pressable>
               ) : null}
             </View>
-            {data.history.length ? (
-              data.history.slice(0, 3).map((r) => {
-                const isBridge = Boolean(
-                  r.bridgeInput ||
-                  (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) ||
-                  r.isPrivateBridge,
-                );
-                const isSend = !isBridge && !!r.recipient;
+            {combinedHistory.length ? (
+              combinedHistory.slice(0, 3).map((r) => {
+                const kind = activityKind(r);
                 return (
                   <Pressable
                     key={r.hash}
@@ -4091,22 +4148,14 @@ function Wallet() {
                     style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
                   >
                     <View style={s.iconDisc}>
-                      {isSend ? (
-                        <Icon name="arrow-top-right" size={20} color={colors.ink} />
-                      ) : (
-                        <Icon
-                          name={isBridge ? "bridge" : "swap-vertical"}
-                          size={20}
-                          color={colors.ink}
-                        />
-                      )}
+                      <Icon name={kind === "send" ? "arrow-top-right" : kind === "receive" ? "arrow-down" : kind === "bridge" ? "bridge" : "swap-vertical"} size={20} color={colors.ink} />
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={s.label} numberOfLines={1}>
-                        {r.title}
+                        {activityTitle(r)}
                       </Text>
                       <Text style={s.small}>
-                        {t("Step", "步骤")} {r.step}/{r.totalSteps}
+                        {r.createdAt ? new Date(r.createdAt).toLocaleString() : t("On-chain transaction", "链上交易")}
                       </Text>
                     </View>
                     <View
@@ -4136,7 +4185,7 @@ function Wallet() {
                           },
                         ]}
                       >
-                        {r.status}
+                        {activityStatus(r.status)}
                       </Text>
                     </View>
                   </Pressable>
@@ -5627,12 +5676,6 @@ function Wallet() {
       return (
         <>
           <Header title={t("Activity", "记录")} />
-          <Text style={[s.small, { textAlign: "center" }]}>
-            {t(
-              "Source confirmation and destination delivery are tracked separately.",
-              "源链确认与目标链到账分别跟踪。",
-            )}
-          </Text>
           {!combinedHistory.length && (
             <View style={[s.panel, { alignItems: "center", paddingVertical: 28, gap: 8 }]}>
               <Icon name="history" size={32} color={colors.faint} />
@@ -5642,64 +5685,42 @@ function Wallet() {
             </View>
           )}
           {combinedHistory.map((r) => {
-            const isBridge = Boolean(
-              r.bridgeInput ||
-              (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) ||
-              r.isPrivateBridge,
-            );
-            const isSend =
-              !isBridge &&
-              (!!r.recipient || r.title.startsWith("Sent") || r.title.startsWith("发送"));
+            const kind = activityKind(r);
             return (
-              <Pressable
+              <View
                 key={r.hash}
-                accessibilityRole="button"
-                onPress={() => {
-                  setActivityDetail(r.hash);
-                  setPage("activity-detail");
-                }}
-                style={({ pressed }) => [
-                  s.panel,
-                  {
-                    flexDirection: "row",
-                    alignItems: "center",
-                    gap: 12,
-                    opacity: pressed ? 0.7 : 1,
-                  },
-                ]}
+                style={[s.panel, { gap: 12 }]}
               >
-                <View style={s.iconDisc}>
-                  {isSend ? (
-                    <Icon name="arrow-top-right" size={20} color={colors.ink} />
-                  ) : (
-                    <Icon
-                      name={isBridge ? "bridge" : "swap-vertical"}
-                      size={20}
-                      color={colors.ink}
-                    />
-                  )}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={s.label}>{r.title}</Text>
-                  <Text style={s.small}>
-                    {t("Step", "步骤")} {r.step}/{r.totalSteps}
-                  </Text>
-                </View>
-                <View
-                  style={{
-                    borderRadius: 999,
-                    paddingHorizontal: 10,
-                    paddingVertical: 4,
-                    backgroundColor: statusTone(r.status).bg,
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => {
+                    setActivityDetail(r.hash);
+                    setPage("activity-detail");
                   }}
+                  style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: 12, opacity: pressed ? 0.7 : 1 })}
                 >
-                  <Text
-                    style={[s.small, { fontWeight: "600", color: statusTone(r.status).color }]}
+                  <View style={s.iconDisc}>
+                    <Icon name={kind === "send" ? "arrow-top-right" : kind === "receive" ? "arrow-down" : kind === "bridge" ? "bridge" : "swap-vertical"} size={20} color={colors.ink} />
+                  </View>
+                  <View style={{ flex: 1, gap: 3 }}>
+                    <Text style={s.label} numberOfLines={1}>{activityTitle(r)}</Text>
+                    <Text style={s.small}>{r.createdAt ? new Date(r.createdAt).toLocaleString() : t("On-chain transaction", "链上交易")}</Text>
+                  </View>
+                  <View style={{ borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, backgroundColor: statusTone(r.status).bg }}>
+                    <Text style={[s.small, { fontWeight: "600", color: statusTone(r.status).color }]}>{activityStatus(r.status)}</Text>
+                  </View>
+                </Pressable>
+                {kind === "send" && (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t("Review proposal", "审核提案")}
+                    onPress={() => openActivityReview(r)}
+                    style={({ pressed }) => ({ alignSelf: "flex-start", marginLeft: 50, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 10, backgroundColor: colors.tint, opacity: pressed ? 0.65 : 1 })}
                   >
-                    {r.status}
-                  </Text>
-                </View>
-              </Pressable>
+                    <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>{t("Review proposal", "审核提案")}</Text>
+                  </Pressable>
+                )}
+              </View>
             );
           })}
         </>
@@ -5710,22 +5731,17 @@ function Wallet() {
       const isBridge = Boolean(
         r.bridgeInput || (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) || r.isPrivateBridge,
       );
-      const isSend =
-        !isBridge && (!!r.recipient || r.title.startsWith("Sent") || r.title.startsWith("发送"));
+      const kind = activityKind(r);
       const tone = statusTone(r.status);
       const savedName = r.payee ? contactsCore.nameFor(book, r.payee) : "";
       return (
         <>
-          <Header title={r.title} onBack={() => setPage("activity")} backLabel={t("Activity", "记录")} />
+          <Header title={activityTitle(r)} onBack={() => setPage("activity")} backLabel={t("Activity", "记录")} />
           <View style={[s.panel, { alignItems: "center", gap: 8, paddingVertical: 28 }]}>
             <View style={[s.iconDisc, { width: 56, height: 56, borderRadius: 28 }]}>
-              {isSend ? (
-                <Icon name="arrow-top-right" size={26} color={colors.ink} />
-              ) : (
-                <Icon name={isBridge ? "bridge" : "swap-vertical"} size={26} color={colors.ink} />
-              )}
+              <Icon name={kind === "send" ? "arrow-top-right" : kind === "receive" ? "arrow-down" : isBridge ? "bridge" : "swap-vertical"} size={26} color={colors.ink} />
             </View>
-            <Text style={[s.label, { fontSize: 17, textAlign: "center" }]}>{r.title}</Text>
+            <Text style={[s.label, { fontSize: 17, textAlign: "center" }]}>{activityTitle(r)}</Text>
             {r.createdAt ? (
               <Text style={s.small}>{new Date(r.createdAt).toLocaleString()}</Text>
             ) : null}
@@ -5738,7 +5754,7 @@ function Wallet() {
                 backgroundColor: tone.bg,
               }}
             >
-              <Text style={[s.small, { fontWeight: "700", color: tone.color }]}>{r.status}</Text>
+              <Text style={[s.small, { fontWeight: "700", color: tone.color }]}>{activityStatus(r.status)}</Text>
             </View>
           </View>
           {r.payee ? (
@@ -7450,7 +7466,7 @@ function Wallet() {
         visible={!!review && !!owner}
         transparent
         animationType="slide"
-        onRequestClose={() => !busy && setReview(null)}
+        onRequestClose={() => !busy && !signing && setReview(null)}
       >
         <View style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "flex-end" }}>
           <SafeAreaView
@@ -7477,35 +7493,8 @@ function Wallet() {
                 }}
               />
               {title(review?.title || "", review?.title || "")}
-              <View
-                style={[
-                  s.panel,
-                  {
-                    backgroundColor:
-                      review?.simulation === "passed" ? colors.tint : colors.warnTint,
-                  },
-                ]}
-              >
-                <Text style={[s.eyebrow, { color: colors.green }]}>
-                  {review?.simulation === "checking"
-                    ? t("SIMULATING", "正在模拟")
-                    : review?.simulation === "passed"
-                      ? t("SIMULATION PASSED", "模拟通过")
-                      : t("SIMULATION NEEDS ATTENTION", "模拟需要注意")}
-                </Text>
-                <Text style={s.small}>
-                  {review?.simulation === "passed"
-                    ? t(
-                        "The wallet simulated these exact transaction steps.",
-                        "钱包已模拟这些准确交易步骤。",
-                      )
-                    : t(
-                        "The final wallet check runs again before signing.",
-                        "签名前将再次执行钱包检查。",
-                      )}
-                </Text>
-              </View>
-              {review?.intelligence && (
+              {review?.historyNote && <Text style={s.small}>{review.historyNote}</Text>}
+              {!review?.historical && review?.intelligence && (
                 <View style={[s.panel, { gap: 8 }]}>
                   <Text style={s.eyebrow}>{t("TERA INTELLIGENCE", "TERA 智能分析")}</Text>
                   <Text style={s.text}>{review.intelligence.preview}</Text>
@@ -7522,7 +7511,7 @@ function Wallet() {
               {review?.rows.map(([label, value], i) => (
                 <Row key={i} label={label} value={value} />
               ))}
-              <Pressable
+              {!!review?.steps.length && <Pressable
                 accessibilityRole="button"
                 accessibilityState={{ expanded: reviewDetailsOpen }}
                 onPress={() => setReviewDetailsOpen((open) => !open)}
@@ -7541,7 +7530,7 @@ function Wallet() {
                   size={18}
                   color={colors.green}
                 />
-              </Pressable>
+              </Pressable>}
               {reviewDetailsOpen &&
                 review?.steps.map((step, index) => (
                   <Row
@@ -7550,30 +7539,7 @@ function Wallet() {
                     value={`${step.data === "0x" ? t("Native transfer", "原生转账") : t("Contract call", "合约调用")} · ${step.to.slice(0, 8)}…${step.to.slice(-4)}`}
                   />
                 ))}
-              {signing && (
-                <View
-                  style={[
-                    s.panel,
-                    {
-                      backgroundColor: colors.dark,
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 12,
-                    },
-                  ]}
-                >
-                  <TeraSpinner size={18} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[s.eyebrow, { color: colors.lime }]}>
-                      {t("SIGNING IN PROGRESS", "正在签名")}
-                    </Text>
-                    <Text style={[s.small, { color: "#ffffff" }]}>
-                      {progress || t("Preparing your signed transaction…", "正在准备已签名交易…")}
-                    </Text>
-                  </View>
-                </View>
-              )}
-              {auth && !signing && (
+              {auth && !signing && !review?.historical && (
                 <View
                   style={[
                     s.panel,
@@ -7684,13 +7650,13 @@ function Wallet() {
                   </Button>
                 </View>
               )}
-              <Text style={s.small}>
+              {!review?.historical && <Text style={s.small}>
                 {t(
                   "Network fees are additional, capped at 0.001 ETH per transaction step. This authorizes only the reviewed steps.",
                   "网络手续费另计，每个交易步骤上限为 0.001 ETH，此操作仅授权已审核的步骤。",
                 )}
-              </Text>
-              <Pressable
+              </Text>}
+              {!review?.historical && <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={t(
                   "Hold to sign transaction",
@@ -7755,19 +7721,21 @@ function Wallet() {
                     opacity: 0.35,
                   }}
                 />
-                {signing ? (
-                  <TeraSpinner size={18} />
-                ) : (
-                  <Text style={{ color: colors.paper, fontSize: 16, fontWeight: "800" }}>
-                    {t("Hold to sign", "\u6309\u4f4f\u4ee5\u7b7e\u7f72")}
-                  </Text>
-                )}
-              </Pressable>
+                <Text style={{ color: colors.paper, fontSize: 16, fontWeight: "800" }}>
+                  {t("Hold to sign", "\u6309\u4f4f\u4ee5\u7b7e\u7f72")}
+                </Text>
+              </Pressable>}
               <Button disabled={busy || signing} onPress={() => setReview(null)}>
-                {t("Cancel", "取消")}
+                {review?.historical ? t("Close", "关闭") : t("Cancel", "取消")}
               </Button>
             </ScrollView>
           </SafeAreaView>
+          {signing && (
+            <View style={[StyleSheet.absoluteFill, { backgroundColor: colors.sheet, alignItems: "center", justifyContent: "center", gap: 16 }]}>
+              <TeraSpinner size={42} />
+              <Text style={s.label}>{t("Processing transaction…", "正在处理交易…")}</Text>
+            </View>
+          )}
         </View>
       </Modal>
       <Modal
