@@ -170,6 +170,70 @@ async function dexScreenerQuotes(symbols: string[]) {
   return { prices, change24h };
 }
 
+// A compact same-day trend line — and market cap rank — for the token list,
+// sourced from CoinGecko's `/coins/markets` in one batched request (it
+// returns a 7-day hourly sparkline and a rank per coin) rather than separate
+// calls per symbol — the same batching reasoning as coinGeckoQuotes above.
+// Only symbols with a real external market get either one; on-chain-quoted
+// assets (TERA, the RWAs, USDG) have no market to read a rank or history
+// from honestly, so they're simply absent rather than backed by a made-up
+// value.
+let cachedMarkets:
+  | {
+      expiresAt: number;
+      sparklines: Record<string, { t: number; p: number }[]>;
+      ranks: Record<string, number>;
+    }
+  | undefined;
+
+async function coinGeckoMarkets() {
+  if (cachedMarkets && cachedMarkets.expiresAt > Date.now())
+    return { sparklines: cachedMarkets.sparklines, ranks: cachedMarkets.ranks };
+  try {
+    const ids = Object.values(COINGECKO_IDS).join(",");
+    const response = await fetch(
+      `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${ids}&sparkline=true`,
+      { signal: AbortSignal.timeout(8_000), headers: COINGECKO_HEADERS },
+    );
+    if (!response.ok) throw new Error(`CoinGecko markets request failed (${response.status}).`);
+    const data = (await response.json()) as Array<{
+      id: string;
+      market_cap_rank?: number;
+      sparkline_in_7d?: { price?: number[] };
+    }>;
+    const symbolOf = Object.fromEntries(
+      Object.entries(COINGECKO_IDS).map(([symbol, id]) => [id, symbol]),
+    );
+    const sparklines: Record<string, { t: number; p: number }[]> = {};
+    const ranks: Record<string, number> = {};
+    const now = Date.now();
+    const hourMs = 60 * 60 * 1000;
+    for (const coin of data) {
+      const symbol = symbolOf[coin.id];
+      if (!symbol) continue;
+      if (Number.isFinite(coin.market_cap_rank)) ranks[symbol] = coin.market_cap_rank!;
+      const series = coin.sparkline_in_7d?.price;
+      if (!series?.length) continue;
+      // Hourly points; the last 24 give a same-day line consistent with the
+      // 24h change already shown next to it, without a second request.
+      const last24 = series.slice(-24);
+      const start = now - (last24.length - 1) * hourMs;
+      sparklines[symbol] = last24.map((price, i) => ({ t: start + i * hourMs, p: price }));
+    }
+    delete lastErrors.coinGeckoSparklines;
+    cachedMarkets = { expiresAt: now + TTL_MS, sparklines, ranks };
+    return { sparklines, ranks };
+  } catch (error) {
+    lastErrors.coinGeckoSparklines = error instanceof Error ? error.message : String(error);
+    return { sparklines: cachedMarkets?.sparklines || {}, ranks: cachedMarkets?.ranks || {} };
+  }
+}
+
+router.get("/api/assets/prices/sparklines", async (_req: Request, res: Response) => {
+  const { sparklines, ranks } = await coinGeckoMarkets();
+  res.json({ success: true, sparklines, ranks });
+});
+
 // A rolling in-memory history of prices this server has itself observed,
 // kept only for assets whose price comes from an on-chain swap quote rather
 // than an external market (every RWA/equity token, plus TERA). There is no

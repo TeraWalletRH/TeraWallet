@@ -113,6 +113,7 @@ const tokenImages: Record<string, any> = {
   ADA: require("./assets/cardano.png"),
   AVAX: require("./assets/avalanche.png"),
   LINK: require("./assets/chainlink.png"),
+  ARC: require("./assets/arc.jpg"),
 };
 const popularTokens = [
   { symbol: "TERA", name: "Tera" },
@@ -125,9 +126,18 @@ const popularTokens = [
   { symbol: "ADA", name: "Cardano" },
   { symbol: "AVAX", name: "Avalanche" },
   { symbol: "LINK", name: "Chainlink" },
+  // Circle's Arc network (chain ID 5042) — live, but gas is paid in USDC
+  // rather than a separate native coin, so there's no "ARC" token or price
+  // anywhere to show. Shown for discovery only; see the marketRow/
+  // canHoldHere logic for how a symbol with no price source degrades to a
+  // name-only "Coming soon" row instead of a broken one.
+  { symbol: "ARC", name: "Arc" },
 ] as const;
 const popularSymbols = new Set<string>(popularTokens.map(({ symbol }) => symbol));
 const HOLD_TO_SIGN_MS = 700;
+// Temporary: the assistant is being held back from release. Flip this back
+// to true to reopen it — the screen underneath is untouched.
+const ASSISTANT_ENABLED = false;
 // Fallback for a token shown before its real logo has been sourced. Empty
 // now that every token in popularTokens has a real image in tokenImages —
 // kept as the landing place for the next one that doesn't yet.
@@ -597,6 +607,13 @@ function Wallet() {
   const [balance, setBalance] = useState<Record<string, string> | null>(null),
     [prices, setPrices] = useState<Record<string, number>>({ USDG: 1 }),
     [priceChanges, setPriceChanges] = useState<Record<string, number>>({}),
+    // Same-day trend lines for the token list, keyed by symbol. Only ever
+    // populated for symbols with a real external market (see the backend
+    // comment on coinGeckoSparklines) — absent, not faked, for everything else.
+    [sparklines, setSparklines] = useState<Record<string, { t: number; p: number }[]>>({}),
+    // Market cap rank, same source and same real-market-only scope as
+    // sparklines above.
+    [ranks, setRanks] = useState<Record<string, number>>({}),
     [refreshing, setRefreshing] = useState(false),
     [flowStep, setFlowStep] = useState(0),
     [amountInvalid, setAmountInvalid] = useState(false),
@@ -777,6 +794,30 @@ function Wallet() {
   useEffect(() => {
     if (auth) reviewScrollRef.current?.scrollToEnd({ animated: true });
   }, [auth]);
+  // Keeps a recipient's balance current without a manual pull-to-refresh. A
+  // plain send settles on-chain the moment it confirms, and a private
+  // send/bridge already pays out through its own backend interval job (see
+  // backend/src/private-send.ts and private-bridge.ts) — neither depends on
+  // anyone tapping "Check status" in the sender's Activity; that button only
+  // ever re-reads the sender's own local history entry. What was actually
+  // missing was this side ever re-reading its own balance without being
+  // told to. Foreground-only, and on the slow side (25s), to avoid
+  // multiplying load the way the CoinGecko rate limit already did once this
+  // session — this only reduces staleness, not eliminate it; a push/socket
+  // channel would be the instant version if that's ever worth building.
+  useEffect(() => {
+    if (!owner) return;
+    const interval = setInterval(() => {
+      if (AppState.currentState === "active") void refresh();
+    }, 25_000);
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void refresh();
+    });
+    return () => {
+      clearInterval(interval);
+      subscription.remove();
+    };
+  }, [owner]);
   useEffect(() => {
     if (page !== "activity" || !owner) return;
     let live = true;
@@ -1326,6 +1367,10 @@ function Wallet() {
     // turning three independent requests into three sequential round-trips.
     const registryPromise = api("/api/assets").catch(() => ({ assets: [] }));
     const pricesPromise = api("/api/assets/prices");
+    const sparklinesPromise = api("/api/assets/prices/sparklines").catch(() => ({
+      sparklines: {},
+      ranks: {},
+    }));
     const tagPromise = tagsAvailable()
       ? tags.tagOf(address).catch(() => undefined)
       : Promise.resolve(undefined);
@@ -1357,9 +1402,10 @@ function Wallet() {
         a.symbol.localeCompare(b.symbol)
       );
     });
-    const [balanceResult, pricesResult, tagResult] = await Promise.allSettled([
+    const [balanceResult, pricesResult, sparklinesResult, tagResult] = await Promise.allSettled([
       balances(address, supported),
       pricesPromise,
+      sparklinesPromise,
       tagPromise,
     ]);
     if (version !== vault.sessionVersion()) return;
@@ -1372,6 +1418,10 @@ function Wallet() {
     if (pricesResult.status === "fulfilled") {
       setPrices(pricesResult.value.prices || { USDG: 1 });
       setPriceChanges(pricesResult.value.change24h || {});
+    }
+    if (sparklinesResult.status === "fulfilled") {
+      setSparklines(sparklinesResult.value.sparklines || {});
+      setRanks(sparklinesResult.value.ranks || {});
     }
     setAssets(supported);
     // A failure leaves the tag unknown rather than answering "no" — an
@@ -3001,6 +3051,31 @@ function Wallet() {
    * column.
    */
   function assistantScreen() {
+    if (!ASSISTANT_ENABLED)
+      return (
+        <View style={{ flex: 1 }}>
+          <Header
+            title={t("Tera assistant", "Tera 助手")}
+            onBack={() => setPage("home")}
+            backLabel={t("Wallet", "钱包")}
+          />
+          <View
+            style={[
+              s.panel,
+              { alignItems: "center", gap: 10, paddingVertical: 40, marginHorizontal: 20 },
+            ]}
+          >
+            <Icon name="message-text-outline" size={32} color={colors.faint} />
+            <Text style={[s.label, { fontSize: 17 }]}>{t("Coming soon", "即将上线")}</Text>
+            <Text style={[s.small, { textAlign: "center" }]}>
+              {t(
+                "The Tera assistant isn't available yet. Check back soon.",
+                "Tera 助手暂未上线，敬请期待。",
+              )}
+            </Text>
+          </View>
+        </View>
+      );
     const teraAvatar = (
       <View style={[s.iconDisc, { width: 28, height: 28, borderRadius: 14 }]}>
         <Image
@@ -3336,23 +3411,77 @@ function Wallet() {
       </View>
     );
   }
+  // A tiny same-day line, drawn from real hourly points — never from just
+  // the two endpoints of the 24h change, which would draw a straight
+  // diagonal that looks like data but isn't.
+  function Sparkline({
+    points,
+    up,
+    width = 40,
+    height = 20,
+  }: {
+    points: { t: number; p: number }[];
+    up: boolean;
+    width?: number;
+    height?: number;
+  }) {
+    if (points.length < 2) return null;
+    const values = points.map((point) => point.p);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const span = max - min || 1;
+    const stepX = width / (points.length - 1);
+    const path = points
+      .map(
+        (point, i) =>
+          `${i === 0 ? "M" : "L"} ${(i * stepX).toFixed(1)} ${(height - ((point.p - min) / span) * height).toFixed(1)}`,
+      )
+      .join(" ");
+    return (
+      <Svg width={width} height={height} viewBox={`0 0 ${width} ${height}`}>
+        <Path
+          d={path}
+          fill="none"
+          stroke={up ? colors.green : colors.danger}
+          strokeWidth={1.5}
+          strokeLinejoin="round"
+          strokeLinecap="round"
+        />
+      </Svg>
+    );
+  }
+  // Shared by the activity list row and its detail page, so a status badge
+  // never reads differently depending on which screen drew it.
+  function statusTone(status: string) {
+    return status === "confirmed"
+      ? { bg: colors.tint, color: colors.green }
+      : status === "failed" || status === "reverted"
+        ? { bg: colors.dangerTint, color: colors.danger }
+        : { bg: colors.warnTint, color: colors.yellow };
+  }
   // A small colored up/down indicator next to a token's price, from the
-  // backend's rolling 24h change. Omitted (not zero) when there's no
-  // change data yet, e.g. right after the server restarts.
+  // backend's rolling 24h change, with a same-day sparkline beside it when
+  // one is available (real markets only — see the sparklines state comment).
+  // Omitted (not zero) when there's no change data yet, e.g. right after the
+  // server restarts.
   function trendTag(symbol: string) {
     const change = priceChanges[symbol];
     if (!Number.isFinite(change)) return null;
     const up = change >= 0;
+    const points = sparklines[symbol];
     return (
-      <View style={{ flexDirection: "row", alignItems: "center", gap: 1 }}>
-        <Icon
-          name={up ? "arrow-up" : "arrow-down"}
-          size={11}
-          color={up ? colors.green : colors.danger}
-        />
-        <Text style={[s.small, { color: up ? colors.green : colors.danger, fontWeight: "700" }]}>
-          {Math.abs(change).toFixed(2)}%
-        </Text>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+        {points?.length > 1 ? <Sparkline points={points} up={up} /> : null}
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 1 }}>
+          <Icon
+            name={up ? "arrow-up" : "arrow-down"}
+            size={11}
+            color={up ? colors.green : colors.danger}
+          />
+          <Text style={[s.small, { color: up ? colors.green : colors.danger, fontWeight: "700" }]}>
+            {Math.abs(change).toFixed(2)}%
+          </Text>
+        </View>
       </View>
     );
   }
@@ -3377,7 +3506,7 @@ function Wallet() {
           opacity: pressed ? 0.7 : 1,
         })}
       >
-        <TokenIcon symbol={asset.symbol} size={38} chainBadge={asset.symbol !== "ETH"} />
+        <TokenIcon symbol={asset.symbol} size={38} chainBadge />
         <View style={{ flex: 1 }}>
           <Text style={s.label}>{asset.symbol}</Text>
           <Text style={s.small} numberOfLines={1}>
@@ -3409,9 +3538,13 @@ function Wallet() {
         : isListed
           ? t("Buy", "\u4e70\u5165")
           : t("Coming soon", "\u5373\u5c06\u4e0a\u7ebf");
+    // The Robinhood Chain badge on the icon already says where this token
+    // lives; spelling it out again in text here was redundant. Only the
+    // not-yet-tradable states still need words, since there's no icon cue
+    // for those.
     const detail =
       isListed || token.symbol === "TERA"
-        ? t("Robinhood Chain", "Robinhood Chain")
+        ? ""
         : canHoldHere
           ? t("Trading coming soon", "\u4ea4\u6613\u5373\u5c06\u4e0a\u7ebf")
           : t(
@@ -3433,18 +3566,24 @@ function Wallet() {
           opacity: pressed ? 0.7 : 1,
         })}
       >
-        <TokenIcon
-          symbol={token.symbol}
-          size={38}
-          chainBadge={canHoldHere && token.symbol !== "ETH"}
-        />
+        <TokenIcon symbol={token.symbol} size={38} chainBadge={canHoldHere} />
         <View style={{ flex: 1 }}>
           <Text style={s.label} numberOfLines={1}>
             {token.name}
+            {/* Market cap rank, only for the not-yet-tradable catalog coins —
+                real ones sourced from CoinGecko alongside the sparkline, not
+                shown for ETH/TERA (already tradable) or Arc (no market yet). */}
+            {!isListed && ranks[token.symbol] ? (
+              <Text style={{ color: colors.faint, fontWeight: "600" }}>
+                {" "}
+                · #{ranks[token.symbol]}
+              </Text>
+            ) : null}
           </Text>
           <Text style={s.small} numberOfLines={1}>
-            {Number.isFinite(price) && price > 0 ? `${valueCore.format(price)} · ` : ""}
-            {detail}
+            {[Number.isFinite(price) && price > 0 ? valueCore.format(price) : "", detail]
+              .filter(Boolean)
+              .join(" · ")}
           </Text>
         </View>
         {trendTag(token.symbol)}
@@ -4601,6 +4740,12 @@ function Wallet() {
         listedSymbols.includes(tokenDetailSymbol);
       const canHoldHere =
         tokenDetailSymbol === "TERA" || assets.some((asset) => asset.symbol === tokenDetailSymbol);
+      // Arc (Circle's chain) pays gas in USDC rather than a native coin — the
+      // absence of a price here isn't "not fetched yet", it's structural,
+      // so the price line, trend and chart (which would only ever show
+      // "not enough history") are left out instead of implying they might
+      // fill in later.
+      const noMarket = tokenDetailSymbol === "ARC";
       return (
         <>
           <Header
@@ -4612,13 +4757,15 @@ function Wallet() {
             <TokenIcon
               symbol={tokenDetailSymbol}
               size={56}
-              chainBadge={canHoldHere && tokenDetailSymbol !== "ETH"}
+              chainBadge={canHoldHere}
             />
             <Text style={[s.label, { fontSize: 17 }]}>{name}</Text>
-            <Text style={{ fontSize: 34, fontWeight: "700", color: colors.ink }}>
-              {Number.isFinite(price) && price! > 0 ? valueCore.format(price) : "—"}
-            </Text>
-            {Number.isFinite(change) ? (
+            {noMarket ? null : (
+              <Text style={{ fontSize: 34, fontWeight: "700", color: colors.ink }}>
+                {Number.isFinite(price) && price! > 0 ? valueCore.format(price) : "—"}
+              </Text>
+            )}
+            {!noMarket && Number.isFinite(change) ? (
               <View style={{ flexDirection: "row", alignItems: "center", gap: 4 }}>
                 <Icon
                   name={up ? "arrow-up" : "arrow-down"}
@@ -4650,39 +4797,41 @@ function Wallet() {
               </Pressable>
             ) : null}
           </View>
-          <View style={[s.panel, { gap: 12 }]}>
-            <TokenChart points={chartPoints} up={up} />
-            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-              {(["1D", "1W", "1M", "1Y"] as const).map((range) => (
-                <Pressable
-                  key={range}
-                  accessibilityRole="button"
-                  onPress={() => setChartRange(range)}
-                  style={({ pressed }) => ({
-                    flex: 1,
-                    marginHorizontal: 3,
-                    paddingVertical: 7,
-                    borderRadius: 10,
-                    alignItems: "center",
-                    backgroundColor: range === chartRange ? colors.tint : "transparent",
-                    opacity: pressed ? 0.7 : 1,
-                  })}
-                >
-                  <Text
-                    style={[
-                      s.small,
-                      {
-                        fontWeight: "700",
-                        color: range === chartRange ? colors.green : colors.muted,
-                      },
-                    ]}
+          {noMarket ? null : (
+            <View style={[s.panel, { gap: 12 }]}>
+              <TokenChart points={chartPoints} up={up} />
+              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                {(["1D", "1W", "1M", "1Y"] as const).map((range) => (
+                  <Pressable
+                    key={range}
+                    accessibilityRole="button"
+                    onPress={() => setChartRange(range)}
+                    style={({ pressed }) => ({
+                      flex: 1,
+                      marginHorizontal: 3,
+                      paddingVertical: 7,
+                      borderRadius: 10,
+                      alignItems: "center",
+                      backgroundColor: range === chartRange ? colors.tint : "transparent",
+                      opacity: pressed ? 0.7 : 1,
+                    })}
                   >
-                    {range}
-                  </Text>
-                </Pressable>
-              ))}
+                    <Text
+                      style={[
+                        s.small,
+                        {
+                          fontWeight: "700",
+                          color: range === chartRange ? colors.green : colors.muted,
+                        },
+                      ]}
+                    >
+                      {range}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
             </View>
-          </View>
+          )}
           {heldEntry ? (
             <View style={[s.panel, { gap: 6 }]}>
               <Text style={s.eyebrow}>{t("Your balance", "你的余额")}</Text>
@@ -4699,12 +4848,17 @@ function Wallet() {
           <View style={[s.panel, { gap: 6 }]}>
             <Text style={s.eyebrow}>{t("About", "关于")}</Text>
             <Text style={s.small}>
-              {isListed || tokenDetailSymbol === "TERA"
+              {noMarket
                 ? t(
-                    "Tradable on Robinhood Chain inside Tera Wallet.",
-                    "可在 Tera 钱包内于 Robinhood Chain 上交易。",
+                    "Arc is Circle's EVM-compatible chain for stablecoin finance. Gas is paid in USDC rather than a separate native coin, so there's no ARC token or price to show.",
+                    "Arc 是 Circle 推出的、面向稳定币金融的兼容 EVM 链。手续费以 USDC 支付，没有独立的原生代币，因此没有 ARC 代币或价格可显示。",
                   )
-                : t("Not yet tradable inside Tera Wallet.", "暂不支持在 Tera 钱包内交易。")}
+                : isListed || tokenDetailSymbol === "TERA"
+                  ? t(
+                      "Tradable on Robinhood Chain inside Tera Wallet.",
+                      "可在 Tera 钱包内于 Robinhood Chain 上交易。",
+                    )
+                  : t("Not yet tradable inside Tera Wallet.", "暂不支持在 Tera 钱包内交易。")}
             </Text>
           </View>
           <View style={{ gap: 10 }}>
@@ -5510,27 +5664,11 @@ function Wallet() {
                     borderRadius: 999,
                     paddingHorizontal: 10,
                     paddingVertical: 4,
-                    backgroundColor:
-                      r.status === "confirmed"
-                        ? colors.tint
-                        : r.status === "failed" || r.status === "reverted"
-                          ? colors.dangerTint
-                          : colors.warnTint,
+                    backgroundColor: statusTone(r.status).bg,
                   }}
                 >
                   <Text
-                    style={[
-                      s.small,
-                      {
-                        fontWeight: "600",
-                        color:
-                          r.status === "confirmed"
-                            ? colors.green
-                            : r.status === "failed" || r.status === "reverted"
-                              ? colors.danger
-                              : colors.yellow,
-                      },
-                    ]}
+                    style={[s.small, { fontWeight: "600", color: statusTone(r.status).color }]}
                   >
                     {r.status}
                   </Text>
@@ -5546,127 +5684,157 @@ function Wallet() {
       const isBridge = Boolean(
         r.bridgeInput || (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) || r.isPrivateBridge,
       );
+      const isSend =
+        !isBridge && (!!r.recipient || r.title.startsWith("Sent") || r.title.startsWith("发送"));
+      const tone = statusTone(r.status);
+      const savedName = r.payee ? contactsCore.nameFor(book, r.payee) : "";
       return (
         <>
-          <Header
-            title={r.title}
-            onBack={() => setPage("activity")}
-            backLabel={t("Activity", "记录")}
-          />
+          <Header title={r.title} onBack={() => setPage("activity")} backLabel={t("Activity", "记录")} />
+          <View style={[s.panel, { alignItems: "center", gap: 8, paddingVertical: 28 }]}>
+            <View style={[s.iconDisc, { width: 56, height: 56, borderRadius: 28 }]}>
+              {isSend ? (
+                <Icon name="arrow-top-right" size={26} color={colors.ink} />
+              ) : (
+                <Icon name={isBridge ? "bridge" : "swap-vertical"} size={26} color={colors.ink} />
+              )}
+            </View>
+            <Text style={[s.label, { fontSize: 17, textAlign: "center" }]}>{r.title}</Text>
+            {r.createdAt ? (
+              <Text style={s.small}>{new Date(r.createdAt).toLocaleString()}</Text>
+            ) : null}
+            <View
+              style={{
+                marginTop: 4,
+                borderRadius: 999,
+                paddingHorizontal: 12,
+                paddingVertical: 5,
+                backgroundColor: tone.bg,
+              }}
+            >
+              <Text style={[s.small, { fontWeight: "700", color: tone.color }]}>{r.status}</Text>
+            </View>
+          </View>
           {r.payee ? (
             <View style={[s.panel, { gap: 10 }]}>
-              <Text selectable style={s.small}>
-                {t("To", "发送至")}:{" "}
-                {contactsCore.nameFor(book, r.payee)
-                  ? `${contactsCore.nameFor(book, r.payee)} · `
-                  : ""}
-                {r.payee}
+              <Text style={s.eyebrow}>{t("To", "发送至")}</Text>
+              <Text selectable style={s.text}>
+                {savedName ? `${savedName} · ` : ""}
+                {short(r.payee)}
               </Text>
               <Button onPress={() => openContact(r.payee)}>
-                {contactsCore.nameFor(book, r.payee)
-                  ? t("Rename address", "重命名地址")
-                  : t("Save to contacts", "保存到联系人")}
+                {savedName ? t("Rename address", "重命名地址") : t("Save to contacts", "保存到联系人")}
               </Button>
             </View>
           ) : null}
-          <View style={[s.panel, { gap: 10 }]}>
-            <Text style={s.eyebrow}>{t("Transaction hash", "交易哈希")}</Text>
-            <Text selectable style={[s.mono, { fontSize: 12, color: colors.muted }]}>
+          {r.delivery ? (
+            <Group title={t("Delivery", "到账")}>
+              <Row
+                label={isBridge ? t("Relay delivery", "Relay 到账") : t("Route delivery", "路由到账")}
+                value={r.delivery}
+              />
+            </Group>
+          ) : null}
+          <Group title={t("Actions", "操作")}>
+            <ListRow
+              icon="refresh"
+              label={t("Check status", "检查状态")}
+              onPress={() =>
+                void run(async (g) => {
+                  const sourceStatus = await transactionStatus(r.hash);
+                  g();
+                  let delivery = r.delivery;
+                  let payoutHash = r.payoutHash;
+                  if (r.reference && sourceStatus === "confirmed") {
+                    if (r.isPrivateBridge) {
+                      const result = await api(`/api/bridge/private/jobs/${r.reference}`);
+                      g();
+                      delivery =
+                        result.job?.status === "confirmed"
+                          ? "delivered"
+                          : result.job?.status === "refunded"
+                            ? "refunded"
+                            : (result.job?.status ?? "pending");
+                      if (result.job?.relay_deposit_tx_hash) {
+                        payoutHash = result.job.relay_deposit_tx_hash;
+                      }
+                    } else if (isBridge) {
+                      const result = await api(`/api/bridge/status/${r.reference}`);
+                      g();
+                      delivery = result.status?.status ?? result.status;
+                    } else {
+                      const result = await api(`/api/private-send/jobs/${r.reference}`);
+                      g();
+                      delivery =
+                        result.job?.status === "confirmed"
+                          ? "delivered"
+                          : (result.job?.status ?? "pending");
+                      if (result.job?.payout_tx_hash) {
+                        payoutHash = result.job.payout_tx_hash;
+                      }
+                    }
+                  }
+                  await store({
+                    ...dataRef.current,
+                    history: dataRef.current.history.map((h) =>
+                      h.hash === r.hash ? { ...h, status: sourceStatus, delivery, payoutHash } : h,
+                    ),
+                  });
+                  if (r.actionHash && sourceStatus === "confirmed") {
+                    await api("/api/intent/receipt", {
+                      actionHash: r.actionHash,
+                      txHash: r.hash,
+                      recipient: r.recipient,
+                    });
+                  }
+                  setNotice({
+                    title: t("Status updated", "状态已更新"),
+                    body: t(
+                      `Source: ${sourceStatus}${delivery ? ` · Delivery: ${delivery}` : ""}`,
+                      `源交易: ${sourceStatus}${delivery ? ` · 到账: ${delivery}` : ""}`,
+                    ),
+                    tone: "success",
+                  });
+                })
+              }
+              right={busy ? <TeraSpinner size={18} /> : <Icon name="chevron-right" size={22} color={colors.faint} />}
+            />
+            {r.payoutHash && (
+              <ListRow
+                icon="open-in-new"
+                label={t("View payout tx", "查看出资交易")}
+                onPress={() =>
+                  void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.payoutHash}`)
+                }
+              />
+            )}
+            <ListRow
+              icon="open-in-new"
+              label={t("View on explorer", "在浏览器查看")}
+              onPress={() =>
+                void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.hash}`)
+              }
+            />
+          </Group>
+          <View style={[s.panel, { gap: 8 }]}>
+            <Text style={s.eyebrow}>{t("Technical details", "技术详情")}</Text>
+            <Row label={t("Hash", "哈希")} value={short(r.hash)} />
+            {r.reference && (
+              <Row
+                label={
+                  r.isPrivateBridge
+                    ? t("Private Bridge", "私密跨链")
+                    : isBridge
+                      ? t("Relay", "Relay")
+                      : t("Route", "路由")
+                }
+                value={short(r.reference)}
+              />
+            )}
+            <Text selectable style={[s.mono, { fontSize: 11, color: colors.faint }]}>
               {r.hash}
             </Text>
-            {r.reference && (
-              <Text selectable style={s.small}>
-                {r.isPrivateBridge
-                  ? `Private Bridge: ${r.reference}`
-                  : isBridge
-                    ? `Relay: ${r.reference}`
-                    : `Route: ${r.reference}`}
-              </Text>
-            )}
           </View>
-          {action(
-            "Check status",
-            "检查状态",
-            async (g) => {
-              const sourceStatus = await transactionStatus(r.hash);
-              g();
-              let delivery = r.delivery;
-              let payoutHash = r.payoutHash;
-              if (r.reference && sourceStatus === "confirmed") {
-                if (r.isPrivateBridge) {
-                  const result = await api(`/api/bridge/private/jobs/${r.reference}`);
-                  g();
-                  delivery =
-                    result.job?.status === "confirmed"
-                      ? "delivered"
-                      : result.job?.status === "refunded"
-                        ? "refunded"
-                        : (result.job?.status ?? "pending");
-                  if (result.job?.relay_deposit_tx_hash) {
-                    payoutHash = result.job.relay_deposit_tx_hash;
-                  }
-                } else if (isBridge) {
-                  const result = await api(`/api/bridge/status/${r.reference}`);
-                  g();
-                  delivery = result.status?.status ?? result.status;
-                } else {
-                  const result = await api(`/api/private-send/jobs/${r.reference}`);
-                  g();
-                  delivery =
-                    result.job?.status === "confirmed"
-                      ? "delivered"
-                      : (result.job?.status ?? "pending");
-                  if (result.job?.payout_tx_hash) {
-                    payoutHash = result.job.payout_tx_hash;
-                  }
-                }
-              }
-              await store({
-                ...dataRef.current,
-                history: dataRef.current.history.map((h) =>
-                  h.hash === r.hash ? { ...h, status: sourceStatus, delivery, payoutHash } : h,
-                ),
-              });
-              if (r.actionHash && sourceStatus === "confirmed") {
-                await api("/api/intent/receipt", {
-                  actionHash: r.actionHash,
-                  txHash: r.hash,
-                  recipient: r.recipient,
-                });
-              }
-              setNotice({
-                title: t("Status updated", "状态已更新"),
-                body: t(
-                  `Source: ${sourceStatus}${delivery ? ` · Delivery: ${delivery}` : ""}`,
-                  `源交易: ${sourceStatus}${delivery ? ` · 到账: ${delivery}` : ""}`,
-                ),
-                tone: "success",
-              });
-            },
-            false,
-          )}
-          {r.delivery && (
-            <Row
-              label={isBridge ? t("Relay delivery", "Relay 到账") : t("Route delivery", "路由到账")}
-              value={r.delivery}
-            />
-          )}
-          {r.payoutHash && (
-            <Button
-              onPress={() =>
-                void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.payoutHash}`)
-              }
-            >
-              {t("View payout tx", "查看出资交易")}
-            </Button>
-          )}
-          <Button
-            onPress={() =>
-              void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.hash}`)
-            }
-          >
-            {t("View on explorer", "在浏览器查看")}
-          </Button>
         </>
       );
     }
