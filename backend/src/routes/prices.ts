@@ -350,8 +350,14 @@ router.get("/api/assets/prices/history", async (req: Request, res: Response) => 
     return;
   }
   try {
-    const points = CATALOG_COINGECKO_IDS[symbol]
-      ? await catalogHistory(CATALOG_COINGECKO_IDS[symbol], days)
+    // ETH belongs here too, not just the catalog coins — its live price
+    // already comes from CoinGecko when available, so its chart should too,
+    // rather than reading an on-chain snapshot table it's never written to
+    // (recordSnapshot skips any symbol that already has a real market
+    // change24h, which ETH normally does).
+    const coingeckoId = COINGECKO_IDS[symbol];
+    const points = coingeckoId
+      ? await catalogHistory(coingeckoId, days)
       : await onChainHistory(symbol, days);
     res.json({ success: true, symbol, range, points });
   } catch {
