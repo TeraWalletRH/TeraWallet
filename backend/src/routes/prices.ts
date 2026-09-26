@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import { ETH, SUPPORTED_RWA_ASSETS, USDG } from "../data/assets";
 import { quoteSwap } from "../chain/swapQuote";
+import pool from "../db";
 
 const router = Router();
 const TTL_MS = 30_000;
@@ -117,17 +118,44 @@ async function catalogQuotes() {
   }
 }
 
-// A rolling history of prices this server has itself observed, kept only
-// for assets whose price comes from an on-chain swap quote rather than an
-// external market (every RWA/equity token, plus TERA). There is no real
-// NASDAQ or exchange feed for these — showing a trend computed from any
-// other source would disagree with the swap-quote price sitting right next
-// to it. The oldest sample still in the window is the comparison point, so
-// the trend starts as "since this server last restarted" and grows toward
-// a true 24h figure the longer the process stays up, rather than lying
-// about having a full day of history it doesn't have.
+// A rolling in-memory history of prices this server has itself observed,
+// kept only for assets whose price comes from an on-chain swap quote rather
+// than an external market (every RWA/equity token, plus TERA). There is no
+// real NASDAQ or exchange feed for these — showing a trend computed from
+// any other source would disagree with the swap-quote price sitting right
+// next to it. The oldest sample still in the window is the comparison
+// point, so the trend starts as "since this server last restarted" and
+// grows toward a true 24h figure the longer the process stays up, rather
+// than lying about having a full day of history it doesn't have.
+//
+// This in-memory copy only needs to cover 24h — it exists for the fast
+// change24h computation above, not for the detail-page chart's longer
+// ranges. The chart reads from price_snapshots in Postgres instead (see
+// persistSnapshot below), which survives a redeploy; this map does not.
 const SNAPSHOT_WINDOW_MS = 24 * 60 * 60 * 1000;
 const snapshotHistory = new Map<string, { t: number; p: number }[]>();
+// The last time each symbol was written to price_snapshots, so a busy
+// server doesn't insert a new row every 30s forever — one sample every five
+// minutes is more than enough resolution for a 1D/1W/1M/1Y chart, and keeps
+// a year of history for every RWA symbol to a few hundred thousand rows.
+const lastPersisted = new Map<string, number>();
+const PERSIST_INTERVAL_MS = 5 * 60 * 1000;
+
+function persistSnapshot(symbol: string, price: number, now: number) {
+  if (!pool) return;
+  const last = lastPersisted.get(symbol);
+  if (last !== undefined && now - last < PERSIST_INTERVAL_MS) return;
+  lastPersisted.set(symbol, now);
+  pool
+    .query("INSERT INTO price_snapshots (symbol, price, recorded_at) VALUES ($1, $2, to_timestamp($3))", [
+      symbol,
+      price,
+      now / 1000,
+    ])
+    .catch((error) => {
+      lastErrors.priceSnapshotWrite = error instanceof Error ? error.message : String(error);
+    });
+}
 
 function recordSnapshot(symbol: string, price: number) {
   const now = Date.now();
@@ -136,6 +164,7 @@ function recordSnapshot(symbol: string, price: number) {
   const cutoff = now - SNAPSHOT_WINDOW_MS;
   while (series.length > 1 && series[0].t < cutoff) series.shift();
   snapshotHistory.set(symbol, series);
+  persistSnapshot(symbol, price, now);
   const oldest = series[0];
   if (oldest.p > 0 && now - oldest.t > 60_000) return ((price - oldest.p) / oldest.p) * 100;
   return undefined;
@@ -215,6 +244,53 @@ router.get("/api/assets/prices", async (_req: Request, res: Response) => {
   } catch {
     // A transient market-data failure must not prevent the wallet from showing on-chain balances.
     res.status(503).json({ success: false, error: "Live prices are temporarily unavailable." });
+  }
+});
+
+const RANGE_DAYS: Record<string, number> = { "1D": 1, "1W": 7, "1M": 30, "1Y": 365 };
+
+async function catalogHistory(coingeckoId: string, days: number) {
+  const response = await fetch(
+    `https://api.coingecko.com/api/v3/coins/${coingeckoId}/market_chart?vs_currency=usd&days=${days}`,
+    { signal: AbortSignal.timeout(8_000), headers: COINGECKO_HEADERS },
+  );
+  if (!response.ok) throw new Error(`CoinGecko chart request failed (${response.status}).`);
+  const data = (await response.json()) as { prices?: [number, number][] };
+  return (data.prices || []).map(([t, p]) => ({ t, p }));
+}
+
+async function onChainHistory(symbol: string, days: number) {
+  const since = Date.now() - days * 24 * 60 * 60 * 1000;
+  if (pool) {
+    const result = await pool.query<{ price: number; recorded_at: Date }>(
+      "SELECT price, recorded_at FROM price_snapshots WHERE symbol = $1 AND recorded_at >= to_timestamp($2) ORDER BY recorded_at ASC",
+      [symbol, since / 1000],
+    );
+    return result.rows.map((row) => ({ t: new Date(row.recorded_at).getTime(), p: row.price }));
+  }
+  // No database configured (e.g. local dev without DATABASE_URL) — fall
+  // back to whatever this process itself has observed since it started.
+  return (snapshotHistory.get(symbol) || []).filter((entry) => entry.t >= since).map((entry) => ({
+    t: entry.t,
+    p: entry.p,
+  }));
+}
+
+router.get("/api/assets/prices/history", async (req: Request, res: Response) => {
+  const symbol = String(req.query.symbol || "").toUpperCase();
+  const range = String(req.query.range || "1D").toUpperCase();
+  const days = RANGE_DAYS[range];
+  if (!symbol || !days) {
+    res.status(400).json({ success: false, error: "symbol and a valid range are required." });
+    return;
+  }
+  try {
+    const points = CATALOG_COINGECKO_IDS[symbol]
+      ? await catalogHistory(CATALOG_COINGECKO_IDS[symbol], days)
+      : await onChainHistory(symbol, days);
+    res.json({ success: true, symbol, range, points });
+  } catch {
+    res.status(503).json({ success: false, error: "Price history is temporarily unavailable." });
   }
 });
 
