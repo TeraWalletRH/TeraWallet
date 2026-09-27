@@ -45,7 +45,8 @@ import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } f
 import { contacts as contactsCore, UNVERIFIABLE, value as valueCore } from "./src/core";
 import { check, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
-import { normalizePhrase, walletFromPhrase } from "./src/crypto";
+import { screenOrigin } from "./src/viewport";
+import { normalizePhrase, walletFromPhrase, walletFromPrivateKey } from "./src/crypto";
 import {
   Button,
   Choices,
@@ -686,6 +687,9 @@ function Wallet() {
   // control can retrace it — this is a plain wizard, not a navigation stack,
   // so there is nothing else recording how `setup` got here.
   const [setupHistory, setSetupHistory] = useState<(typeof setup)[]>([]);
+  // What the owner is bringing in on the import step. The secret itself goes in
+  // `mnemonic` either way; the vault tells a key from a phrase by its shape.
+  const [importKind, setImportKind] = useState<"phrase" | "key">("phrase");
   function goSetup(next: typeof setup) {
     setSetupHistory((h) => [...h, setup]);
     setSetup(next);
@@ -1265,7 +1269,10 @@ function Wallet() {
         resolve(null);
         return;
       }
-      ref.current.measureInWindow((x, y, width, height) => resolve({ x, y, width, height }));
+      ref.current.measureInWindow((x, y, width, height) => {
+        const origin = screenOrigin();
+        resolve({ x: x - origin.x, y: y - origin.y, width, height });
+      });
     });
   }
   function wait(ms: number) {
@@ -2435,9 +2442,14 @@ function Wallet() {
   // below to balance a flex:1 header: centering it in *all* the leftover
   // space stretches that gap to the entire screen height instead of a
   // sensible one, so those pass `fill: false` for a fixed gap instead.
+  // On the web, `flex: 1` means a zero basis and views may shrink below their
+  // content, so on a short window the header collapsed under the PIN pad.
+  // Growing from its own height keeps the same centring without the overlap.
+  const fillSpace =
+    Platform.OS === "web" ? { flexGrow: 1, flexShrink: 0 } : { flex: 1 };
   const authHeader = (hero: React.ReactNode, titleNode: React.ReactNode, fill = true) => (
     <View
-      style={fill ? { flex: 1, justifyContent: "center", gap: 24 } : { gap: 24, paddingTop: 4 }}
+      style={fill ? { ...fillSpace, justifyContent: "center", gap: 24 } : { gap: 24, paddingTop: 4 }}
     >
       {hero}
       {titleNode}
@@ -2536,30 +2548,32 @@ function Wallet() {
               })}
             </>
           )}
-          <Pressable
-            accessibilityRole="button"
-            disabled={busy}
-            onPress={() =>
-              void run(async (g) => {
-                const address = await vault.unlock(null);
-                g();
-                await opened(address, g);
-              })
-            }
-            style={({ pressed }) => ({
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "center",
-              gap: 6,
-              paddingVertical: 8,
-              opacity: busy ? 0.4 : pressed ? 0.6 : 1,
-            })}
-          >
-            <Icon name="fingerprint" size={17} color={colors.green} />
-            <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
-              {t("Use biometrics", "使用生物识别")}
-            </Text>
-          </Pressable>
+          {vault.biometricsSupported && (
+            <Pressable
+              accessibilityRole="button"
+              disabled={busy}
+              onPress={() =>
+                void run(async (g) => {
+                  const address = await vault.unlock(null);
+                  g();
+                  await opened(address, g);
+                })
+              }
+              style={({ pressed }) => ({
+                flexDirection: "row",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                paddingVertical: 8,
+                opacity: busy ? 0.4 : pressed ? 0.6 : 1,
+              })}
+            >
+              <Icon name="fingerprint" size={17} color={colors.green} />
+              <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                {t("Use biometrics", "使用生物识别")}
+              </Text>
+            </Pressable>
+          )}
           <View style={{ flex: 1 }} />
           <Pressable
             accessibilityRole="button"
@@ -2795,7 +2809,9 @@ function Wallet() {
         </>
       );
     }
-    if (setup === "import")
+    if (setup === "import") {
+      const byKey = importKind === "key";
+      const secretLabel = byKey ? t("Private key", "私钥") : t("Recovery phrase", "助记词");
       return (
         <>
           {authHeader(
@@ -2803,29 +2819,48 @@ function Wallet() {
             title(
               "Welcome back.",
               "欢迎回来。",
-              t(
-                "Import a standard English recovery phrase. Uses the first Ethereum account; BIP-39 passphrases are not supported in this version.",
-                "导入标准英文助记词，使用第一个以太坊账户，此版本不支持 BIP-39 附加口令。",
-              ),
+              byKey
+                ? t(
+                    "Import the private key of one Ethereum account. A key opens that account only, so this wallet has no recovery phrase and cannot add more accounts.",
+                    "导入一个以太坊账户的私钥。私钥只能打开该账户，因此此钱包没有助记词，也无法添加更多账户。",
+                  )
+                : t(
+                    "Import a standard English recovery phrase. Uses the first Ethereum account; BIP-39 passphrases are not supported in this version.",
+                    "导入标准英文助记词，使用第一个以太坊账户，此版本不支持 BIP-39 附加口令。",
+                  ),
             ),
             false,
           )}
+          <Choices
+            options={[t("Recovery phrase", "助记词"), t("Private key", "私钥")]}
+            value={secretLabel}
+            select={(o) => {
+              const next = o === t("Private key", "私钥") ? "key" : "phrase";
+              if (next === importKind) return;
+              // A phrase half-typed into the key field, or the reverse, is
+              // never what the owner meant to import.
+              setMnemonic("");
+              setError("");
+              setImportKind(next);
+            }}
+          />
           <View style={s.field}>
-            <Text style={s.eyebrow}>{t("Recovery phrase", "助记词")}</Text>
+            <Text style={s.eyebrow}>{secretLabel}</Text>
             <View style={[s.input, { padding: 0, overflow: "hidden" }]}>
               <TextInput
-                accessibilityLabel={t("Recovery phrase", "助记词")}
+                accessibilityLabel={secretLabel}
+                placeholder={byKey ? "0x…" : undefined}
                 placeholderTextColor={colors.muted}
                 autoCorrect={false}
                 autoCapitalize="none"
                 value={mnemonic}
                 onChangeText={setMnemonic}
-                multiline
+                multiline={!byKey}
                 secureTextEntry={false}
                 autoComplete="off"
                 importantForAutofill="noExcludeDescendants"
                 style={{
-                  minHeight: mnemonic ? 110 : 60,
+                  minHeight: byKey ? 60 : mnemonic ? 110 : 60,
                   textAlignVertical: "top",
                   padding: 15,
                   color: colors.ink,
@@ -2835,7 +2870,9 @@ function Wallet() {
               {!mnemonic && (
                 <Pressable
                   accessibilityRole="button"
-                  accessibilityLabel={t("Paste recovery phrase", "粘贴助记词")}
+                  accessibilityLabel={
+                    byKey ? t("Paste private key", "粘贴私钥") : t("Paste recovery phrase", "粘贴助记词")
+                  }
                   onPress={() =>
                     void Clipboard.getStringAsync()
                       .then((text) => {
@@ -2843,10 +2880,15 @@ function Wallet() {
                         else
                           setNotice({
                             title: t("Nothing to paste", "剪贴板为空"),
-                            body: t(
-                              "Copy your recovery phrase first, then try again.",
-                              "请先复制助记词，然后重试。",
-                            ),
+                            body: byKey
+                              ? t(
+                                  "Copy your private key first, then try again.",
+                                  "请先复制私钥，然后重试。",
+                                )
+                              : t(
+                                  "Copy your recovery phrase first, then try again.",
+                                  "请先复制助记词，然后重试。",
+                                ),
                             tone: "error",
                           });
                       })
@@ -2881,11 +2923,23 @@ function Wallet() {
             primary
             onPress={() => {
               try {
-                walletFromPhrase(mnemonic);
-                setMnemonic(normalizePhrase(mnemonic));
+                if (byKey) {
+                  walletFromPrivateKey(mnemonic);
+                  setMnemonic(mnemonic.trim());
+                } else {
+                  walletFromPhrase(mnemonic);
+                  setMnemonic(normalizePhrase(mnemonic));
+                }
                 goSetup("password");
               } catch {
-                setError(t("Check the phrase and word order.", "请检查助记词及顺序。"));
+                setError(
+                  byKey
+                    ? t(
+                        "That is not a private key. It is 64 characters of 0–9 and a–f, with or without 0x.",
+                        "这不是有效的私钥。私钥由 64 个 0–9 和 a–f 字符组成，可带 0x 前缀。",
+                      )
+                    : t("Check the phrase and word order.", "请检查助记词及顺序。"),
+                );
               }
             }}
           >
@@ -2893,6 +2947,7 @@ function Wallet() {
           </Button>
         </>
       );
+    }
     return (
       <>
         {authHeader(
@@ -2901,10 +2956,15 @@ function Wallet() {
             ? title(
                 "Protect this wallet.",
                 "保护此钱包。",
-                t(
-                  "Choose a six-digit PIN. Use your recovery phrase if you forget it.",
-                  "设置六码 PIN，忘记时可使用助记词恢复。",
-                ),
+                importKind === "key" && setupHistory.includes("import")
+                  ? t(
+                      "Choose a six-digit PIN. Use your private key if you forget it.",
+                      "设置六码 PIN，忘记时可使用私钥恢复。",
+                    )
+                  : t(
+                      "Choose a six-digit PIN. Use your recovery phrase if you forget it.",
+                      "设置六码 PIN，忘记时可使用助记词恢复。",
+                    ),
               )
             : title(
                 "Confirm your PIN.",
@@ -6072,22 +6132,24 @@ function Wallet() {
                 }
               />
             ) : null}
-            <ListRow
-              icon="update"
-              label={t("Updates", "更新")}
-              right={
-                <Text style={s.small}>
-                  {update === null
-                    ? t("Not checked", "未检查")
-                    : update.state === upd.CURRENT
-                      ? t("Up to date", "已是最新")
-                      : t(
-                          `Build ${update.manifest.versionCode} available`,
-                          `构建 ${update.manifest.versionCode} 可用`,
-                        )}
-                </Text>
-              }
-            />
+            {Platform.OS !== "web" && (
+              <ListRow
+                icon="update"
+                label={t("Updates", "更新")}
+                right={
+                  <Text style={s.small}>
+                    {update === null
+                      ? t("Not checked", "未检查")
+                      : update.state === upd.CURRENT
+                        ? t("Up to date", "已是最新")
+                        : t(
+                            `Build ${update.manifest.versionCode} available`,
+                            `构建 ${update.manifest.versionCode} 可用`,
+                          )}
+                  </Text>
+                }
+              />
+            )}
           </Group>
           <Group>
             <ListRow icon="lock-outline" label={t("Lock wallet", "锁定钱包")} onPress={forget} />
@@ -6282,7 +6344,7 @@ function Wallet() {
               />
             ))}
           </Group>
-          {action(
+          {vault.hasPhrase() && action(
             "Add a wallet",
             "新增钱包",
             async () => {
@@ -6310,17 +6372,19 @@ function Wallet() {
             backLabel={t("Settings", "设置")}
           />
           <Group>
-            <ListRow
-              icon="key-variant"
-              label={t("Show recovery phrase", "显示助记词")}
-              detail={t("Asks for your PIN first", "需要先输入 PIN")}
-              disabled={busy}
-              onPress={() =>
-                authenticate(t("Show recovery phrase", "显示助记词"), async () =>
-                  setRevealed(vault.revealPhrase()),
-                )
-              }
-            />
+            {vault.hasPhrase() && (
+              <ListRow
+                icon="key-variant"
+                label={t("Show recovery phrase", "显示助记词")}
+                detail={t("Asks for your PIN first", "需要先输入 PIN")}
+                disabled={busy}
+                onPress={() =>
+                  authenticate(t("Show recovery phrase", "显示助记词"), async () =>
+                    setRevealed(vault.revealPhrase()),
+                  )
+                }
+              />
+            )}
             <ListRow
               icon="key-variant"
               label={t("Show private key", "显示私钥")}
@@ -6332,16 +6396,18 @@ function Wallet() {
               onPress={() => requestPrivateKey(vault.selectedIndex())}
             />
             <ListRow icon="lock-outline" label={t("Lock now", "立即锁定")} onPress={forget} />
-            <ListRow
-              icon="fingerprint"
-              label={t("Biometric unlock", "生物识别解锁")}
-              detail={t("Unlock with Face ID or a fingerprint", "使用 Face ID 或指纹解锁")}
-              onPress={() => {
-                setPassword("");
-                setBiometricError("");
-                setBiometricSheet(true);
-              }}
-            />
+            {vault.biometricsSupported && (
+              <ListRow
+                icon="fingerprint"
+                label={t("Biometric unlock", "生物识别解锁")}
+                detail={t("Unlock with Face ID or a fingerprint", "使用 Face ID 或指纹解锁")}
+                onPress={() => {
+                  setPassword("");
+                  setBiometricError("");
+                  setBiometricSheet(true);
+                }}
+              />
+            )}
           </Group>
         </>
       );
@@ -7611,36 +7677,38 @@ function Wallet() {
                       })}
                     </>
                   )}
-                  <Pressable
-                    accessibilityRole="button"
-                    disabled={busy}
-                    onPress={() =>
-                      void run(async (g) => {
-                        try {
-                          await authorize(true, g);
-                        } catch (e) {
-                          setAuthError(
-                            e instanceof Error
-                              ? e.message
-                              : t("Couldn't authorize that.", "无法完成授权。"),
-                          );
-                        }
-                      })
-                    }
-                    style={({ pressed }) => ({
-                      flexDirection: "row",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      gap: 6,
-                      paddingVertical: 10,
-                      opacity: busy ? 0.4 : pressed ? 0.6 : 1,
-                    })}
-                  >
-                    <Icon name="fingerprint" size={17} color={colors.green} />
-                    <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
-                      {t("Use biometrics", "使用生物识别")}
-                    </Text>
-                  </Pressable>
+                  {vault.biometricsSupported && (
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={busy}
+                      onPress={() =>
+                        void run(async (g) => {
+                          try {
+                            await authorize(true, g);
+                          } catch (e) {
+                            setAuthError(
+                              e instanceof Error
+                                ? e.message
+                                : t("Couldn't authorize that.", "无法完成授权。"),
+                            );
+                          }
+                        })
+                      }
+                      style={({ pressed }) => ({
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        gap: 6,
+                        paddingVertical: 10,
+                        opacity: busy ? 0.4 : pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <Icon name="fingerprint" size={17} color={colors.green} />
+                      <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                        {t("Use biometrics", "使用生物识别")}
+                      </Text>
+                    </Pressable>
+                  )}
                   <Button
                     disabled={busy}
                     onPress={() => {
@@ -7906,36 +7974,38 @@ function Wallet() {
                 );
               }
             })}
-            <Pressable
-              accessibilityRole="button"
-              disabled={busy}
-              onPress={() =>
-                void run(async (g) => {
-                  try {
-                    await authorize(true, g);
-                  } catch (e) {
-                    setAuthError(
-                      e instanceof Error
-                        ? e.message
-                        : t("Couldn't authorize that.", "无法完成授权。"),
-                    );
-                  }
-                })
-              }
-              style={({ pressed }) => ({
-                flexDirection: "row",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 6,
-                paddingVertical: 10,
-                opacity: busy ? 0.4 : pressed ? 0.6 : 1,
-              })}
-            >
-              <Icon name="fingerprint" size={17} color={colors.green} />
-              <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
-                {t("Use biometrics", "使用生物识别")}
-              </Text>
-            </Pressable>
+            {vault.biometricsSupported && (
+              <Pressable
+                accessibilityRole="button"
+                disabled={busy}
+                onPress={() =>
+                  void run(async (g) => {
+                    try {
+                      await authorize(true, g);
+                    } catch (e) {
+                      setAuthError(
+                        e instanceof Error
+                          ? e.message
+                          : t("Couldn't authorize that.", "无法完成授权。"),
+                      );
+                    }
+                  })
+                }
+                style={({ pressed }) => ({
+                  flexDirection: "row",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 6,
+                  paddingVertical: 10,
+                  opacity: busy ? 0.4 : pressed ? 0.6 : 1,
+                })}
+              >
+                <Icon name="fingerprint" size={17} color={colors.green} />
+                <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                  {t("Use biometrics", "使用生物识别")}
+                </Text>
+              </Pressable>
+            )}
             <Button
               disabled={busy}
               onPress={() => {

@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <title>Tera Wallet</title>
+    <meta
+      name="description"
+      content="Tera Wallet on the web. Create or import a wallet, sign on this device, and install it like an app."
+    />
+    <meta name="theme-color" content="#171e19" />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="manifest" href="/app/manifest.webmanifest" />
+    <link rel="icon" href="/app/icon-192.png" />
+    <link rel="apple-touch-icon" href="/app/apple-touch-icon.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Tera" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <style>
+      /* Tokens from android/src/ui.tsx, so the page around the app is the app's own. */
+      :root {
+        --bg: #171e19;
+        --deep: #0f1411;
+        --line: #3a3428;
+        --ring: rgba(212, 160, 76, 0.05);
+        --column: 430px;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: var(--bg);
+        overscroll-behavior: none;
+      }
+      body {
+        overflow: hidden;
+        -webkit-tap-highlight-color: transparent;
+      }
+      /* The app owns every pixel on a phone. */
+      #frame {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        background: var(--bg);
+      }
+      #root {
+        display: flex;
+        flex: 1;
+        min-width: 0;
+      }
+
+      /*
+        On a wider screen the app keeps a phone's width rather than stretching
+        into a website. The column is a containing block (transform), so the
+        app's sheets and dialogs open inside it, as they do on the phone.
+      */
+      @media (min-width: 640px) and (min-height: 560px) {
+        body {
+          background: var(--deep);
+          display: grid;
+          place-items: center;
+        }
+        /* The welcome screen's rings, at the scale of the room around the phone. */
+        body::before {
+          content: "";
+          position: fixed;
+          inset: 0;
+          pointer-events: none;
+          background: repeating-radial-gradient(
+            circle at 50% 42%,
+            transparent 0 118px,
+            var(--ring) 118px 119px
+          );
+          -webkit-mask-image: radial-gradient(circle at 50% 42%, #000 0 30%, transparent 72%);
+          mask-image: radial-gradient(circle at 50% 42%, #000 0 30%, transparent 72%);
+        }
+        #frame {
+          position: relative;
+          inset: auto;
+          width: var(--column);
+          height: min(932px, calc(100dvh - 48px));
+          border-radius: 36px;
+          overflow: hidden;
+          border: 1px solid var(--line);
+          box-shadow:
+            0 0 0 10px rgba(0, 0, 0, 0.18),
+            0 40px 120px -30px rgba(0, 0, 0, 0.7);
+          transform: translateZ(0);
+          contain: layout paint;
+        }
+        /*
+          react-native-web mounts each sheet and dialog in its own <div> on
+          <body>. Give that div the column's exact box, and a transform so the
+          dialog's fixed layers resolve against it: a sheet slides up inside
+          the phone, not across the whole desk.
+        */
+        body > div:not(#frame) {
+          position: fixed;
+          left: 50%;
+          top: 50%;
+          width: calc(var(--column) + 2px);
+          height: calc(min(932px, calc(100dvh - 48px)) + 2px);
+          transform: translate(-50%, -50%);
+          border-radius: 36px;
+          overflow: hidden;
+          z-index: 1;
+        }
+        body > div:not(#frame):empty {
+          display: none;
+        }
+      }
+      noscript {
+        color: #f5ecd7;
+        font: 15px/1.5 system-ui, sans-serif;
+        padding: 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <noscript>Tera Wallet needs JavaScript to run.</noscript>
+    <div id="frame"><div id="root"></div></div>
+    <script>
+      if ("serviceWorker" in navigator)
+        addEventListener("load", function () {
+          navigator.serviceWorker.register("/app/sw.js", { scope: "/app/" }).catch(function () {});
+        });
+    </script>
+    <!-- tera:scripts -->
+  </body>
+</html>
