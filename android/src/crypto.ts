@@ -1,8 +1,7 @@
 import { entropyToMnemonic, validateMnemonic } from "@scure/bip39";
 import { wordlist } from "@scure/bip39/wordlists/english";
-import { mnemonicToAccount } from "viem/accounts";
+import { mnemonicToAccount, privateKeyToAccount } from "viem/accounts";
 import { gcm } from "@noble/ciphers/aes";
-import { pbkdf2Async } from "@noble/hashes/pbkdf2";
 import { sha256 } from "@noble/hashes/sha256";
 import { bytesToHex, hexToBytes, utf8ToBytes } from "@noble/hashes/utils";
 export const normalizePhrase = (s: string) =>
@@ -36,6 +35,46 @@ export function walletFromPhrase(phrase: string, index = 0) {
 }
 
 /**
+ * A raw private key, as another wallet exports it: 64 hex characters, with or
+ * without the `0x` prefix. Returns the canonical `0x`-prefixed lowercase form,
+ * or null when the text is not a key at all — so a phrase and a key can share
+ * one input without either being mistaken for the other.
+ */
+export function normalizePrivateKey(s: string): `0x${string}` | null {
+  const trimmed = s.trim().toLowerCase();
+  const hex = trimmed.startsWith("0x") ? trimmed.slice(2) : trimmed;
+  return /^[0-9a-f]{64}$/.test(hex) ? `0x${hex}` : null;
+}
+
+/**
+ * The one account a private key is. A key is not a seed: there is no path and
+ * no index to derive from, so index 0 is the only account such a wallet has.
+ */
+export function walletFromPrivateKey(key: string) {
+  const normalized = normalizePrivateKey(key);
+  if (!normalized) throw new Error("Invalid private key. / 私钥无效。");
+  // privateKeyToAccount rejects zero and values past the curve order.
+  try {
+    return privateKeyToAccount(normalized);
+  } catch {
+    throw new Error("Invalid private key. / 私钥无效。");
+  }
+}
+
+/**
+ * The account a stored secret opens, whichever kind the secret is. The vault
+ * keeps one secret per wallet — a phrase, or a key imported on its own — and
+ * everything that signs goes through here.
+ */
+export function walletFromSecret(secret: string, index = 0) {
+  if (normalizePrivateKey(secret)) {
+    if (index !== 0) throw new Error("Unknown account. / 未知账户。");
+    return walletFromPrivateKey(secret);
+  }
+  return walletFromPhrase(secret, index);
+}
+
+/**
  * A ceiling on the index, so a corrupted stored list cannot send derivation
  * somewhere absurd and so the account sheet stays a list a person can read.
  */
@@ -55,30 +94,18 @@ export function open(key: Uint8Array, box: Box): string {
   return new TextDecoder().decode(gcm(key, hexToBytes(box.nonce)).decrypt(hexToBytes(box.data)));
 }
 export const LEGACY_PASSWORD_ITERATIONS = 210000;
-export const PASSWORD_ITERATIONS = 100000;
-// Native (JSI, hardware-accelerated) PBKDF2 via react-native-quick-crypto,
-// not @noble/hashes' pure-JS one: same iteration count, same security
-// margin, but the pure-JS version was measured taking multiple seconds per
-// unlock on-device (100k+ rounds of interpreted-JS SHA-256-HMAC), which is
-// what actually made typing a PIN feel slow. `async` here only to keep the
-// existing Promise<Uint8Array> signature every call site already awaits —
-// the native call itself is synchronous and fast enough not to need
-// chunked yielding the way the old asyncLoop-based version did.
-export const passwordKey = async (
-  password: string,
-  salt: Uint8Array,
-  iterations = PASSWORD_ITERATIONS,
-) => {
-  const normalized = password.normalize("NFKD");
-  let nativePbkdf2: typeof import("react-native-quick-crypto").pbkdf2Sync | undefined;
-  try {
-    nativePbkdf2 = require("react-native-quick-crypto").pbkdf2Sync;
-  } catch {
-    // NitroModules is absent in Expo Go; the same KDF runs in JavaScript.
-  }
-  return nativePbkdf2
-    ? nativePbkdf2(normalized, salt, iterations, 32, "sha256")
-    : pbkdf2Async(sha256, utf8ToBytes(normalized), salt, { c: iterations, dkLen: 32 });
+// How PBKDF2 runs, and how many rounds a new wallet gets, is the platform's:
+// kdf.ts on a phone, kdf.web.ts in a browser. Metro picks the file.
+export { PASSWORD_ITERATIONS, passwordKey } from "./kdf";
+/**
+ * The key for this wallet's local data file. A key wallet gets its own prefix,
+ * so the two kinds of secret can never be read as each other.
+ */
+export const dataKey = (secret: string) => {
+  const key = normalizePrivateKey(secret);
+  return sha256(
+    utf8ToBytes(
+      key ? `tera-mobile-data-key-v1:${key}` : `tera-mobile-data-v1:${normalizePhrase(secret)}`,
+    ),
+  );
 };
-export const dataKey = (phrase: string) =>
-  sha256(utf8ToBytes(`tera-mobile-data-v1:${normalizePhrase(phrase)}`));

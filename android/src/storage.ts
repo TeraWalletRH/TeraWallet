@@ -1,25 +1,25 @@
-import * as SecureStore from "expo-secure-store";
 import * as Crypto from "expo-crypto";
-import * as LocalAuth from "expo-local-authentication";
-import * as FS from "expo-file-system/legacy";
+import * as store from "./keystore";
 import { bytesToHex, hexToBytes } from "@noble/hashes/utils";
 import {
   dataKey,
   LEGACY_PASSWORD_ITERATIONS,
   MAX_ACCOUNT_INDEX,
   normalizePhrase,
+  normalizePrivateKey,
   PASSWORD_ITERATIONS,
   open,
   passwordKey,
   phraseFromEntropy,
   seal,
   walletFromPhrase,
+  walletFromSecret,
   type Box,
 } from "./crypto";
 import type { Asset } from "./config";
 const WALLET = "tera.wallet.v1";
 const BIOMETRIC = "tera.wallet.biometric.v1";
-const opts = { keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY };
+export const biometricsSupported = store.biometricsSupported;
 /**
  * `accounts` and `selected` are optional, and their absence is what every wallet
  * created before this feature looks like. A missing list reads as `[0]` and a
@@ -78,6 +78,8 @@ export const emptyData = (): LocalData => ({
   customTokens: [],
   tourSeen: false,
 });
+// The wallet's one secret while it is unlocked: a recovery phrase, or — for a
+// wallet imported from a private key — that key. Named for the common case.
 let phrase: string | null = null;
 let epoch = 0;
 let serial: Promise<void> = Promise.resolve();
@@ -90,13 +92,20 @@ let selected = 0;
 let names: Record<string, string> = {};
 export const sessionVersion = () => epoch;
 export const isUnlocked = () => phrase !== null;
+/**
+ * Whether this wallet came from a recovery phrase. A wallet imported from a
+ * private key has no phrase to show and no second account to derive.
+ */
+export const hasPhrase = () => phrase !== null && normalizePrivateKey(phrase) === null;
 export const currentAccount = () => {
   if (!phrase) throw new Error("Wallet locked. / 钱包已锁定。");
-  return walletFromPhrase(phrase, selected);
+  return walletFromSecret(phrase, selected);
 };
 export function exportPrivateKey(index: number) {
   if (!phrase) throw new Error("Wallet locked. / 钱包已锁定。");
   if (!indices.includes(index)) throw new Error("Unknown account. / 未知账户。");
+  const imported = normalizePrivateKey(phrase);
+  if (imported) return { address: walletFromSecret(imported).address, privateKey: imported };
   const account = walletFromPhrase(phrase, index);
   const key = account.getHdKey().privateKey;
   if (!key) throw new Error("Private key unavailable. / 私钥不可用。");
@@ -144,7 +153,7 @@ export function listAccounts() {
   const held = phrase;
   return indices.map((index) => ({
     index,
-    address: walletFromPhrase(held, index).address,
+    address: walletFromSecret(held, index).address,
     name: names[String(index)] || "",
     active: index === selected,
   }));
@@ -187,11 +196,7 @@ export async function renameAccount(index: number, name: string) {
  */
 async function writeSettings(next: Partial<Pick<Envelope, "accounts" | "selected" | "names">>) {
   const saved = await envelope();
-  await SecureStore.setItemAsync(
-    WALLET,
-    JSON.stringify({ ...saved, ...next } satisfies Envelope),
-    opts,
-  );
+  await store.secureSet(WALLET, JSON.stringify({ ...saved, ...next } satisfies Envelope));
 }
 
 /** Switch to an account this wallet already has. */
@@ -221,6 +226,10 @@ export async function selectAccount(index: number) {
  */
 export async function addAccount() {
   if (!phrase) throw new Error("Wallet locked. / 钱包已锁定。");
+  if (!hasPhrase())
+    throw new Error(
+      "A wallet imported from a private key has one account. / 由私钥导入的钱包只有一个账户。",
+    );
   let next = 0;
   while (indices.includes(next)) next += 1;
   if (next > MAX_ACCOUNT_INDEX) throw new Error("This wallet is full. / 此钱包账户已满。");
@@ -240,7 +249,7 @@ export async function addAccount() {
 const random = (n: number) => Crypto.getRandomValues(new Uint8Array(n));
 export const newPhrase = () => phraseFromEntropy(random(16));
 export async function hasWallet() {
-  return !!(await SecureStore.getItemAsync(WALLET, opts));
+  return !!(await store.secureGet(WALLET));
 }
 export async function usesPin() {
   try {
@@ -252,12 +261,13 @@ export async function usesPin() {
 const assertPin = (pin: string) => {
   if (!/^\d{6}$/.test(pin)) throw new Error("Use a six-digit PIN. / 请输入六码 PIN。");
 };
-export async function createWallet(mnemonic: string, password: string) {
+/** Takes a recovery phrase or a private key; the text itself says which. */
+export async function createWallet(secret: string, password: string) {
   if (await hasWallet()) throw new Error("A wallet already exists. / 钱包已存在。");
   assertPin(password);
   const version = epoch;
-  const normalized = normalizePhrase(mnemonic);
-  const account = walletFromPhrase(normalized);
+  const normalized = normalizePrivateKey(secret) ?? normalizePhrase(secret);
+  const account = walletFromSecret(normalized);
   const salt = random(16);
   const key = await passwordKey(password, salt);
   try {
@@ -270,7 +280,7 @@ export async function createWallet(mnemonic: string, password: string) {
       kdf: PASSWORD_ITERATIONS,
       pin: true,
     };
-    await SecureStore.setItemAsync(WALLET, JSON.stringify(envelope), opts);
+    await store.secureSet(WALLET, JSON.stringify(envelope));
     if (version !== epoch) throw new Error("Unlock your saved wallet. / 请解锁已保存的钱包。");
     phrase = normalized;
     indices = [0];
@@ -282,7 +292,7 @@ export async function createWallet(mnemonic: string, password: string) {
   }
 }
 async function envelope(): Promise<Envelope> {
-  const raw = await SecureStore.getItemAsync(WALLET, opts);
+  const raw = await store.secureGet(WALLET);
   if (!raw) throw new Error("Wallet unavailable. / 钱包不可用。");
   return JSON.parse(raw);
 }
@@ -305,14 +315,13 @@ async function upgradeLegacyEnvelope(
     // would lock the owner out of their own phrase.
     const current = await envelope();
     if (current.salt !== saved.salt || current.kdf) return;
-    await SecureStore.setItemAsync(
+    await store.secureSet(
       WALLET,
       JSON.stringify({
         ...current,
         kdf: PASSWORD_ITERATIONS,
         box: seal(key, recovered, random(12)),
       }),
-      opts,
     );
   } finally {
     key.fill(0);
@@ -325,11 +334,7 @@ export async function unlock(password: string | null) {
   try {
     if (password === null) {
       authenticating = true;
-      const value = await SecureStore.getItemAsync(BIOMETRIC, {
-        ...opts,
-        requireAuthentication: true,
-        authenticationPrompt: "Unlock Tera Wallet / 解锁 Tera 钱包",
-      });
+      const value = await store.secureGet(BIOMETRIC, "Unlock Tera Wallet / 解锁 Tera 钱包");
       if (!value) throw new Error("Use your wallet password. / 请使用钱包密码。");
       key = hexToBytes(value);
     } else {
@@ -344,7 +349,7 @@ export async function unlock(password: string | null) {
     // Checked at index 0 whatever account is selected. `saved.address` is the
     // first account and always has been, so it stays the fixed point that says
     // this envelope still holds the phrase it claims to.
-    const account = walletFromPhrase(recovered);
+    const account = walletFromSecret(recovered);
     if (account.address !== saved.address || version !== epoch)
       throw new Error("Wallet changed. / 钱包已更改。");
     phrase = recovered;
@@ -377,7 +382,7 @@ export async function migrateToPin(currentPassword: string, pin: string) {
   const salt = random(16);
   const key = await passwordKey(pin, salt, PASSWORD_ITERATIONS);
   try {
-    await SecureStore.setItemAsync(
+    await store.secureSet(
       WALLET,
       JSON.stringify({
         v: 1,
@@ -385,7 +390,7 @@ export async function migrateToPin(currentPassword: string, pin: string) {
         // the decrypted phrase against, so writing the active account's address
         // here would make the wallet refuse to open the moment an owner migrated
         // to a PIN while on their second account.
-        address: walletFromPhrase(recovered).address,
+        address: walletFromSecret(recovered).address,
         salt: bytesToHex(salt),
         box: seal(key, recovered, random(12)),
         kdf: PASSWORD_ITERATIONS,
@@ -397,25 +402,24 @@ export async function migrateToPin(currentPassword: string, pin: string) {
         selected,
         names,
       } satisfies Envelope),
-      opts,
     );
   } finally {
     key.fill(0);
   }
 }
 export async function enableBiometrics(password: string) {
-  if (!(await LocalAuth.hasHardwareAsync()) || !(await LocalAuth.isEnrolledAsync()))
+  if (!(await store.biometricsReady()))
     throw new Error("Set up device biometrics first. / 请先设置设备生物识别。");
   await unlock(password);
   const saved = await envelope();
   const key = await passwordKey(password, hexToBytes(saved.salt));
   try {
     authenticating = true;
-    await SecureStore.setItemAsync(BIOMETRIC, bytesToHex(key), {
-      ...opts,
-      requireAuthentication: true,
-      authenticationPrompt: "Enable Tera biometric unlock / 启用生物识别解锁",
-    });
+    await store.secureSet(
+      BIOMETRIC,
+      bytesToHex(key),
+      "Enable Tera biometric unlock / 启用生物识别解锁",
+    );
   } finally {
     key.fill(0);
     authenticating = false;
@@ -423,16 +427,20 @@ export async function enableBiometrics(password: string) {
 }
 export const revealPhrase = () => {
   currentAccount();
+  if (!hasPhrase())
+    throw new Error(
+      "This wallet was imported from a private key and has no recovery phrase. / 此钱包由私钥导入，没有助记词。",
+    );
   return phrase!;
 };
-const dataPath = (address: string) => `${FS.documentDirectory}tera-${address.toLowerCase()}.json`;
+const dataFile = (address: string) => `tera-${address.toLowerCase()}.json`;
 export async function loadData(): Promise<LocalData> {
   const address = currentAccount().address;
   const key = dataKey(phrase!);
   try {
-    const path = dataPath(address);
-    if (!(await FS.getInfoAsync(path)).exists) return emptyData();
-    const saved = JSON.parse(open(key, JSON.parse(await FS.readAsStringAsync(path))));
+    const raw = await store.readFile(dataFile(address));
+    if (raw === null) return emptyData();
+    const saved = JSON.parse(open(key, JSON.parse(raw)));
     const data: LocalData = { ...emptyData(), ...saved };
     const cutoff = Date.now() - data.retention * 86400000;
     data.drafts = data.drafts.filter((d) => d.createdAt > cutoff);
@@ -456,7 +464,7 @@ export function saveData(data: LocalData) {
     .catch(() => {})
     .then(async () => {
       if (version !== epoch) throw new Error("Wallet locked before saving. / 保存前钱包已锁定。");
-      await FS.writeAsStringAsync(dataPath(address), snapshot);
+      await store.writeFile(dataFile(address), snapshot);
     });
   serial = work;
   return work;
@@ -465,7 +473,7 @@ export async function eraseWallet() {
   const saved = await envelope();
   lock();
   await serial.catch(() => {});
-  await FS.deleteAsync(dataPath(saved.address), { idempotent: true });
-  await SecureStore.deleteItemAsync(BIOMETRIC, opts);
-  await SecureStore.deleteItemAsync(WALLET, opts);
+  await store.deleteFile(dataFile(saved.address));
+  await store.secureDelete(BIOMETRIC);
+  await store.secureDelete(WALLET);
 }

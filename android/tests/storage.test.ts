@@ -209,3 +209,32 @@ it("refuses to add or switch wallets while locked", async () => {
   await expect(vault.renameAccount(0, "x")).rejects.toThrow();
   expect(() => vault.listAccounts()).toThrow();
 });
+
+// Hardhat's first development account: a published test key, never funded.
+const testKey = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+const testKeyAddress = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+
+it(
+  "imports a private key as a one-account wallet with no phrase",
+  async () => {
+    // Pasted without the prefix and in capitals, the way some wallets export it.
+    const address = await vault.createWallet(testKey.slice(2).toUpperCase(), password);
+    expect(address).toBe(testKeyAddress);
+    expect([...secure.values()].join("")).not.toContain(testKey.slice(2));
+    expect(vault.hasPhrase()).toBe(false);
+    expect(() => vault.revealPhrase()).toThrow();
+    await expect(vault.addAccount()).rejects.toThrow();
+    expect(vault.exportPrivateKey(0)).toEqual({ address, privateKey: testKey });
+    await vault.saveData({ ...vault.emptyData(), token: "key-wallet-token" });
+    vault.lock();
+    expect(await vault.unlock(password)).toBe(address);
+    expect((await vault.loadData()).token).toBe("key-wallet-token");
+  },
+  DERIVES_A_KEY,
+);
+
+it("rejects text that is neither a phrase nor a key", async () => {
+  await expect(vault.createWallet(`0x${"0".repeat(64)}`, password)).rejects.toThrow();
+  await expect(vault.createWallet("0x1234", password)).rejects.toThrow();
+  expect(await vault.hasWallet()).toBe(false);
+});
