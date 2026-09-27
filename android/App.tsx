@@ -3184,6 +3184,9 @@ function Wallet() {
           ref={chatScrollRef}
           contentContainerStyle={{ paddingHorizontal: 20, paddingBottom: 20, gap: 14 }}
           keyboardShouldPersistTaps="handled"
+          onLayout={() => {
+            if (keyboardOpen) chatScrollRef.current?.scrollToEnd({ animated: true });
+          }}
           onContentSizeChange={() => chatScrollRef.current?.scrollToEnd({ animated: true })}
         >
           <Text style={[s.small, { textAlign: "center" }]}>
@@ -6768,7 +6771,7 @@ function Wallet() {
         <BlurTargetView ref={glassTarget} style={{ flex: 1, backgroundColor: colors.bg }}>
           <KeyboardAvoidingView
             style={{ flex: 1 }}
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            behavior={Platform.OS === "ios" ? "padding" : page === "assistant" ? "height" : undefined}
           >
             {owner && page === "assistant" ? (
               assistantScreen()
