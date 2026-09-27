@@ -15,6 +15,7 @@ import {
   RefreshControl,
   ScrollView,
   StyleSheet,
+  useWindowDimensions,
   View,
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
@@ -583,7 +584,14 @@ function TokenIcon({
     </View>
   );
 }
+/** The window width, in CSS pixels, from which the web app uses its desktop layout. */
+const WIDE_MIN = 1024;
 function Wallet() {
+  // A laptop or desktop browser gets a dapp's layout — a top bar, a dock of
+  // sections and a wide content area — instead of a phone stretched sideways.
+  // Phones, and every native build, keep the mobile layout exactly.
+  const { width: windowWidth } = useWindowDimensions();
+  const wide = Platform.OS === "web" && windowWidth >= WIDE_MIN;
   const [language, setLanguage] = useState<"en" | "zh">("en");
   const t = (en: string, zh: string) => (language === "zh" ? zh : en);
   const [theme, setTheme] = useState<"light" | "dark">("dark");
@@ -3901,7 +3909,34 @@ function Wallet() {
       return (
         <Gallery key={owner} owner={owner} t={t} onBack={() => setPage("home")} onSend={sendNft} />
       );
-    if (page === "home")
+    if (page === "home") {
+      // Popular tokens sits between the actions and the assets on a phone, and
+      // heads the second column on a desktop.
+      const popular = (
+      <View style={{ gap: 10 }}>
+        <View
+          style={{
+            flexDirection: "row",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <Text style={[s.text, { fontWeight: "700" }]}>
+            {t("Popular tokens", "\u70ed\u95e8\u4ee3\u5e01")}
+          </Text>
+          <Pressable accessibilityRole="button" onPress={() => setPage("tokens")}>
+            <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+              {t("View all", "\u67e5\u770b\u5168\u90e8")}
+            </Text>
+          </Pressable>
+        </View>
+        <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
+          {!balance
+            ? [0, 1, 2, 3, 4].map((i) => tokenRowSkeleton(i, i === 0))
+            : popularTokens.slice(0, 5).map((token, i) => marketRow(token, i === 0))}
+        </View>
+      </View>
+      );
       return (
         <>
           {/*
@@ -3981,289 +4016,275 @@ function Wallet() {
               </View>
             </Pressable>
           )}
-          <View
-            ref={tourSwitcherRef}
-            collapsable={false}
-            style={{ flexDirection: "row", alignItems: "center", gap: 12 }}
-          >
-            <View
-              style={{
-                width: 46,
-                height: 46,
-                borderRadius: 23,
-                backgroundColor: colors.tint,
-                alignItems: "center",
-                justifyContent: "center",
-              }}
-            >
-              <Icon name="wallet-outline" size={22} color={colors.green} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={s.small}>{t("Welcome back,", "欢迎回来，")}</Text>
-              {/*
-                The wallet this total belongs to, named above the figure rather
-                than tucked into Settings. With more than one wallet on the
-                device a bare number is ambiguous, and the ambiguity is the
-                expensive kind: it is the figure someone checks before deciding
-                whether a transfer leaves them enough.
-              */}
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={t("Switch or add a wallet", "切换或添加钱包")}
-                onPress={() => {
-                  setSettingsSection("accounts");
-                  setPage("settings");
-                }}
-                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
-              >
-                <Text style={[s.text, { fontSize: 17, fontWeight: "700" }]} numberOfLines={1}>
-                  {walletName(accounts.find((entry) => entry.active) || { index: 0, name: "" })}
-                </Text>
-                <Icon name="chevron-down" size={18} color={colors.muted} />
-              </Pressable>
-            </View>
-            {tagsAvailable() && myTag ? (
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setPage("tag")}
-                style={{
-                  backgroundColor: colors.wash,
-                  borderRadius: 999,
-                  paddingHorizontal: 12,
-                  paddingVertical: 7,
-                }}
-              >
-                <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
-                  {tags.display(myTag)}
-                </Text>
-              </Pressable>
-            ) : null}
-          </View>
-          <View ref={tourBalanceRef} collapsable={false}>
-            <LinearGradient
-              colors={[colors.wash, colors.tint, colors.greenPressed]}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-              style={{ borderRadius: 24, padding: 22, gap: 16, overflow: "hidden" }}
-            >
-              {/* The kit's line pattern: two thin rings bleeding off the card. */}
+          <View style={wide ? { flexDirection: "row", gap: 40, alignItems: "flex-start" } : { gap: 18 }}>
+            <View style={wide ? { flex: 6, minWidth: 0, gap: 22 } : { gap: 18 }}>
               <View
-                pointerEvents="none"
-                style={{
-                  position: "absolute",
-                  width: 280,
-                  height: 280,
-                  borderRadius: 140,
-                  borderWidth: 1,
-                  borderColor: "#ffffff1f",
-                  right: -110,
-                  top: -150,
-                }}
-              />
-              <View
-                pointerEvents="none"
-                style={{
-                  position: "absolute",
-                  width: 220,
-                  height: 220,
-                  borderRadius: 110,
-                  borderWidth: 1,
-                  borderColor: "#ffffff19",
-                  left: -90,
-                  bottom: -150,
-                }}
-              />
-              <View style={{ alignItems: "center" }}>
-                <Text style={[s.small, { color: colors.ink, opacity: 0.7 }]}>
-                  {t("Total balance", "资产总值")}
-                </Text>
-                {!balance ? (
-                  <Skeleton
-                    width={140}
-                    height={38}
-                    borderRadius={8}
-                    style={{ marginVertical: 4, backgroundColor: "#ffffff26" }}
-                  />
-                ) : (
-                  <Text
+                ref={tourSwitcherRef}
+                collapsable={false}
+                style={{ flexDirection: "row", alignItems: "center", gap: 12 }}
+              >
+                <View
+                  style={{
+                    width: 46,
+                    height: 46,
+                    borderRadius: 23,
+                    backgroundColor: colors.tint,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Icon name="wallet-outline" size={22} color={colors.green} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.small}>{t("Welcome back,", "欢迎回来，")}</Text>
+                  {/*
+                    The wallet this total belongs to, named above the figure rather
+                    than tucked into Settings. With more than one wallet on the
+                    device a bare number is ambiguous, and the ambiguity is the
+                    expensive kind: it is the figure someone checks before deciding
+                    whether a transfer leaves them enough.
+                  */}
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t("Switch or add a wallet", "切换或添加钱包")}
+                    onPress={() => {
+                      setSettingsSection("accounts");
+                      setPage("settings");
+                    }}
+                    style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+                  >
+                    <Text style={[s.text, { fontSize: 17, fontWeight: "700" }]} numberOfLines={1}>
+                      {walletName(accounts.find((entry) => entry.active) || { index: 0, name: "" })}
+                    </Text>
+                    <Icon name="chevron-down" size={18} color={colors.muted} />
+                  </Pressable>
+                </View>
+                {tagsAvailable() && myTag ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setPage("tag")}
                     style={{
-                      color: colors.ink,
-                      fontSize: 38,
-                      lineHeight: 46,
-                      fontWeight: "700",
-                      letterSpacing: -1,
+                      backgroundColor: colors.wash,
+                      borderRadius: 999,
+                      paddingHorizontal: 12,
+                      paddingVertical: 7,
                     }}
                   >
-                    {valueCore.format(valuation.total)}
-                  </Text>
-                )}
-                {valuation.coverage !== valueCore.COMPLETE ? (
-                  <Text
-                    style={[s.small, { color: colors.ink, opacity: 0.75, textAlign: "center" }]}
-                  >
-                    {valuation.coverage === valueCore.PARTIAL
-                      ? t(
-                          `Subtotal — no price for ${valuation.unpriced.map((entry) => entry.symbol).join(", ")}`,
-                          `小计 — 缺少价格：${valuation.unpriced.map((entry) => entry.symbol).join("、")}`,
-                        )
-                      : t("No prices could be read.", "无法读取价格。")}
-                  </Text>
+                    <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                      {tags.display(myTag)}
+                    </Text>
+                  </Pressable>
                 ) : null}
               </View>
-            </LinearGradient>
-          </View>
-          <View ref={tourActionsRef} collapsable={false} style={s.quickActions}>
-            {[
-              ["arrow-top-right", "Send", "发送", "send"],
-              ["arrow-down", "Receive", "收款", "receive"],
-              ["swap-horizontal", "Swap", "兑换", "swap"],
-              ["dots-horizontal", "More", "更多", "more"],
-            ].map(([icon, en, zh, p]) => (
-              <Pressable
-                key={p}
-                accessibilityRole="button"
-                style={({ pressed }) => [s.quickAction, { opacity: pressed ? 0.6 : 1 }]}
-                onPress={() => (p === "more" ? setSheetOpen(true) : openFlow(p))}
-              >
-                <View style={s.quickIcon}>
-                  <Icon name={icon} color={colors.lime} size={24} />
-                </View>
-                <Text style={[s.small, { color: colors.ink }]}>{t(en, zh)}</Text>
-              </Pressable>
-            ))}
-          </View>
-          <View style={{ gap: 10 }}>
-            <View
-              style={{
-                flexDirection: "row",
-                justifyContent: "space-between",
-                alignItems: "center",
-              }}
-            >
-              <Text style={[s.text, { fontWeight: "700" }]}>
-                {t("Popular tokens", "\u70ed\u95e8\u4ee3\u5e01")}
-              </Text>
-              <Pressable accessibilityRole="button" onPress={() => setPage("tokens")}>
-                <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
-                  {t("View all", "\u67e5\u770b\u5168\u90e8")}
-                </Text>
-              </Pressable>
-            </View>
-            <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
-              {!balance
-                ? [0, 1, 2, 3, 4].map((i) => tokenRowSkeleton(i, i === 0))
-                : popularTokens.slice(0, 5).map((token, i) => marketRow(token, i === 0))}
-            </View>
-          </View>
-          <View ref={tourAssetsRef} collapsable={false} style={{ gap: 10 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => setPage("tokens")}
-                style={{ flexDirection: "row", alignItems: "center", gap: 2 }}
-              >
-                <Text style={[s.text, { fontWeight: "700" }]}>{t("Assets", "资产")}</Text>
-                <Icon name="chevron-right" size={16} color={colors.muted} />
-              </Pressable>
-            </View>
-            {!balance ? (
-              <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
-                {[0, 1].map((i) => tokenRowSkeleton(i, i === 0))}
-              </View>
-            ) : held.length ? (
-              <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
-                {held.map(({ asset, amount }, i) => assetRow(asset, amount, i === 0))}
-              </View>
-            ) : (
-              <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
-                <Text style={s.small}>
-                  {t("No balances on this wallet yet.", "此钱包暂无余额。")}
-                </Text>
-                <Pressable accessibilityRole="button" onPress={() => openFlow("receive")}>
-                  <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
-                    {t("Receive assets", "接收资产")}
-                  </Text>
-                </Pressable>
-              </View>
-            )}
-          </View>
-          <View style={{ gap: 10 }}>
-            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-              <Text style={[s.text, { fontWeight: "700" }]}>
-                {t("Recent activity", "最近记录")}
-              </Text>
-              {combinedHistory.length ? (
-                <Pressable accessibilityRole="button" onPress={() => setPage("activity")}>
-                  <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
-                    {t("View all", "查看全部")}
-                  </Text>
-                </Pressable>
-              ) : null}
-            </View>
-            {combinedHistory.length ? (
-              combinedHistory.slice(0, 3).map((r) => {
-                const kind = activityKind(r);
-                return (
-                  <Pressable
-                    key={r.hash}
-                    accessibilityRole="button"
-                    onPress={() => setPage("activity")}
-                    style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
-                  >
-                    <View style={s.iconDisc}>
-                      <Icon name={kind === "send" ? "arrow-top-right" : kind === "receive" ? "arrow-down" : kind === "bridge" ? "bridge" : "swap-vertical"} size={20} color={colors.ink} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={s.label} numberOfLines={1}>
-                        {activityTitle(r)}
-                      </Text>
-                      <Text style={s.small}>
-                        {r.createdAt ? new Date(r.createdAt).toLocaleString() : t("On-chain transaction", "链上交易")}
-                      </Text>
-                    </View>
-                    <View
-                      style={{
-                        borderRadius: 999,
-                        paddingHorizontal: 10,
-                        paddingVertical: 4,
-                        backgroundColor:
-                          r.status === "confirmed"
-                            ? colors.tint
-                            : r.status === "failed" || r.status === "reverted"
-                              ? colors.dangerTint
-                              : colors.warnTint,
-                      }}
-                    >
+              <View ref={tourBalanceRef} collapsable={false}>
+                <LinearGradient
+                  colors={[colors.wash, colors.tint, colors.greenPressed]}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={{ borderRadius: 24, padding: 22, gap: 16, overflow: "hidden" }}
+                >
+                  {/* The kit's line pattern: two thin rings bleeding off the card. */}
+                  <View
+                    pointerEvents="none"
+                    style={{
+                      position: "absolute",
+                      width: 280,
+                      height: 280,
+                      borderRadius: 140,
+                      borderWidth: 1,
+                      borderColor: "#ffffff1f",
+                      right: -110,
+                      top: -150,
+                    }}
+                  />
+                  <View
+                    pointerEvents="none"
+                    style={{
+                      position: "absolute",
+                      width: 220,
+                      height: 220,
+                      borderRadius: 110,
+                      borderWidth: 1,
+                      borderColor: "#ffffff19",
+                      left: -90,
+                      bottom: -150,
+                    }}
+                  />
+                  <View style={{ alignItems: "center" }}>
+                    <Text style={[s.small, { color: colors.ink, opacity: 0.7 }]}>
+                      {t("Total balance", "资产总值")}
+                    </Text>
+                    {!balance ? (
+                      <Skeleton
+                        width={140}
+                        height={38}
+                        borderRadius={8}
+                        style={{ marginVertical: 4, backgroundColor: "#ffffff26" }}
+                      />
+                    ) : (
                       <Text
-                        style={[
-                          s.small,
-                          {
-                            fontWeight: "600",
-                            color:
-                              r.status === "confirmed"
-                                ? colors.green
-                                : r.status === "failed" || r.status === "reverted"
-                                  ? colors.danger
-                                  : colors.yellow,
-                          },
-                        ]}
+                        style={{
+                          color: colors.ink,
+                          fontSize: 38,
+                          lineHeight: 46,
+                          fontWeight: "700",
+                          letterSpacing: -1,
+                        }}
                       >
-                        {activityStatus(r.status)}
+                        {valueCore.format(valuation.total)}
                       </Text>
-                    </View>
-                  </Pressable>
-                );
-              })
-            ) : (
-              <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
-                <Text style={s.small}>
-                  {t("Your signed transactions will appear here.", "已签名的交易将显示在这里。")}
-                </Text>
+                    )}
+                    {valuation.coverage !== valueCore.COMPLETE ? (
+                      <Text
+                        style={[s.small, { color: colors.ink, opacity: 0.75, textAlign: "center" }]}
+                      >
+                        {valuation.coverage === valueCore.PARTIAL
+                          ? t(
+                              `Subtotal — no price for ${valuation.unpriced.map((entry) => entry.symbol).join(", ")}`,
+                              `小计 — 缺少价格：${valuation.unpriced.map((entry) => entry.symbol).join("、")}`,
+                            )
+                          : t("No prices could be read.", "无法读取价格。")}
+                      </Text>
+                    ) : null}
+                  </View>
+                </LinearGradient>
               </View>
-            )}
+              <View ref={tourActionsRef} collapsable={false} style={s.quickActions}>
+                {[
+                  ["arrow-top-right", "Send", "发送", "send"],
+                  ["arrow-down", "Receive", "收款", "receive"],
+                  ["swap-horizontal", "Swap", "兑换", "swap"],
+                  ["dots-horizontal", "More", "更多", "more"],
+                ].map(([icon, en, zh, p]) => (
+                  <Pressable
+                    key={p}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [s.quickAction, { opacity: pressed ? 0.6 : 1 }]}
+                    onPress={() => (p === "more" ? setSheetOpen(true) : openFlow(p))}
+                  >
+                    <View style={s.quickIcon}>
+                      <Icon name={icon} color={colors.lime} size={24} />
+                    </View>
+                    <Text style={[s.small, { color: colors.ink }]}>{t(en, zh)}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              {!wide && popular}
+              <View ref={tourAssetsRef} collapsable={false} style={{ gap: 10 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setPage("tokens")}
+                    style={{ flexDirection: "row", alignItems: "center", gap: 2 }}
+                  >
+                    <Text style={[s.text, { fontWeight: "700" }]}>{t("Assets", "资产")}</Text>
+                    <Icon name="chevron-right" size={16} color={colors.muted} />
+                  </Pressable>
+                </View>
+                {!balance ? (
+                  <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
+                    {[0, 1].map((i) => tokenRowSkeleton(i, i === 0))}
+                  </View>
+                ) : held.length ? (
+                  <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
+                    {held.map(({ asset, amount }, i) => assetRow(asset, amount, i === 0))}
+                  </View>
+                ) : (
+                  <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
+                    <Text style={s.small}>
+                      {t("No balances on this wallet yet.", "此钱包暂无余额。")}
+                    </Text>
+                    <Pressable accessibilityRole="button" onPress={() => openFlow("receive")}>
+                      <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                        {t("Receive assets", "接收资产")}
+                      </Text>
+                    </Pressable>
+                  </View>
+                )}
+              </View>
+            </View>
+            <View style={wide ? { flex: 5, minWidth: 0, gap: 22 } : { gap: 18 }}>
+              {wide && popular}
+              <View style={{ gap: 10 }}>
+                <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                  <Text style={[s.text, { fontWeight: "700" }]}>
+                    {t("Recent activity", "最近记录")}
+                  </Text>
+                  {combinedHistory.length ? (
+                    <Pressable accessibilityRole="button" onPress={() => setPage("activity")}>
+                      <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                        {t("View all", "查看全部")}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                {combinedHistory.length ? (
+                  combinedHistory.slice(0, 3).map((r) => {
+                    const kind = activityKind(r);
+                    return (
+                      <Pressable
+                        key={r.hash}
+                        accessibilityRole="button"
+                        onPress={() => setPage("activity")}
+                        style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
+                      >
+                        <View style={s.iconDisc}>
+                          <Icon name={kind === "send" ? "arrow-top-right" : kind === "receive" ? "arrow-down" : kind === "bridge" ? "bridge" : "swap-vertical"} size={20} color={colors.ink} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={s.label} numberOfLines={1}>
+                            {activityTitle(r)}
+                          </Text>
+                          <Text style={s.small}>
+                            {r.createdAt ? new Date(r.createdAt).toLocaleString() : t("On-chain transaction", "链上交易")}
+                          </Text>
+                        </View>
+                        <View
+                          style={{
+                            borderRadius: 999,
+                            paddingHorizontal: 10,
+                            paddingVertical: 4,
+                            backgroundColor:
+                              r.status === "confirmed"
+                                ? colors.tint
+                                : r.status === "failed" || r.status === "reverted"
+                                  ? colors.dangerTint
+                                  : colors.warnTint,
+                          }}
+                        >
+                          <Text
+                            style={[
+                              s.small,
+                              {
+                                fontWeight: "600",
+                                color:
+                                  r.status === "confirmed"
+                                    ? colors.green
+                                    : r.status === "failed" || r.status === "reverted"
+                                      ? colors.danger
+                                      : colors.yellow,
+                              },
+                            ]}
+                          >
+                            {activityStatus(r.status)}
+                          </Text>
+                        </View>
+                      </Pressable>
+                    );
+                  })
+                ) : (
+                  <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
+                    <Text style={s.small}>
+                      {t("Your signed transactions will appear here.", "已签名的交易将显示在这里。")}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
           </View>
         </>
       );
+    }
     if (page === "tag") {
       return (
         <>
@@ -6786,6 +6807,20 @@ function Wallet() {
   // flow (send, receive, swap, bridge, tag, nfts) — reads as a place you
   // back out of with its own control, not one you tab-jump from.
   const isRootTab = page === "home" || page === "activity";
+  // On a desktop, a phone's bottom sheet becomes a dialog in the middle of the
+  // window (auto margins centre it), centred panels keep a dialog's width, and
+  // full-screen modal pages keep the same measure as ordinary pages.
+  const sheetFrame = wide
+    ? ({
+        width: "100%",
+        maxWidth: 520,
+        alignSelf: "center",
+        marginVertical: "auto",
+        borderRadius: 30,
+      } as const)
+    : null;
+  const dialogFrame = wide ? ({ width: "100%", maxWidth: 480, alignSelf: "center" } as const) : null;
+  const modalPage = wide ? { paddingHorizontal: Math.max(24, (windowWidth - 760) / 2) } : null;
   return (
     <SafeAreaView
       style={s.page}
@@ -6802,7 +6837,71 @@ function Wallet() {
         Home is the one screen with no title of its own, so it's the one
         that gets this bar.
       */}
-      {owner && page === "home" && (
+      {owner && wide && (
+        <View style={{ borderBottomWidth: 1, borderBottomColor: colors.line }}>
+          <View
+            style={[
+              s.header,
+              // The home page's width, so the brand lines up with the page below.
+              {
+                width: "100%",
+                maxWidth: Math.min(1120, windowWidth - 280),
+                alignSelf: "center",
+                paddingHorizontal: 32,
+              },
+            ]}
+          >
+            <Pressable
+              accessibilityRole="link"
+              onPress={() => setPage("home")}
+              style={{ flexDirection: "row", alignItems: "center", gap: 10 }}
+            >
+              <Image
+                source={require("./assets/logo-mark.png")}
+                style={{ width: 30, height: 30 }}
+                resizeMode="contain"
+              />
+              <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>
+                Tera Wallet
+              </Text>
+            </Pressable>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+              <View
+                style={{
+                  borderWidth: 1,
+                  borderColor: colors.line,
+                  borderRadius: 999,
+                  paddingHorizontal: 12,
+                  paddingVertical: 7,
+                }}
+              >
+                {languageControl}
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("Lock wallet", "锁定钱包")}
+                onPress={forget}
+                style={({ hovered, pressed }: { hovered?: boolean; pressed: boolean }) => ({
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 6,
+                  borderWidth: 1,
+                  borderColor: colors.line,
+                  borderRadius: 999,
+                  paddingHorizontal: 12,
+                  paddingVertical: 7,
+                  backgroundColor: hovered ? colors.wash : "transparent",
+                  opacity: pressed ? 0.7 : 1,
+                })}
+              >
+                <Icon name="lock-outline" size={15} color={colors.muted} />
+                <Text style={s.mono}>{t("Lock", "锁定")}</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      )}
+      {owner && !wide && page === "home" && (
         <View style={s.header}>
           <Pressable
             onPress={() => setPage("home")}
@@ -6840,7 +6939,13 @@ function Wallet() {
             behavior={Platform.OS === "ios" ? "padding" : page === "assistant" ? "height" : undefined}
           >
             {owner && page === "assistant" ? (
-              assistantScreen()
+              wide ? (
+                <View style={{ flex: 1, width: "100%", maxWidth: 760, alignSelf: "center" }}>
+                  {assistantScreen()}
+                </View>
+              ) : (
+                assistantScreen()
+              )
             ) : (
               <ScrollView
                 ref={homeScrollRef}
@@ -6848,7 +6953,28 @@ function Wallet() {
                   homeScrollY.current = e.nativeEvent.contentOffset.y;
                 }}
                 scrollEventThrottle={32}
-                contentContainerStyle={[s.content, owner ? { paddingBottom: 124 } : null]}
+                contentContainerStyle={[
+                  s.content,
+                  owner ? { paddingBottom: 124 } : null,
+                  wide
+                    ? {
+                        width: "100%",
+                        // Home spreads into two columns; forms and lists keep a
+                        // readable measure; sign-in stays the width of a card.
+                        // The side margin keeps every page clear of the dock.
+                        maxWidth: !owner
+                          ? 440
+                          : page === "home"
+                            ? Math.min(1120, windowWidth - 280)
+                            : 760,
+                        alignSelf: "center",
+                        paddingHorizontal: 32,
+                        paddingTop: owner ? 36 : 48,
+                        paddingBottom: 72,
+                        gap: 22,
+                      }
+                    : null,
+                ]}
                 keyboardShouldPersistTaps="handled"
                 refreshControl={
                   owner ? (
@@ -6876,7 +7002,82 @@ function Wallet() {
           iOS 26. It steps aside while the keyboard is up, so it never sits on
           top of the field being typed into.
         */}
-        {owner && !keyboardOpen && isRootTab && (
+        {owner && wide && (
+          <View
+            ref={tourTabBarRef}
+            collapsable={false}
+            accessibilityRole="tablist"
+            style={{
+              position: "absolute",
+              right: 20,
+              top: "50%",
+              transform: [{ translateY: "-50%" }],
+              gap: 2,
+              padding: 6,
+              borderRadius: 26,
+              borderWidth: 1,
+              borderColor: "#ffffff1f",
+              backgroundColor: "#1d1b20cc",
+              shadowColor: "#000000",
+              shadowOpacity: 0.4,
+              shadowRadius: 24,
+              shadowOffset: { width: 0, height: 12 },
+            }}
+          >
+            {(
+              [
+                ["wallet-outline", "Wallet", "钱包", "home"],
+                ["history", "Activity", "记录", "activity"],
+                ["lightning-bolt-outline", "Actions", "操作", "actions"],
+                ["message-text-outline", "Assistant", "助手", "assistant"],
+                ["cog-outline", "Settings", "设置", "settings"],
+              ] as const
+            ).map(([icon, en, zh, p]) => {
+              const active = p === "actions" ? sheetOpen : page === p;
+              return (
+                <Pressable
+                  key={p}
+                  accessibilityRole={p === "actions" ? "button" : "tab"}
+                  accessibilityState={p === "actions" ? { expanded: sheetOpen } : { selected: active }}
+                  disabled={busy}
+                  onPress={() => {
+                    if (p === "actions") return setSheetOpen(true);
+                    setError("");
+                    if (p === "settings") setSettingsSection("root");
+                    setPage(p);
+                  }}
+                  style={({ hovered, pressed }: { hovered?: boolean; pressed: boolean }) => ({
+                    width: 78,
+                    alignItems: "center",
+                    gap: 5,
+                    paddingTop: 11,
+                    paddingBottom: 9,
+                    borderRadius: 20,
+                    backgroundColor: active ? colors.wash : hovered ? "#ffffff0d" : "transparent",
+                    opacity: busy ? 0.4 : pressed ? 0.7 : 1,
+                  })}
+                >
+                  <Icon name={icon} size={24} color={active ? colors.green : colors.muted} />
+                  <Text
+                    numberOfLines={1}
+                    style={[
+                      s.small,
+                      {
+                        fontSize: 11,
+                        lineHeight: 13,
+                        color: active ? colors.ink : colors.muted,
+                        fontWeight: active ? "700" : "500",
+                      },
+                    ]}
+                  >
+                    {t(en, zh)}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
+        {owner && !wide && !keyboardOpen && isRootTab && (
           <View
             ref={tourTabBarRef}
             collapsable={false}
@@ -7160,6 +7361,7 @@ function Wallet() {
                 backgroundColor: colors.sheet,
                 borderTopLeftRadius: 30,
                 borderTopRightRadius: 30,
+                ...sheetFrame,
                 padding: 24,
                 gap: 14,
               }}
@@ -7226,6 +7428,7 @@ function Wallet() {
               backgroundColor: colors.sheet,
               borderTopLeftRadius: 30,
               borderTopRightRadius: 30,
+              ...sheetFrame,
               padding: 24,
               gap: 14,
             }}
@@ -7315,6 +7518,7 @@ function Wallet() {
               backgroundColor: colors.sheet,
               borderTopLeftRadius: 30,
               borderTopRightRadius: 30,
+              ...sheetFrame,
               padding: 24,
               gap: 14,
             }}
@@ -7333,7 +7537,7 @@ function Wallet() {
         onRequestClose={() => setSwapPayPicker(false)}
       >
         <SafeAreaProvider>
-          <SafeAreaView style={s.page}>
+          <SafeAreaView style={[s.page, modalPage]}>
             <Header
               title={t("Choose a token to pay", "\u9009\u62e9\u652f\u4ed8\u4ee3\u5e01")}
               onBack={() => setSwapPayPicker(false)}
@@ -7377,7 +7581,7 @@ function Wallet() {
         onRequestClose={() => setSwapReceivePicker(false)}
       >
         <SafeAreaProvider>
-          <SafeAreaView style={s.page}>
+          <SafeAreaView style={[s.page, modalPage]}>
             <Header
               title={t("Choose a token", "选择代币")}
               onBack={() => setSwapReceivePicker(false)}
@@ -7468,7 +7672,7 @@ function Wallet() {
         onRequestClose={() => !busy && setMinimisePlan(null)}
       >
         <SafeAreaProvider>
-          <SafeAreaView style={s.page}>
+          <SafeAreaView style={[s.page, modalPage]}>
             <ScrollView contentContainerStyle={s.content}>
               {title(
                 "Review private prompt",
@@ -7545,6 +7749,7 @@ function Wallet() {
               backgroundColor: colors.sheet,
               borderTopLeftRadius: 30,
               borderTopRightRadius: 30,
+              ...sheetFrame,
               overflow: "hidden",
             }}
           >
@@ -7825,6 +8030,7 @@ function Wallet() {
               backgroundColor: colors.sheet,
               borderTopLeftRadius: 30,
               borderTopRightRadius: 30,
+              ...sheetFrame,
               padding: 24,
               gap: 14,
             }}
@@ -7878,6 +8084,7 @@ function Wallet() {
                 backgroundColor: colors.paper,
                 borderTopLeftRadius: 30,
                 borderTopRightRadius: 30,
+                ...sheetFrame,
                 padding: 24,
                 gap: 14,
               }}
@@ -7949,7 +8156,7 @@ function Wallet() {
         <View
           style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "center", padding: 24 }}
         >
-          <View style={[s.panel, { backgroundColor: colors.sheet }]}>
+          <View style={[s.panel, { backgroundColor: colors.sheet }, dialogFrame]}>
             <Text style={s.text}>{auth?.title}</Text>
             <Field
               label={pinWallet ? t("Wallet PIN", "钱包 PIN") : t("Wallet password", "钱包密码")}
@@ -8028,7 +8235,7 @@ function Wallet() {
         <View
           style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "center", padding: 24 }}
         >
-          <View style={[s.panel, { backgroundColor: colors.sheet, gap: 14 }]}>
+          <View style={[s.panel, { backgroundColor: colors.sheet, gap: 14 }, dialogFrame]}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
               <View style={s.iconDisc}>
                 <Icon name="fingerprint" size={20} color={colors.green} />
@@ -8090,7 +8297,7 @@ function Wallet() {
         <View
           style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "center", padding: 24 }}
         >
-          <View style={[s.panel, { backgroundColor: colors.sheet, gap: 14 }]}>
+          <View style={[s.panel, { backgroundColor: colors.sheet, gap: 14 }, dialogFrame]}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
               <View style={s.iconDisc}>
                 <Icon name="fingerprint" size={20} color={colors.green} />
@@ -8151,7 +8358,7 @@ function Wallet() {
         }}
       >
         <SafeAreaProvider>
-          <SafeAreaView style={s.page}>
+          <SafeAreaView style={[s.page, modalPage]}>
             <View style={s.content}>
               {title("Recovery phrase.", "助记词。")}
               <Text style={s.small}>
@@ -8198,7 +8405,7 @@ function Wallet() {
         }}
       >
         <SafeAreaProvider>
-          <SafeAreaView style={s.page}>
+          <SafeAreaView style={[s.page, modalPage]}>
             <ScrollView contentContainerStyle={s.content}>
               {title("Private key.", "私钥。")}
               <Text style={s.small}>
