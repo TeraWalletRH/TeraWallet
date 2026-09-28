@@ -59,18 +59,31 @@ export type TeamSummary = {
 export type Proposal = {
   id: string;
   kind: "payment" | "add-signer" | "remove-signer";
+  /** The signer a signer change adds or removes. */
+  subject: Address | null;
   to: Address;
   value: string;
-  data: Hex;
-  nonce: string;
-  safeTxHash: Hex;
+  /** For a proposal with no place yet, what the next approval would sign. */
+  data: Hex | null;
+  /** Empty until the first approval gives it a place in the Safe's order. */
+  nonce: string | null;
+  safeTxHash: Hex | null;
   note: string;
   createdBy: Address;
   createdAt: string;
   status: "pending" | "executed" | "rejected" | "cancelled";
+  cancelRequested: boolean;
+  rebuiltAt: string | null;
   executedTxHash: Hex | null;
+  /** The last placed proposal: withdrawing it moves nothing after it. */
+  last: boolean;
   approvals: { signer: Address; signature: Hex }[];
-  rejections: Address[];
+  /** A placed proposal's rejections are signatures over its on-chain cancellation. */
+  rejections: { signer: Address; signature: Hex | null }[];
+  /** Can no longer reach the threshold. */
+  blocked: boolean;
+  /** Enough signers signed its cancellation for anyone to send it. */
+  cancellable: boolean;
 };
 export type Team = {
   team: { safe: Address; name: string; chainId: number; createdBy: Address };
@@ -78,6 +91,8 @@ export type Team = {
   owners: Address[];
   threshold: number;
   nonce: string;
+  /** The place the next first approval takes. */
+  nextNonce: string;
   members: { address: Address; role: Role; status: "invited" | "active"; signer: boolean }[];
   proposals: Proposal[];
 };
@@ -273,70 +288,120 @@ export async function proposePayment(
   });
 }
 
-const typedFor = (safe: Address, proposal: Proposal) =>
-  safeTxTypedData({
-    safe,
-    chainId: chain.id,
-    to: proposal.to,
-    value: proposal.value,
-    data: proposal.data,
-    nonce: proposal.nonce,
-  });
+/** The place a signature for this proposal is for: its own, or the next free one. */
+const placeOf = (team: Team, proposal: Proposal) => proposal.nonce ?? team.nextNonce;
 
-/** Sign the proposal's own fields, after checking they are what the queue says they are. */
-export async function approve(safe: Address, proposal: Proposal) {
-  const typed = typedFor(safe, proposal);
-  if (hashTypedData(typed as never).toLowerCase() !== proposal.safeTxHash.toLowerCase())
+const typedAt = (
+  safe: Address,
+  fields: { to: Address; value: string | bigint; data: Hex },
+  nonce: string,
+) => safeTxTypedData({ safe, chainId: chain.id, ...fields, nonce });
+
+/**
+ * What would be signed for this proposal, checked before anything is signed:
+ * a placed proposal must hash to the hash the queue holds, and a signer change
+ * must actually add or remove the signer it names, on this treasury.
+ */
+function checkedFields(team: Team, proposal: Proposal) {
+  const safe = team.team.safe;
+  if (!proposal.data)
+    throw new Error("This change no longer applies to the treasury. Nothing was signed.");
+  const fields = { to: proposal.to, value: proposal.value, data: proposal.data };
+  if (proposal.kind !== "payment") {
+    const read = describe(team, proposal, []);
+    if (
+      proposal.to.toLowerCase() !== safe.toLowerCase() ||
+      !read.signerChange ||
+      read.signerChange.who !== proposal.subject ||
+      read.signerChange.add !== (proposal.kind === "add-signer")
+    )
+      throw new Error("This change does not do what it says. Nothing was signed.");
+  }
+  const nonce = placeOf(team, proposal);
+  if (
+    proposal.nonce !== null &&
+    hashTypedData(typedAt(safe, fields, nonce) as never).toLowerCase() !==
+      String(proposal.safeTxHash).toLowerCase()
+  )
     throw new Error("This proposal does not match its own details. Nothing was signed.");
+  return { fields, nonce };
+}
+
+/**
+ * Approve: sign the proposal's own fields at its place. A proposal with no
+ * place takes the next one with this approval; if someone else took it first,
+ * the service says the queue moved and the screen reloads and asks again.
+ */
+export async function approve(team: Team, proposal: Proposal) {
+  const { fields, nonce } = checkedFields(team, proposal);
   const account = vault.currentAccount();
-  const signature = await account.signTypedData(typed as never);
-  return api("/api/teams/approve", { id: proposal.id, wallet: account.address, signature });
+  const signature = await account.signTypedData(typedAt(team.team.safe, fields, nonce) as never);
+  return api("/api/teams/approve", { id: proposal.id, wallet: account.address, signature, nonce });
 }
 
-export async function reject(safe: Address, proposal: Proposal) {
-  return api("/api/teams/reject", {
-    id: proposal.id,
-    ...(await sign("reject", safe, [["Proposal", proposal.id]])),
-  });
+/**
+ * Reject. For a placed proposal this signs the Safe's empty transaction at the
+ * same place — its on-chain cancellation, which keeps every later proposal's
+ * approvals. For one with no place, it is a signed vote.
+ */
+export async function reject(team: Team, proposal: Proposal) {
+  const safe = team.team.safe;
+  if (proposal.nonce === null)
+    return api("/api/teams/reject", {
+      id: proposal.id,
+      ...(await sign("reject", safe, [["Proposal", proposal.id]])),
+    });
+  const account = vault.currentAccount();
+  const signature = await account.signTypedData(
+    typedAt(safe, { to: safe, value: 0n, data: "0x" }, proposal.nonce) as never,
+  );
+  return api("/api/teams/reject", { id: proposal.id, wallet: account.address, signature });
 }
 
-export async function cancel(safe: Address, proposal: Proposal) {
+/** `now` closes it; `onchain` asks the signers to sign its cancellation instead. */
+export async function cancel(safe: Address, proposal: Proposal, mode: "now" | "onchain" = "now") {
   return api("/api/teams/cancel", {
     id: proposal.id,
-    ...(await sign("cancel", safe, [["Proposal", proposal.id]])),
+    mode,
+    ...(await sign("cancel", safe, [
+      ["Proposal", proposal.id],
+      ["Mode", mode],
+    ])),
   });
 }
 
-/** Approvals that count now: from current signers, enough to meet the threshold. */
+/** Approvals that count now: from current signers. */
 export const counted = (team: Team, proposal: Proposal) =>
   proposal.approvals.filter((a) => team.owners.includes(a.signer));
 
-/**
- * Send an approved proposal to the Safe from the open account. The Safe checks
- * every signature itself; this account only pays the network fee.
- */
-export async function executeProposal(team: Team, proposal: Proposal) {
+/** Rejections that count now: current signers' signed cancellations. */
+export const countedRejections = (team: Team, proposal: Proposal) =>
+  proposal.rejections.filter(
+    (r): r is { signer: Address; signature: Hex } =>
+      !!r.signature && team.owners.includes(r.signer),
+  );
+
+/** Send a transaction to the Safe from the open account, which only pays the fee. */
+async function sendToSafe(
+  team: Team,
+  fields: { to: Address; value: bigint; data: Hex },
+  signatures: { signer: Address; signature: Hex }[],
+) {
   const safe = team.team.safe;
-  const approvals = counted(team, proposal).slice(0, team.threshold);
-  if (approvals.length < team.threshold)
-    throw new Error("This payment does not have enough approvals yet.");
-  const typed = typedFor(safe, proposal);
-  if (hashTypedData(typed as never).toLowerCase() !== proposal.safeTxHash.toLowerCase())
-    throw new Error("This proposal does not match its own details. Nothing was sent.");
   const data = encodeFunctionData({
     abi: safeAbi,
     functionName: "execTransaction",
     args: [
-      proposal.to,
-      BigInt(proposal.value),
-      proposal.data,
+      fields.to,
+      fields.value,
+      fields.data,
       0,
       0n,
       0n,
       0n,
       zeroAddress,
       zeroAddress,
-      packSignatures(approvals) as Hex,
+      packSignatures(signatures.slice(0, team.threshold)) as Hex,
     ],
   });
   let hash: Hex | null = null;
@@ -347,10 +412,37 @@ export async function executeProposal(team: Team, proposal: Proposal) {
       hash = row.hash;
     },
   );
-  if (!hash) throw new Error("The payment was not sent.");
+  if (!hash) throw new Error("Nothing was sent.");
   const receipt = await client.waitForTransactionReceipt({ hash, timeout: 120_000 });
-  if (receipt.status !== "success") throw new Error("The treasury refused this payment on chain.");
+  if (receipt.status !== "success") throw new Error("The treasury refused this on chain.");
+  return hash as Hex;
+}
+
+/** Send an approved proposal. The Safe checks every signature itself. */
+export async function executeProposal(team: Team, proposal: Proposal) {
+  if (proposal.nonce === null || proposal.nonce !== team.nonce)
+    throw new Error("Earlier proposals in the queue have to go first.");
+  const approvals = counted(team, proposal);
+  if (approvals.length < team.threshold)
+    throw new Error("This does not have enough approvals yet.");
+  const { fields } = checkedFields(team, proposal);
+  const hash = await sendToSafe(team, { ...fields, value: BigInt(fields.value) }, approvals);
   await api("/api/teams/executed", { id: proposal.id, txHash: hash }).catch(() => {});
+  return hash;
+}
+
+/** Send a proposal's cancellation: the empty transaction its rejecters signed. */
+export async function executeCancellation(team: Team, proposal: Proposal) {
+  if (proposal.nonce === null || proposal.nonce !== team.nonce)
+    throw new Error("Earlier proposals in the queue have to go first.");
+  const rejections = countedRejections(team, proposal);
+  if (rejections.length < team.threshold)
+    throw new Error("Not enough signers have signed the cancellation yet.");
+  const safe = team.team.safe;
+  const hash = await sendToSafe(team, { to: safe, value: 0n, data: "0x" }, rejections);
+  await api("/api/teams/executed", { id: proposal.id, txHash: hash, rejection: true }).catch(
+    () => {},
+  );
   return hash;
 }
 
@@ -366,9 +458,11 @@ export type Described = {
 
 /** What a proposal does, read from its own calldata — the same fields that get signed. */
 export function describe(team: Team, proposal: Proposal, assets: Asset[]): Described {
+  if (!proposal.data) return { title: "A change that no longer applies" };
+  const data = proposal.data;
   if (proposal.to.toLowerCase() === team.team.safe.toLowerCase()) {
     try {
-      const call = decodeFunctionData({ abi: safeAbi, data: proposal.data });
+      const call = decodeFunctionData({ abi: safeAbi, data });
       if (call.functionName === "addOwnerWithThreshold") {
         const [who, threshold] = call.args as [Address, bigint];
         return {
@@ -388,7 +482,7 @@ export function describe(team: Team, proposal: Proposal, assets: Asset[]): Descr
     }
     return { title: "A change to the treasury" };
   }
-  if (proposal.data === "0x")
+  if (data === "0x")
     return {
       title: "Payment",
       amount: formatUnits(BigInt(proposal.value), 18),
@@ -396,7 +490,7 @@ export function describe(team: Team, proposal: Proposal, assets: Asset[]): Descr
       recipient: proposal.to,
     };
   try {
-    const call = decodeFunctionData({ abi: erc20Abi, data: proposal.data });
+    const call = decodeFunctionData({ abi: erc20Abi, data });
     if (call.functionName === "transfer") {
       const [recipient, units] = call.args as [Address, bigint];
       const asset = assets.find((a) => a.address.toLowerCase() === proposal.to.toLowerCase());

@@ -31,8 +31,10 @@ import {
   cancel,
   changeRole,
   counted,
+  countedRejections,
   createTreasury,
   describe,
+  executeCancellation,
   executeProposal,
   invite,
   isSignerRole,
@@ -473,6 +475,23 @@ function TeamView({
     }
   }
 
+  /**
+   * Approve against the latest queue. A proposal with no place takes the next
+   * one; if someone else took it meanwhile, reload once and sign for the new one.
+   */
+  async function approveFresh(id: string) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const current = attempt ? await refresh() : team;
+      const proposal = current?.proposals.find((p) => p.id === id);
+      if (!current || !proposal) throw new Error("This proposal is no longer in the queue.");
+      try {
+        return await approve(current, proposal);
+      } catch (e) {
+        if (attempt || !(e instanceof Error) || !/queue moved/i.test(e.message)) throw e;
+      }
+    }
+  }
+
   if (!team)
     return error ? (
       <View style={s.error}>
@@ -626,11 +645,34 @@ function TeamView({
       {pending.map((proposal) => {
         const read = describe(team, proposal, assets);
         const approvals = counted(team, proposal);
+        const cancellations = countedRejections(team, proposal);
+        const placed = proposal.nonce !== null;
         const ready = approvals.length >= team.threshold;
         const next = proposal.nonce === team.nonce;
         const approved = approvals.some((a) => a.signer === owner);
-        const rejected = proposal.rejections.includes(owner);
-        const mine = proposal.createdBy === owner;
+        // A vote cast before it had a place is not a signed cancellation; once it
+        // has one, that signer is asked to sign the cancellation too.
+        const rejected = proposal.rejections.some(
+          (r) => r.signer === owner && (!placed || !!r.signature),
+        );
+        const mayCancel = proposal.createdBy === owner || can(me.role, "manage");
+        const signer = amSigner && can(me.role, "approve");
+        const ahead = placed ? Number(BigInt(proposal.nonce!) - BigInt(team.nonce)) : 0;
+        const rewritten = proposal.rebuiltAt && !proposal.approvals.length;
+        const warn = (text: string) => (
+          <View
+            style={{
+              flexDirection: "row",
+              gap: 8,
+              padding: 10,
+              borderRadius: 12,
+              backgroundColor: colors.warnTint,
+            }}
+          >
+            <Icon name="triangle-alert" size={15} color={colors.yellow} />
+            <Text style={[s.small, { flex: 1, color: colors.ink }]}>{text}</Text>
+          </View>
+        );
         return (
           <View
             key={proposal.id}
@@ -677,13 +719,53 @@ function TeamView({
                   <Text style={[s.small, { color: colors.ink }]}>{proposal.note}</Text>
                 ) : null}
                 <Text style={s.small}>
-                  {t(
-                    `Proposed by ${nameOf(proposal.createdBy)} · ${new Date(proposal.createdAt).toLocaleString()}`,
-                    `由 ${nameOf(proposal.createdBy)} 发起 · ${new Date(proposal.createdAt).toLocaleString()}`,
-                  )}
+                  {[
+                    t(
+                      `Proposed by ${nameOf(proposal.createdBy)}`,
+                      `由 ${nameOf(proposal.createdBy)} 发起`,
+                    ),
+                    !placed
+                      ? t("Not in the queue yet", "尚未排队")
+                      : next
+                        ? t("Next to send", "下一个发送")
+                        : t(`${ahead} ahead of it`, `前面还有 ${ahead} 个`),
+                  ].join(" · ")}
                 </Text>
               </View>
             </View>
+            {rewritten
+              ? warn(
+                  t(
+                    "The signer list changed, so this was rewritten to match. Approve it again.",
+                    "签署人名单已变更，此项已相应重写，请重新批准。",
+                  ),
+                )
+              : null}
+            {proposal.cancelRequested && !proposal.cancellable
+              ? warn(
+                  t(
+                    `Cancellation requested. ${Math.max(0, team.threshold - cancellations.length)} more signer${team.threshold - cancellations.length === 1 ? "" : "s"} must sign it; later proposals keep their approvals.`,
+                    `已请求取消，还需 ${Math.max(0, team.threshold - cancellations.length)} 位签署人签署；后续提议的批准将保留。`,
+                  ),
+                )
+              : proposal.blocked && !proposal.cancellable
+                ? warn(
+                    placed
+                      ? t(
+                          `This can no longer be approved. ${Math.max(0, team.threshold - cancellations.length)} more rejection${team.threshold - cancellations.length === 1 ? "" : "s"} cancel it on-chain, or it can be cancelled now.`,
+                          `此项已无法获批。再有 ${Math.max(0, team.threshold - cancellations.length)} 人拒绝即可链上取消，或立即取消。`,
+                        )
+                      : t("This can no longer be approved.", "此项已无法获批。"),
+                  )
+                : null}
+            {proposal.cancellable
+              ? warn(
+                  t(
+                    "Enough signers signed its cancellation. Sending it uses up its place and leaves the rest of the queue as it is.",
+                    "已有足够签署人签署取消。发送后将占用其位置，队列其余部分保持不变。",
+                  ),
+                )
+              : null}
             <View style={{ gap: 6 }}>
               <View style={{ flexDirection: "row", gap: 4 }}>
                 {Array.from({ length: team.threshold }, (_, i) => (
@@ -703,17 +785,28 @@ function TeamView({
                   `${Math.min(approvals.length, team.threshold)} of ${team.threshold} approvals${approvals.length ? ` · ${approvals.map((a) => nameOf(a.signer)).join(", ")}` : ""}${proposal.rejections.length ? ` · ${proposal.rejections.length} rejected` : ""}`,
                   `${Math.min(approvals.length, team.threshold)}/${team.threshold} 已批准${proposal.rejections.length ? ` · ${proposal.rejections.length} 人拒绝` : ""}`,
                 )}
+                {!placed && signer && !approved
+                  ? t(
+                      " · Your approval gives it the next place in the queue.",
+                      " · 你的批准将使其进入队列的下一个位置。",
+                    )
+                  : ""}
               </Text>
             </View>
             <View style={{ flexDirection: wide ? "row" : "column", gap: 10 }}>
-              {amSigner && can(me.role, "approve") && !approved && !ready ? (
+              {signer &&
+              !approved &&
+              !rejected &&
+              !ready &&
+              !proposal.blocked &&
+              !proposal.cancelRequested ? (
                 <>
                   <View style={wide ? { flex: 1 } : null}>
                     <Button
                       primary
                       disabled={!!busy}
                       onPress={() =>
-                        void act(`approve-${proposal.id}`, () => approve(safe, proposal), {
+                        void act(`approve-${proposal.id}`, () => approveFresh(proposal.id), {
                           title: t("Approved", "已批准"),
                           body: t("Your approval is recorded.", "你的批准已记录。"),
                           tone: "success",
@@ -727,21 +820,47 @@ function TeamView({
                       )}
                     </Button>
                   </View>
-                  {!rejected ? (
-                    <View style={wide ? { flex: 1 } : null}>
-                      <Button
-                        disabled={!!busy}
-                        onPress={() =>
-                          void act(`reject-${proposal.id}`, () => reject(safe, proposal))
-                        }
-                      >
-                        {t("Reject", "拒绝")}
-                      </Button>
-                    </View>
-                  ) : null}
+                  <View style={wide ? { flex: 1 } : null}>
+                    <Button
+                      disabled={!!busy}
+                      onPress={() =>
+                        void act(`reject-${proposal.id}`, () => reject(team, proposal))
+                      }
+                    >
+                      {t("Reject", "拒绝")}
+                    </Button>
+                  </View>
                 </>
               ) : null}
-              {ready && can(me.role, "execute") ? (
+              {signer &&
+              !rejected &&
+              placed &&
+              (proposal.cancelRequested || proposal.blocked) &&
+              !proposal.cancellable ? (
+                <View style={wide ? { flex: 1 } : null}>
+                  <Button
+                    primary
+                    disabled={!!busy}
+                    onPress={() =>
+                      void act(`reject-${proposal.id}`, () => reject(team, proposal), {
+                        title: t("Cancellation signed", "已签署取消"),
+                        body: t(
+                          "Your signature on its cancellation is recorded.",
+                          "你对取消的签名已记录。",
+                        ),
+                        tone: "success",
+                      })
+                    }
+                  >
+                    {busy === `reject-${proposal.id}` ? (
+                      <TeraSpinner size={18} />
+                    ) : (
+                      t("Sign cancellation", "签署取消")
+                    )}
+                  </Button>
+                </View>
+              ) : null}
+              {ready && !proposal.cancellable && can(me.role, "execute") ? (
                 <View style={wide ? { flex: 1 } : null}>
                   <Button
                     primary
@@ -749,7 +868,7 @@ function TeamView({
                     onPress={() =>
                       void act(`execute-${proposal.id}`, () => executeProposal(team, proposal), {
                         title: t("Sent", "已发送"),
-                        body: t("The treasury executed this payment.", "资金库已执行此付款。"),
+                        body: t("The treasury executed this.", "资金库已执行此项。"),
                         tone: "success",
                       })
                     }
@@ -759,18 +878,83 @@ function TeamView({
                     ) : next ? (
                       t("Send now", "立即发送")
                     ) : (
-                      t("Waiting for earlier payments", "等待之前的付款")
+                      t("Waiting for earlier proposals", "等待之前的提议")
+                    )}
+                  </Button>
+                </View>
+              ) : null}
+              {proposal.cancellable && can(me.role, "execute") ? (
+                <View style={wide ? { flex: 1 } : null}>
+                  <Button
+                    primary
+                    disabled={!!busy || !next}
+                    onPress={() =>
+                      void act(
+                        `cancel-send-${proposal.id}`,
+                        () => executeCancellation(team, proposal),
+                        {
+                          title: t("Cancelled on-chain", "已链上取消"),
+                          body: t(
+                            "Its place is used up; everything queued after it kept its approvals.",
+                            "其位置已被占用，后续提议的批准均已保留。",
+                          ),
+                          tone: "success",
+                        },
+                      )
+                    }
+                  >
+                    {busy === `cancel-send-${proposal.id}` ? (
+                      <TeraSpinner size={18} />
+                    ) : next ? (
+                      t("Send cancellation", "发送取消")
+                    ) : (
+                      t("Waiting for earlier proposals", "等待之前的提议")
                     )}
                   </Button>
                 </View>
               ) : null}
             </View>
-            {mine || can(me.role, "manage") ? (
-              <Link
-                danger
-                label={t("Cancel this proposal", "取消此提议")}
-                onPress={() => void act(`cancel-${proposal.id}`, () => cancel(safe, proposal))}
-              />
+            {mayCancel && !proposal.cancellable ? (
+              !placed || proposal.last ? (
+                <Link
+                  danger
+                  label={t("Withdraw this proposal", "撤回此提议")}
+                  onPress={() =>
+                    void act(`cancel-${proposal.id}`, () => cancel(safe, proposal, "now"))
+                  }
+                />
+              ) : (
+                <View style={{ gap: 6 }}>
+                  <Link
+                    danger
+                    label={t(
+                      "Cancel now (free; proposals after it need approving again)",
+                      "立即取消（免费；之后的提议需重新批准）",
+                    )}
+                    onPress={() =>
+                      void act(`cancel-${proposal.id}`, () => cancel(safe, proposal, "now"))
+                    }
+                  />
+                  {!proposal.cancelRequested ? (
+                    <Link
+                      label={t(
+                        "Cancel on-chain (signers sign it; later approvals are kept)",
+                        "链上取消（需签署人签署；保留后续批准）",
+                      )}
+                      onPress={() =>
+                        void act(`cancel-${proposal.id}`, () => cancel(safe, proposal, "onchain"), {
+                          title: t("Cancellation requested", "已请求取消"),
+                          body: t(
+                            "Signers will be asked to sign it. A small network fee is paid when it's sent.",
+                            "将请签署人签署。发送时需支付少量网络费。",
+                          ),
+                          tone: "success",
+                        })
+                      }
+                    />
+                  ) : null}
+                </View>
+              )
             ) : null}
           </View>
         );
