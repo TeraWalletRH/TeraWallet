@@ -15,6 +15,11 @@ export async function loadEmailConfig() {
   return false;
 }
 export const isEmail = (_input: string) => false;
+export async function linkedEmail(
+  _address: Address,
+): Promise<{ email: string; name: string } | null> {
+  return null;
+}
 export async function resolveEmail(_input: string): Promise<{
   tag: string;
   address: Address;
