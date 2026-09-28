@@ -97,29 +97,46 @@ export function config() {
 
 // --- Signer changes, worked out ------------------------------------------------
 
-export type Change = { kind: "add-signer" | "remove-signer"; subject: Address };
+export type Change =
+  | { kind: "add-signer" | "remove-signer"; subject: Address }
+  | { kind: "threshold"; rule: number | null };
+
+/**
+ * The team's approval rule: a fixed number of approvals, or null for "more
+ * than half". A fixed number never asks for more signers than exist.
+ */
+export const thresholdFor = (signers: number, rule: number | null) =>
+  rule ? Math.max(1, Math.min(rule, signers)) : majority(signers);
 
 /**
  * The owner list after a change, as the Safe itself would leave it: a new
  * owner goes to the head of its linked list, a removed one drops out.
  */
 export function applyChange(owners: Address[], change: Change): Address[] {
+  if (change.kind === "threshold") return owners;
   return change.kind === "add-signer"
     ? [change.subject, ...owners.filter((o) => o !== change.subject)]
     : owners.filter((o) => o !== change.subject);
 }
 
 /**
- * The call arguments for a change against a given owner list, or null when it
- * no longer makes sense there (adding a current signer, removing a non-signer,
- * or removing the last one). The threshold is always the new majority.
+ * The call arguments for a change against a given owner list and approval
+ * rule, or null when it no longer makes sense there (adding a current signer,
+ * removing a non-signer, or removing the last one). Adding or removing a
+ * signer keeps the team's rule: a majority stays a majority, and a fixed
+ * number stays fixed as far as there are signers to meet it.
  */
-export function changeArgs(owners: Address[], change: Change) {
+export function changeArgs(owners: Address[], change: Change, rule: number | null = null) {
+  if (change.kind === "threshold")
+    return {
+      functionName: "changeThreshold" as const,
+      args: [BigInt(thresholdFor(owners.length, change.rule))] as const,
+    };
   if (change.kind === "add-signer") {
     if (owners.includes(change.subject)) return null;
     return {
       functionName: "addOwnerWithThreshold" as const,
-      args: [change.subject, BigInt(majority(owners.length + 1))] as const,
+      args: [change.subject, BigInt(thresholdFor(owners.length + 1, rule))] as const,
     };
   }
   const index = owners.indexOf(change.subject);
@@ -129,10 +146,19 @@ export function changeArgs(owners: Address[], change: Change) {
     args: [
       index === 0 ? SENTINEL : owners[index - 1],
       change.subject,
-      BigInt(majority(owners.length - 1)),
+      BigInt(thresholdFor(owners.length - 1, rule)),
     ] as const,
   };
 }
+
+/** The rule in force after a change. */
+export const ruleAfter = (rule: number | null, change: Change) =>
+  change.kind === "threshold" ? change.rule : rule;
+
+const rowChange = (row: { kind: string; subject: string | null; rule: number | null }): Change =>
+  row.kind === "threshold"
+    ? { kind: "threshold", rule: row.rule ? Number(row.rule) : null }
+    : ({ kind: row.kind, subject: getAddress(String(row.subject)) } as Change);
 
 // --- The chain ------------------------------------------------------------------
 
@@ -145,10 +171,11 @@ const safeAbi = parseAbi([
   "function getTransactionHash(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, uint256 _nonce) view returns (bytes32)",
   "function addOwnerWithThreshold(address owner, uint256 _threshold)",
   "function removeOwner(address prevOwner, address owner, uint256 _threshold)",
+  "function changeThreshold(uint256 _threshold)",
 ]);
 
-const encodeChange = (owners: Address[], change: Change) => {
-  const call = changeArgs(owners, change);
+const encodeChange = (owners: Address[], change: Change, rule: number | null) => {
+  const call = changeArgs(owners, change, rule);
   return call ? (encodeFunctionData({ abi: safeAbi, ...call } as never) as Hex) : null;
 };
 
@@ -356,7 +383,7 @@ async function reconcile(db: Db, safe: Address) {
   // receipt the executing app reports; lacking that, enough rejections mean
   // the cancellation ran, and otherwise the proposal itself did.
   const passed = await db.query(
-    "SELECT id FROM team_proposals WHERE safe_address=$1 AND status='pending' AND nonce IS NOT NULL AND nonce < $2",
+    "SELECT id, kind, rule FROM team_proposals WHERE safe_address=$1 AND status='pending' AND nonce IS NOT NULL AND nonce < $2 ORDER BY nonce",
     [safe, state.nonce.toString()],
   );
   for (const row of passed.rows) {
@@ -365,16 +392,23 @@ async function reconcile(db: Db, safe: Address) {
       row.id,
       rejected ? "rejected" : "executed",
     ]);
+    if (!rejected && row.kind === "threshold") await adoptRule(db, safe, row.rule);
   }
+  const team = await db.query("SELECT approval_rule FROM teams WHERE safe_address=$1", [safe]);
+  const startRule: number | null = team.rows[0]?.approval_rule
+    ? Number(team.rows[0].approval_rule)
+    : null;
   let owners = state.owners;
+  let rule = startRule;
   let restart = true;
   while (restart) {
     restart = false;
     owners = state.owners;
+    rule = startRule;
     for (const row of await pendingPlaced(db, safe)) {
       if (row.kind === "payment") continue;
-      const change = { kind: row.kind, subject: getAddress(row.subject) } as Change;
-      const data = encodeChange(owners, change);
+      const change = rowChange(row);
+      const data = encodeChange(owners, change, rule);
       if (!data) {
         // Nothing left to do (they were already added, or already gone).
         await db.query(
@@ -394,6 +428,7 @@ async function reconcile(db: Db, safe: Address) {
         await db.query("DELETE FROM team_signatures WHERE proposal_id=$1", [row.id]);
       }
       owners = applyChange(owners, change);
+      rule = ruleAfter(rule, change);
     }
   }
   const top = await db.query(
@@ -405,7 +440,15 @@ async function reconcile(db: Db, safe: Address) {
     last !== null && last !== undefined && BigInt(last) + 1n > state.nonce
       ? BigInt(last) + 1n
       : state.nonce;
-  return { state, ownersAtEnd: owners, nextNonce };
+  return { state, ownersAtEnd: owners, ruleAtEnd: rule, rule: startRule, nextNonce };
+}
+
+/** The rule a team keeps once a threshold change has run (0 or null: majority). */
+async function adoptRule(db: Db, safe: Address, rule: unknown) {
+  await db.query("UPDATE teams SET approval_rule=$2 WHERE safe_address=$1", [
+    safe,
+    rule ? Number(rule) : null,
+  ]);
 }
 
 /**
@@ -437,10 +480,10 @@ async function closeGap(db: Db, safe: Address, removed: bigint) {
 }
 
 /** The calldata a proposal would be signed with if it took the next place now. */
-function fieldsAt(row: any, ownersAtEnd: Address[], safe: Address) {
+function fieldsAt(row: any, ownersAtEnd: Address[], ruleAtEnd: number | null, safe: Address) {
   if (row.kind === "payment" || row.data)
     return { to: getAddress(row.to_address), value: BigInt(row.value), data: row.data as Hex };
-  const data = encodeChange(ownersAtEnd, { kind: row.kind, subject: getAddress(row.subject) });
+  const data = encodeChange(ownersAtEnd, rowChange(row), ruleAtEnd);
   return data ? { to: safe, value: 0n, data } : null;
 }
 
@@ -450,13 +493,14 @@ function fieldsAt(row: any, ownersAtEnd: Address[], safe: Address) {
  * same person can never undercut each other.
  */
 async function queueChange(db: Db, safe: Address, change: Change, by: Address) {
+  if (change.kind === "threshold") throw new Error("Use queueRule for the approval rule.");
   const clash = await db.query(
     "SELECT 1 FROM team_proposals WHERE safe_address=$1 AND status='pending' AND subject=$2",
     [safe, change.subject],
   );
   if (clash.rowCount) return null;
-  const { ownersAtEnd } = await reconcile(db, safe);
-  if (!changeArgs(ownersAtEnd, change)) return null;
+  const { ownersAtEnd, ruleAtEnd } = await reconcile(db, safe);
+  if (!changeArgs(ownersAtEnd, change, ruleAtEnd)) return null;
   const inserted = await db.query(
     `INSERT INTO team_proposals(safe_address, kind, subject, to_address, value, note, created_by)
      VALUES($1,$2,$3,$1,0,$4,$5) RETURNING id`,
@@ -476,7 +520,13 @@ async function queueChange(db: Db, safe: Address, change: Change, by: Address) {
  * already does `want`, withdraw one that does the opposite (closing its gap if
  * it had a place), then queue `want` if the Safe still needs it.
  */
-async function steerSigner(db: Db, safe: Address, who: Address, want: Change["kind"], by: Address) {
+async function steerSigner(
+  db: Db,
+  safe: Address,
+  who: Address,
+  want: "add-signer" | "remove-signer",
+  by: Address,
+) {
   const found = await db.query(
     "SELECT id, kind, nonce FROM team_proposals WHERE safe_address=$1 AND status='pending' AND subject=$2",
     [safe, who],
@@ -518,7 +568,7 @@ export async function viewTeam(body: Record<string, unknown>) {
   const safe = await requireTeam(body.team);
   const wallet = await signed("read", safe, body);
   const you = await requireAbility(safe, wallet, "view");
-  const { state, ownersAtEnd, nextNonce } = await transaction(async (db) => {
+  const { state, ownersAtEnd, ruleAtEnd, rule, nextNonce } = await transaction(async (db) => {
     await lockTeam(db, safe);
     return reconcile(db, safe);
   });
@@ -556,6 +606,8 @@ export async function viewTeam(body: Record<string, unknown>) {
     threshold: state.threshold,
     nonce: state.nonce.toString(),
     nextNonce: nextNonce.toString(),
+    // The team's approval rule: a fixed number, or null for more than half.
+    rule,
     members: members.rows.map((row) => ({
       address: getAddress(row.address),
       role: row.role,
@@ -574,11 +626,14 @@ export async function viewTeam(body: Record<string, unknown>) {
         list.filter((vote) => state.owners.includes(vote.signer)).length;
       // What the next approval would sign, for a proposal with no place yet.
       const preview =
-        row.status === "pending" && row.nonce === null ? fieldsAt(row, ownersAtEnd, safe) : null;
+        row.status === "pending" && row.nonce === null
+          ? fieldsAt(row, ownersAtEnd, ruleAtEnd, safe)
+          : null;
       return {
         id: String(row.id),
         kind: row.kind,
         subject: row.subject ? getAddress(row.subject) : null,
+        rule: row.kind === "threshold" ? (row.rule ? Number(row.rule) : null) : undefined,
         to: getAddress(row.to_address),
         value: String(row.value),
         data: row.data ?? preview?.data ?? null,
@@ -617,9 +672,11 @@ export async function registerTeam(body: Record<string, unknown>) {
   return transaction(async (db) => {
     const exists = await db.query("SELECT 1 FROM teams WHERE safe_address=$1", [safe]);
     must(!exists.rowCount, "This treasury is already a Tera team. Ask its admin to invite you.");
+    // An imported Safe keeps the rule it already has, unless that is a majority.
+    const rule = state.threshold === majority(state.owners.length) ? null : state.threshold;
     await db.query(
-      "INSERT INTO teams(safe_address, chain_id, name, created_by) VALUES($1,$2,$3,$4)",
-      [safe, env.rhcChainId, name, wallet],
+      "INSERT INTO teams(safe_address, chain_id, name, created_by, approval_rule) VALUES($1,$2,$3,$4,$5)",
+      [safe, env.rhcChainId, name, wallet, rule],
     );
     await db.query(
       "INSERT INTO team_members(safe_address, address, role, status, invited_by, joined_at) VALUES($1,$2,'admin','active',$2,NOW())",
@@ -770,6 +827,59 @@ export async function removeMember(body: Record<string, unknown>) {
   });
 }
 
+/**
+ * Propose a new approval rule: a fixed number of approvals, or "majority".
+ * It is itself a treasury change, so the current signers approve it under the
+ * current rule. One pending rule change at a time; a new one replaces it.
+ */
+export async function setRule(body: Record<string, unknown>) {
+  must(enabled(), "Teams are unavailable.", 503);
+  const safe = await requireTeam(body.team);
+  const majorityRule = body.rule === "majority";
+  const fixed = Number(body.rule);
+  must(
+    majorityRule || (Number.isInteger(fixed) && fixed >= 1 && fixed <= 50),
+    "Choose how many approvals.",
+  );
+  const rule = majorityRule ? null : fixed;
+  const wallet = await signed("rule", safe, body, [["Approvals", rule ?? "majority"]]);
+  await requireAbility(safe, wallet, "manage");
+  return transaction(async (db) => {
+    await lockTeam(db, safe);
+    const pending = await db.query(
+      "SELECT id, nonce FROM team_proposals WHERE safe_address=$1 AND status='pending' AND kind='threshold'",
+      [safe],
+    );
+    for (const row of pending.rows) {
+      await db.query("UPDATE team_proposals SET status='cancelled', closed_at=NOW() WHERE id=$1", [
+        row.id,
+      ]);
+      if (row.nonce !== null) await closeGap(db, safe, BigInt(row.nonce));
+    }
+    const { ownersAtEnd, ruleAtEnd } = await reconcile(db, safe);
+    must(
+      rule === null || rule <= ownersAtEnd.length,
+      `The treasury has ${ownersAtEnd.length} signer${ownersAtEnd.length === 1 ? "" : "s"}; it cannot need more approvals than that.`,
+    );
+    must(
+      rule !== ruleAtEnd ||
+        thresholdFor(ownersAtEnd.length, rule) !== thresholdFor(ownersAtEnd.length, ruleAtEnd),
+      "That is already the rule.",
+    );
+    const inserted = await db.query(
+      `INSERT INTO team_proposals(safe_address, kind, rule, to_address, value, note, created_by)
+       VALUES($1,'threshold',$2,$1,0,$3,$4) RETURNING id`,
+      [
+        safe,
+        rule ?? 0,
+        rule === null ? "Require more than half of the signers" : `Require ${rule} approvals`,
+        wallet,
+      ],
+    );
+    return { id: String(inserted.rows[0].id), rule };
+  });
+}
+
 // --- Writing: payments ---------------------------------------------------------
 
 /** A payment for the signers to approve: native value, or one ERC-20 transfer. */
@@ -833,7 +943,7 @@ export async function approve(body: Record<string, unknown>) {
   await requireAbility(safe, wallet, "approve");
   return transaction(async (db) => {
     await lockTeam(db, safe);
-    const { state, ownersAtEnd, nextNonce } = await reconcile(db, safe);
+    const { state, ownersAtEnd, ruleAtEnd, nextNonce } = await reconcile(db, safe);
     const found = await db.query("SELECT * FROM team_proposals WHERE id=$1", [first.id]);
     const row = found.rows[0];
     must(row.status === "pending", "This proposal is no longer waiting for approvals.");
@@ -849,7 +959,7 @@ export async function approve(body: Record<string, unknown>) {
         "The queue moved while you were approving. Approve again.",
         409,
       );
-      const at = fieldsAt(row, ownersAtEnd, safe);
+      const at = fieldsAt(row, ownersAtEnd, ruleAtEnd, safe);
       must(at, "This signer change no longer makes sense for the treasury as it stands.");
       nonce = nextNonce;
       fields = at!;
@@ -1002,6 +1112,8 @@ export async function executed(body: Record<string, unknown>) {
   const state = await onChain(safe);
   must(state.nonce > BigInt(row.nonce), "The treasury has not used this proposal's place yet.");
   const status = body.rejection === true ? "rejected" : "executed";
+  if (status === "executed" && row.kind === "threshold")
+    await adoptRule(pool! as unknown as Db, safe, row.rule);
   await pool!.query(
     "UPDATE team_proposals SET status=$3, executed_tx_hash=$2, closed_at=COALESCE(closed_at, NOW()) WHERE id=$1",
     [row.id, hash.toLowerCase(), status],

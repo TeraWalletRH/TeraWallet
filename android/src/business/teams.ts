@@ -58,7 +58,9 @@ export type TeamSummary = {
 };
 export type Proposal = {
   id: string;
-  kind: "payment" | "add-signer" | "remove-signer";
+  kind: "payment" | "add-signer" | "remove-signer" | "threshold";
+  /** For a threshold change: the new rule (null for more than half). */
+  rule?: number | null;
   /** The signer a signer change adds or removes. */
   subject: Address | null;
   to: Address;
@@ -93,6 +95,8 @@ export type Team = {
   nonce: string;
   /** The place the next first approval takes. */
   nextNonce: string;
+  /** How many approvals a payment needs: a fixed number, or null for more than half. */
+  rule: number | null;
   members: { address: Address; role: Role; status: "invited" | "active"; signer: boolean }[];
   proposals: Proposal[];
 };
@@ -113,6 +117,7 @@ const safeAbi = parseAbi([
   "function execTransaction(address to, uint256 value, bytes data, uint8 operation, uint256 safeTxGas, uint256 baseGas, uint256 gasPrice, address gasToken, address refundReceiver, bytes signatures) payable returns (bool)",
   "function addOwnerWithThreshold(address owner, uint256 _threshold)",
   "function removeOwner(address prevOwner, address owner, uint256 _threshold)",
+  "function changeThreshold(uint256 _threshold)",
 ]);
 const factoryAbi = parseAbi([
   "function createProxyWithNonce(address _singleton, bytes initializer, uint256 saltNonce) returns (address proxy)",
@@ -254,6 +259,15 @@ export async function changeRole(safe: Address, member: Address, role: Role) {
   });
 }
 
+/** Propose a new approval rule: a fixed number, or null for more than half. */
+export async function setRule(safe: Address, rule: number | null) {
+  return api("/api/teams/rule", {
+    team: safe,
+    rule: rule ?? "majority",
+    ...(await sign("rule", safe, [["Approvals", rule ?? "majority"]])),
+  });
+}
+
 export async function removeMember(safe: Address, member: Address) {
   return api("/api/teams/remove", {
     team: safe,
@@ -307,7 +321,11 @@ function checkedFields(team: Team, proposal: Proposal) {
   if (!proposal.data)
     throw new Error("This change no longer applies to the treasury. Nothing was signed.");
   const fields = { to: proposal.to, value: proposal.value, data: proposal.data };
-  if (proposal.kind !== "payment") {
+  if (proposal.kind === "threshold") {
+    const read = describe(team, proposal, []);
+    if (proposal.to.toLowerCase() !== safe.toLowerCase() || read.thresholdChange === undefined)
+      throw new Error("This change does not do what it says. Nothing was signed.");
+  } else if (proposal.kind !== "payment") {
     const read = describe(team, proposal, []);
     if (
       proposal.to.toLowerCase() !== safe.toLowerCase() ||
@@ -454,6 +472,8 @@ export type Described = {
   symbol?: string;
   recipient?: Address;
   signerChange?: { who: Address; threshold: number; add: boolean };
+  /** A change to how many approvals a payment needs. */
+  thresholdChange?: number;
 };
 
 /** What a proposal does, read from its own calldata — the same fields that get signed. */
@@ -469,6 +489,10 @@ export function describe(team: Team, proposal: Proposal, assets: Asset[]): Descr
           title: "Add a signer",
           signerChange: { who: getAddress(who), threshold: Number(threshold), add: true },
         };
+      }
+      if (call.functionName === "changeThreshold") {
+        const [threshold] = call.args as [bigint];
+        return { title: "Change approvals needed", thresholdChange: Number(threshold) };
       }
       if (call.functionName === "removeOwner") {
         const [, who, threshold] = call.args as [Address, Address, bigint];
@@ -505,4 +529,54 @@ export function describe(team: Team, proposal: Proposal, assets: Asset[]): Descr
     // Falls through.
   }
   return { title: "Contract call" };
+}
+
+// --- What is waiting for this wallet ----------------------------------------------
+
+/**
+ * What in a team's queue needs the open account: approvals to give or
+ * cancellations to sign, and fully approved proposals it could send now.
+ */
+export function waitingFor(team: Team, me: Address) {
+  const signer = team.owners.includes(me) && can(team.you.role, "approve");
+  let approvals = 0;
+  let toSend = 0;
+  for (const p of team.proposals) {
+    if (p.status !== "pending") continue;
+    const placed = p.nonce !== null;
+    const approved = counted(team, p).some((a) => a.signer === me);
+    const rejected = p.rejections.some((r) => r.signer === me && (!placed || !!r.signature));
+    const ready = counted(team, p).length >= team.threshold;
+    if (signer && !approved && !rejected) {
+      if (!ready && !p.blocked && !p.cancelRequested) approvals++;
+      else if (placed && (p.cancelRequested || p.blocked) && !p.cancellable) approvals++;
+    }
+    if ((ready || p.cancellable) && p.nonce === team.nonce && can(team.you.role, "execute"))
+      toSend++;
+  }
+  return { approvals, toSend };
+}
+
+export type Inbox = {
+  invites: TeamSummary[];
+  teams: { safe: Address; name: string; approvals: number; toSend: number }[];
+};
+
+/** Everything waiting for the open account across its teams. */
+export async function inbox(): Promise<Inbox> {
+  const me = vault.currentAccount().address;
+  const teams = await myTeams();
+  const active = await Promise.all(
+    teams
+      .filter((t) => t.status === "active")
+      .map(async (t) => {
+        try {
+          const team = await viewTeam(t.safe);
+          return { safe: t.safe, name: t.name, ...waitingFor(team, me) };
+        } catch {
+          return { safe: t.safe, name: t.name, approvals: 0, toSend: 0 };
+        }
+      }),
+  );
+  return { invites: teams.filter((t) => t.status === "invited"), teams: active };
 }

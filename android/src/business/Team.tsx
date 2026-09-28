@@ -43,6 +43,8 @@ import {
   registerTreasury,
   reject,
   removeMember,
+  setRule,
+  waitingFor,
   respond,
   teamsAvailable,
   viewTeam,
@@ -420,6 +422,7 @@ function TeamView({
   const [error, setError] = useState("");
   const [paying, setPaying] = useState(false);
   const [inviting, setInviting] = useState(false);
+  const [ruling, setRuling] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
@@ -512,6 +515,7 @@ function TeamView({
     return emails[getAddress(address)] || short(address);
   };
   const pending = team.proposals.filter((p) => p.status === "pending");
+  const waiting = waitingFor(team, owner);
   const history = team.proposals.filter((p) => p.status !== "pending").slice(0, 10);
   const total = Object.entries(holdings || {}).reduce(
     (sum, [symbol, amount]) => sum + amount * priceNow(symbol, prices),
@@ -571,6 +575,47 @@ function TeamView({
           <Pill text={t("Signer: waiting to be added", "签署人：等待添加")} warn />
         ) : null}
       </View>
+      <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+        <Text style={s.small}>
+          {team.rule
+            ? t(
+                `Rule: ${team.rule} approval${team.rule === 1 ? "" : "s"} per payment`,
+                `规则：每笔付款需 ${team.rule} 人批准`,
+              )
+            : t("Rule: more than half of the signers", "规则：超过半数签署人")}
+        </Text>
+        {can(me.role, "manage") ? (
+          <Link
+            label={ruling ? t("Close", "关闭") : t("Change", "更改")}
+            onPress={() => setRuling(!ruling)}
+          />
+        ) : null}
+      </View>
+      {ruling ? (
+        <RuleForm
+          t={t}
+          signers={team.owners.length}
+          current={team.rule}
+          busy={busy === "rule"}
+          onPropose={(rule) =>
+            act(
+              "rule",
+              async () => {
+                await setRule(safe, rule);
+                setRuling(false);
+              },
+              {
+                title: t("Rule change proposed", "已发起规则变更"),
+                body: t(
+                  `The current signers approve it under the current rule (${team.threshold} of ${team.owners.length}) before it applies.`,
+                  `需按现行规则（${team.owners.length} 人中 ${team.threshold} 人）批准后才会生效。`,
+                ),
+                tone: "success",
+              },
+            )
+          }
+        />
+      ) : null}
       <Pressable
         accessibilityRole="button"
         accessibilityLabel={t("Copy treasury address", "复制资金库地址")}
@@ -602,6 +647,21 @@ function TeamView({
         <Text style={[s.text, { fontWeight: "700" }]}>
           {t(`Waiting for approval (${pending.length})`, `待批准（${pending.length}）`)}
         </Text>
+        {waiting.approvals || waiting.toSend ? (
+          <Pill
+            text={[
+              waiting.approvals
+                ? t(`${waiting.approvals} need you`, `${waiting.approvals} 项待你处理`)
+                : "",
+              waiting.toSend
+                ? t(`${waiting.toSend} ready to send`, `${waiting.toSend} 项可发送`)
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" · ")}
+            warn
+          />
+        ) : null}
         {can(me.role, "propose") ? (
           <Link
             label={paying ? t("Close", "关闭") : t("New payment", "新建付款")}
@@ -700,7 +760,17 @@ function TeamView({
                         )
                     : read.amount
                       ? `${amountText(Number(read.amount))} ${read.symbol} → ${read.recipient ? nameOf(read.recipient) : ""}`
-                      : t(read.title, read.title)}
+                      : read.thresholdChange !== undefined
+                        ? proposal.rule
+                          ? t(
+                              `Require ${read.thresholdChange} approval${read.thresholdChange === 1 ? "" : "s"} per payment`,
+                              `每笔付款需 ${read.thresholdChange} 人批准`,
+                            )
+                          : t(
+                              `Require more than half of the signers (${read.thresholdChange})`,
+                              `需超过半数签署人批准（${read.thresholdChange} 人）`,
+                            )
+                        : t(read.title, read.title)}
                 </Text>
                 {read.recipient ? (
                   <Text selectable style={[s.mono, { color: colors.muted, fontSize: 12 }]}>
@@ -1354,6 +1424,57 @@ function InviteForm({
       </Text>
       <Button primary disabled={busy || !who.trim()} onPress={() => void onInvite(who, role)}>
         {busy ? <TeraSpinner size={18} /> : t("Send invitation", "发送邀请")}
+      </Button>
+    </View>
+  );
+}
+
+function RuleForm({
+  t,
+  signers,
+  current,
+  busy,
+  onPropose,
+}: {
+  t: T;
+  signers: number;
+  current: number | null;
+  busy: boolean;
+  onPropose: (rule: number | null) => Promise<void>;
+}) {
+  const [rule, setRule] = useState<number | null>(current);
+  return (
+    <View style={{ gap: 10 }}>
+      <View style={s.wrap}>
+        <Chip
+          label={t("More than half", "超过半数")}
+          on={rule === null}
+          onPress={() => setRule(null)}
+        />
+        {Array.from({ length: signers }, (_, i) => i + 1).map((n) => (
+          <Chip
+            key={n}
+            label={t(`${n} of ${signers}`, `${signers} 人中 ${n} 人`)}
+            on={rule === n}
+            onPress={() => setRule(n)}
+          />
+        ))}
+      </View>
+      <Text style={s.small}>
+        {rule === null
+          ? t("Stays a majority as signers join or leave.", "签署人增减时始终保持过半数。")
+          : rule === 1
+            ? t(
+                "Any one signer can send a payment alone. Only choose this if that's what you want.",
+                "任何一位签署人都可单独发送付款。请确认这是你想要的。",
+              )
+            : t(
+                `Stays at ${rule} as signers join; drops only if fewer than ${rule} signers remain.`,
+                `签署人增加时保持 ${rule} 人；仅在签署人少于 ${rule} 人时降低。`,
+              )}
+      </Text>
+      <Button primary disabled={busy || rule === current} onPress={() => void onPropose(rule)}>
+        {busy ? <TeraSpinner size={18} /> : t("Propose this rule", "发起此规则")}
       </Button>
     </View>
   );

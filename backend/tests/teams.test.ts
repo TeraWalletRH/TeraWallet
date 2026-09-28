@@ -3,7 +3,14 @@ import request from "supertest";
 import { hashTypedData, recoverTypedDataAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import app from "../src/app";
-import { applyChange, changeArgs, memberField, SENTINEL } from "../src/teams";
+import {
+  applyChange,
+  changeArgs,
+  memberField,
+  ruleAfter,
+  SENTINEL,
+  thresholdFor,
+} from "../src/teams";
 import * as backendCore from "../src/teams-core";
 import * as siteCore from "../../public/tera/core/teams.js";
 
@@ -159,5 +166,35 @@ describe("Signer changes, worked out for their place in the queue", () => {
     expect(changeArgs([A, B], { kind: "add-signer", subject: A })).toBeNull();
     expect(changeArgs([A, B], { kind: "remove-signer", subject: C })).toBeNull();
     expect(changeArgs([A], { kind: "remove-signer", subject: A })).toBeNull();
+  });
+});
+
+describe("A team's own approval rule", () => {
+  const A = "0x000000000000000000000000000000000000000A" as `0x${string}`;
+  const B = "0x000000000000000000000000000000000000000b" as `0x${string}`;
+  const C = "0x000000000000000000000000000000000000000C" as `0x${string}`;
+
+  it("is more than half by default, or a fixed number never above the signers", () => {
+    expect(thresholdFor(3, null)).toBe(2);
+    expect(thresholdFor(3, 3)).toBe(3);
+    expect(thresholdFor(2, 3)).toBe(2);
+    expect(thresholdFor(5, 1)).toBe(1);
+  });
+
+  it("changes the Safe's threshold for the signers as they will stand", () => {
+    const call = changeArgs([A, B, C], { kind: "threshold", rule: 3 });
+    expect(call?.functionName).toBe("changeThreshold");
+    expect(call?.args[0]).toBe(3n);
+    expect(changeArgs([A, B, C], { kind: "threshold", rule: null })?.args[0]).toBe(2n);
+  });
+
+  it("is kept when signers are added or removed", () => {
+    // "All of us": adding a third signer asks for all three.
+    expect(changeArgs([A, B], { kind: "add-signer", subject: C }, 2)?.args[1]).toBe(2n);
+    expect(changeArgs([A, B], { kind: "add-signer", subject: C }, 3)?.args[1]).toBe(3n);
+    // A fixed 3 of 3 with a signer removed becomes 2 of 2, not an impossible 3.
+    expect(changeArgs([A, B, C], { kind: "remove-signer", subject: C }, 3)?.args[2]).toBe(2n);
+    expect(ruleAfter(null, { kind: "threshold", rule: 3 })).toBe(3);
+    expect(ruleAfter(3, { kind: "add-signer", subject: A })).toBe(3);
   });
 });
