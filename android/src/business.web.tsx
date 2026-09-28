@@ -42,7 +42,7 @@ import {
 } from "./business/data";
 import { confirmCode, emailAvailable, linkedEmail, sendCode, unlinkEmail } from "./business/email";
 import { TeamScreen } from "./business/Team";
-import { myTeams, teamsAvailable } from "./business/teams";
+import { inbox, myTeams, teamsAvailable, type Inbox } from "./business/teams";
 import {
   Button,
   Choices,
@@ -266,6 +266,19 @@ function Dashboard({
   const [group, setGroup] = useState("");
   const [email, setEmail] = useState<{ email: string; name: string } | null>(null);
   const [reload, setReload] = useState(0);
+  const [waiting, setWaiting] = useState<Inbox | null>(null);
+
+  // What the team queues need from this account, across every team.
+  useEffect(() => {
+    if (!teamsAvailable()) return;
+    let live = true;
+    void inbox()
+      .then((found) => live && setWaiting(found))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [owner, reload]);
   const key = accounts.map((a) => a.address).join() + "|" + assets.map((a) => a.symbol).join();
 
   useEffect(() => {
@@ -722,6 +735,40 @@ function Dashboard({
     </Card>
   );
 
+  const needs = (waiting?.teams || []).filter((team) => team.approvals || team.toSend);
+  const inboxCard =
+    waiting && (needs.length || waiting.invites.length) ? (
+      <Pressable accessibilityRole="button" onPress={() => go("biz-team")}>
+        <Card style={{ gap: 10, borderWidth: 1, borderColor: colors.lime }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            <Icon name="shield-check" size={18} color={colors.lime} />
+            <Text style={[s.label, { flex: 1 }]}>{t("Waiting for you", "待你处理")}</Text>
+            <Icon name="chevron-right" size={20} color={colors.faint} />
+          </View>
+          {needs.map((team) => (
+            <Text key={team.safe} style={[s.small, { color: colors.ink }]}>
+              {`${team.name || short(team.safe)}: ${[
+                team.approvals
+                  ? t(`${team.approvals} to approve`, `${team.approvals} 项待批准`)
+                  : "",
+                team.toSend ? t(`${team.toSend} ready to send`, `${team.toSend} 项可发送`) : "",
+              ]
+                .filter(Boolean)
+                .join(" · ")}`}
+            </Text>
+          ))}
+          {waiting.invites.map((invite) => (
+            <Text key={invite.safe} style={[s.small, { color: colors.ink }]}>
+              {t(
+                `Invitation to ${invite.name || short(invite.safe)}`,
+                `来自 ${invite.name || short(invite.safe)} 的邀请`,
+              )}
+            </Text>
+          ))}
+        </Card>
+      </Pressable>
+    ) : null;
+
   const emailCard =
     emailAvailable() && !email ? (
       <Pressable accessibilityRole="button" onPress={() => go("biz-email")}>
@@ -753,6 +800,7 @@ function Dashboard({
           {flow}
         </View>
         <View style={{ flex: 5, minWidth: 0, gap: 22 }}>
+          {inboxCard}
           {emailCard}
           {accountList}
           {recent}
@@ -763,6 +811,7 @@ function Dashboard({
     <>
       {hero}
       {actions}
+      {inboxCard}
       {emailCard}
       {accountList}
       {allocation}

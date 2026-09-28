@@ -10,7 +10,11 @@ CREATE TABLE IF NOT EXISTS teams (
   chain_id INTEGER NOT NULL,
   name VARCHAR(40) NOT NULL DEFAULT '',
   created_by VARCHAR(42) NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- How many approvals a payment needs: a fixed number, or NULL for more than
+  -- half of the signers. Signer changes keep it; only a threshold change,
+  -- approved by the current signers, replaces it.
+  approval_rule INTEGER
 );
 
 -- `status` is 'invited' until the member signs to accept, then 'active'. A
@@ -41,6 +45,8 @@ CREATE TABLE IF NOT EXISTS team_proposals (
   safe_address VARCHAR(42) NOT NULL REFERENCES teams(safe_address) ON DELETE CASCADE,
   kind VARCHAR(16) NOT NULL,
   subject VARCHAR(42),
+  -- For a threshold change: the new rule (0 for more than half).
+  rule INTEGER,
   to_address VARCHAR(42) NOT NULL,
   value NUMERIC(78, 0) NOT NULL,
   data TEXT,

@@ -18,6 +18,7 @@ import {
   reject,
   removeMember,
   respond,
+  setRule,
   viewTeam,
 } from "../teams";
 
@@ -46,6 +47,7 @@ const routes: [string, (body: Record<string, unknown>) => Promise<unknown>][] = 
   ["invite", invite],
   ["respond", respond],
   ["role", changeRole],
+  ["rule", setRule],
   ["remove", removeMember],
   ["propose", propose],
   ["approve", approve],
