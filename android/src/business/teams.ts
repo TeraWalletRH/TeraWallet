@@ -15,6 +15,7 @@ import {
   decodeFunctionData,
   encodeFunctionData,
   erc20Abi,
+  formatEther,
   formatUnits,
   getAddress,
   hashTypedData,
@@ -168,6 +169,101 @@ export async function viewTeam(safe: Address): Promise<Team> {
 
 // --- A new treasury ------------------------------------------------------------
 
+// --- Sending from the open account --------------------------------------------------
+
+const shortAddress = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
+const ethText = (wei: bigint) => {
+  const eth = Number(formatEther(wei));
+  return eth >= 0.001 ? eth.toFixed(4).replace(/0+$/, "") : eth.toPrecision(2);
+};
+
+/**
+ * Plain words for what the chain and the wallet library say when a send fails.
+ * The library's own message is written for developers — gas arguments,
+ * calldata, a version number — and none of it helps an owner decide what to do.
+ */
+export function friendlyError(error: unknown, what: string): Error {
+  const text =
+    error instanceof Error
+      ? `${error.message} ${(error as { details?: string }).details ?? ""}`
+      : String(error);
+  if (/insufficient funds|exceeds the balance/i.test(text))
+    return new Error(
+      `Not enough ETH to pay the network fee for ${what}. Add a little ETH to the account you pay from (Receive shows its address), then try again.`,
+    );
+  if (/0\.001 ETH|fee exceeds/i.test(text))
+    return new Error(
+      `The network fee for ${what} is unusually high right now. Try again in a few minutes.`,
+    );
+  if (/GS0(13|20|25|26)|signature|revert|execution reverted/i.test(text))
+    return new Error(
+      `The treasury refused ${what}. Its approvals may no longer match: refresh the Team screen and try again.`,
+    );
+  if (/timed? ?out|network|fetch|unavailable/i.test(text))
+    return new Error(
+      `Couldn't reach Robinhood Chain to send ${what}. Check your connection and try again.`,
+    );
+  if (/already in progress/i.test(text))
+    return new Error(
+      "Another transaction is still being sent. Wait for it to finish, then try again.",
+    );
+  if (/locked/i.test(text)) return new Error("Your wallet locked. Unlock it and try again.");
+  // Anything else is shown as it came, but without the developer detail.
+  const first = text.split(/\r?\n/)[0].trim();
+  return new Error(first.length > 160 ? `Couldn't send ${what}. Please try again.` : first);
+}
+
+/**
+ * Send one transaction from the open account, which only pays the fee. Before
+ * anything is signed, the account must hold enough ETH for it — the most common
+ * reason a first team action fails is a brand-new business wallet with no ETH.
+ */
+async function sendFromAccount(to: Address, data: Hex, what: string) {
+  const account = vault.currentAccount().address;
+  try {
+    const [balance, fees] = await Promise.all([
+      client.getBalance({ address: account }),
+      client.estimateFeesPerGas().catch(() => null),
+    ]);
+    const perGas = fees?.maxFeePerGas ?? (await client.getGasPrice());
+    let gas = 450_000n;
+    try {
+      gas = await client.estimateGas({ account, to, data });
+    } catch {
+      // An account with no ETH often cannot even be estimated; the fallback covers it.
+    }
+    const cost = gas * perGas;
+    if (balance < cost)
+      throw new Error(
+        `You need about ${ethText(cost)} ETH for the network fee for ${what}, and ${shortAddress(account)} has ${ethText(balance)} ETH. Add a little ETH to the account you pay from (Receive shows its address), then try again.`,
+      );
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith("You need about")) throw error;
+    // A failed check is not a reason to refuse: the send below reports properly.
+  }
+  let hash: Hex | null = null;
+  try {
+    await execute(
+      [{ to, data, value: "0", chainId: chain.id }],
+      () => {},
+      async (row) => {
+        hash = row.hash;
+      },
+    );
+  } catch (error) {
+    throw friendlyError(error, what);
+  }
+  if (!hash) throw new Error(`Couldn't send ${what}. Please try again.`);
+  const receipt = await client
+    .waitForTransactionReceipt({ hash, timeout: 120_000 })
+    .catch((error) => {
+      throw friendlyError(error, what);
+    });
+  if (receipt.status !== "success")
+    throw new Error(`Robinhood Chain rejected ${what}. No funds moved except the network fee.`);
+  return { hash: hash as Hex, receipt };
+}
+
 /**
  * Create a Safe with the open account as its only signer, then bring it into
  * Tera. Others become signers by invitation, which the current signers approve.
@@ -193,17 +289,11 @@ export async function createTreasury(name: string) {
     functionName: "createProxyWithNonce",
     args: [SAFE.singletonL2 as Address, initializer, BigInt(Date.now())],
   });
-  let hash: Hex | null = null;
-  await execute(
-    [{ to: SAFE.proxyFactory as Address, data, value: "0", chainId: chain.id }],
-    () => {},
-    async (row) => {
-      hash = row.hash;
-    },
+  const { receipt } = await sendFromAccount(
+    SAFE.proxyFactory as Address,
+    data,
+    "creating the treasury",
   );
-  if (!hash) throw new Error("The treasury was not created.");
-  const receipt = await client.waitForTransactionReceipt({ hash, timeout: 120_000 });
-  if (receipt.status !== "success") throw new Error("Creating the treasury failed on chain.");
   const created = parseEventLogs({
     abi: factoryAbi,
     eventName: "ProxyCreation",
@@ -211,7 +301,15 @@ export async function createTreasury(name: string) {
   });
   const safe = created[0]?.args.proxy;
   if (!safe) throw new Error("The new treasury's address could not be read.");
-  return registerTreasury(getAddress(safe), name);
+  try {
+    return await registerTreasury(getAddress(safe), name);
+  } catch {
+    // The Safe exists on chain whatever happened here, and it is this
+    // account's. Say where it is, so it can be added instead of made again.
+    throw new Error(
+      `Your treasury was created at ${getAddress(safe)}, but Tera couldn't save it to your team list. Choose "Use an existing Safe" and enter that address to add it — you don't need to create another.`,
+    );
+  }
 }
 
 /** Bring an existing Safe into Tera. The open account must be one of its signers. */
@@ -422,18 +520,14 @@ async function sendToSafe(
       packSignatures(signatures.slice(0, team.threshold)) as Hex,
     ],
   });
-  let hash: Hex | null = null;
-  await execute(
-    [{ to: safe, data, value: "0", chainId: chain.id }],
-    () => {},
-    async (row) => {
-      hash = row.hash;
-    },
+  const { hash } = await sendFromAccount(
+    safe,
+    data,
+    fields.data === "0x" && fields.value === 0n && fields.to === safe
+      ? "this cancellation"
+      : "this payment",
   );
-  if (!hash) throw new Error("Nothing was sent.");
-  const receipt = await client.waitForTransactionReceipt({ hash, timeout: 120_000 });
-  if (receipt.status !== "success") throw new Error("The treasury refused this on chain.");
-  return hash as Hex;
+  return hash;
 }
 
 /** Send an approved proposal. The Safe checks every signature itself. */
