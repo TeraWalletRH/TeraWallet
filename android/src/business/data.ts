@@ -88,6 +88,8 @@ export type Holding = {
   name: string;
   group: string;
   watched: boolean;
+  /** A team treasury (a Safe) this account is a member of. */
+  team?: boolean;
   /** Whole-token amounts by symbol, zero balances dropped. */
   tokens: Record<string, number>;
   usd: number;
@@ -96,7 +98,7 @@ export type Holding = {
 
 /** Every address's balances, read in parallel. One failure blanks one row, not the page. */
 export async function readHoldings(
-  entries: { address: Address; name: string; group: string; watched: boolean }[],
+  entries: { address: Address; name: string; group: string; watched: boolean; team?: boolean }[],
   assets: Asset[],
   prices: Record<string, number>,
 ): Promise<Holding[]> {

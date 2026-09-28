@@ -17,6 +17,7 @@ import privateSendRouter from "./routes/private-send";
 import privateBridgeRouter from "./routes/private-bridge";
 import tagsRouter from "./routes/tags";
 import businessEmailRouter from "./routes/business-email";
+import teamsRouter from "./routes/teams";
 import leaderboardRouter from "./routes/leaderboard";
 
 const app = express();
@@ -55,6 +56,7 @@ app.use(stakingRouter);
 app.use(privateSendRouter);
 app.use(tagsRouter);
 app.use(businessEmailRouter);
+app.use(teamsRouter);
 app.use(leaderboardRouter);
 app.use(assetsRouter);
 app.use(intentRouter);

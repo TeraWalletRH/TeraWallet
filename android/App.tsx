@@ -1073,6 +1073,7 @@ function Wallet() {
     void tags.loadTagConfig().then(setTagsOn);
     // Whether a business can be paid at an email here. Web only; off on the phone.
     void biz.loadEmailConfig().then(setEmailOn);
+    void biz.loadTeamsConfig();
   }, []);
   useEffect(() => {
     vault
@@ -7125,7 +7126,7 @@ function Wallet() {
                         // The side margin keeps every page clear of the dock.
                         maxWidth: !owner
                           ? 440
-                          : page === "home"
+                          : page === "home" || page === "biz-team"
                             ? Math.min(1120, windowWidth - 280)
                             : 760,
                         alignSelf: "center",
@@ -7188,6 +7189,7 @@ function Wallet() {
             {(business
               ? ([
                   ["layout-dashboard", "Dashboard", "概览", "home"],
+                  ["shield-check", "Team", "团队", "biz-team"],
                   ["users", "Accounts", "账户", "biz-accounts"],
                   ["file-down", "Reports", "报表", "biz-reports"],
                   ["history", "Activity", "记录", "activity"],
