@@ -60,6 +60,10 @@ export const env = {
   // because codes are short-lived, but a stable secret keeps them checkable
   // across instances.
   emailCodeSecret: process.env.EMAIL_CODE_SECRET ?? "",
+  // Team treasuries. The Safe holds the money and the rules; this only keeps
+  // the member list and the approval queue, and like tags it is off until
+  // switched on.
+  teamsEnabled: process.env.TEAMS_ENABLED === "true",
   get privateSendVaultPrivateKey(): string {
     return (
       process.env.PRIVATE_SEND_VAULT_PRIVATE_KEY ||

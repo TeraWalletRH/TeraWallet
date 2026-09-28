@@ -28,6 +28,11 @@ export async function resolveEmail(_input: string): Promise<{
   throw new Error("Email payments are not available here.");
 }
 
+export const teamsAvailable = () => false;
+export async function loadTeamsConfig() {
+  return false;
+}
+
 export function Splash(_props: { onDone: () => void }) {
   return null;
 }

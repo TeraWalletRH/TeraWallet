@@ -41,6 +41,8 @@ import {
   type PriceSource,
 } from "./business/data";
 import { confirmCode, emailAvailable, linkedEmail, sendCode, unlinkEmail } from "./business/email";
+import { TeamScreen } from "./business/Team";
+import { myTeams, teamsAvailable } from "./business/teams";
 import {
   Button,
   Choices,
@@ -57,6 +59,7 @@ import {
   Toggle,
 } from "./ui";
 
+export { loadTeamsConfig, teamsAvailable } from "./business/teams";
 export {
   emailAvailable,
   isEmail,
@@ -177,6 +180,7 @@ export function Screens(props: ScreensProps) {
   if (props.page === "biz-accounts") return <Accounts {...props} />;
   if (props.page === "biz-reports") return <Reports {...props} />;
   if (props.page === "biz-email") return <Email {...props} />;
+  if (props.page === "biz-team") return <TeamScreen {...props} />;
   return <Dashboard {...props} />;
 }
 
@@ -275,9 +279,26 @@ function Dashboard({
     }));
     const watched = book.watch.map((w) => ({ ...w, watched: true }));
     setHoldings(null);
-    void readHoldings([...owned, ...watched], assets, prices).then(
-      (found) => live && setHoldings(found),
-    );
+    // Team treasuries this account belongs to count as holdings too. They are
+    // read-only here: spending from one goes through the Team screen's approvals.
+    const teams = teamsAvailable()
+      ? myTeams()
+          .then((list) =>
+            list
+              .filter((team) => team.status === "active")
+              .map((team) => ({
+                address: team.safe,
+                name: team.name || t("Team treasury", "团队资金库"),
+                group: t("Team", "团队"),
+                watched: false,
+                team: true,
+              })),
+          )
+          .catch(() => [])
+      : Promise.resolve([]);
+    void teams
+      .then((treasuries) => readHoldings([...owned, ...watched, ...treasuries], assets, prices))
+      .then((found) => live && setHoldings(found));
     const since = Date.now() - 30 * 86_400_000;
     void Promise.all(owned.map((a) => readHistory(a.address, since, 2).catch(() => [])))
       .then((lists) => live && setMoves(lists.flat().sort((a, b) => b.timestamp - a.timestamp)))
@@ -414,9 +435,9 @@ function Dashboard({
         [
           ["arrow-top-right", "Send", "发送", () => onFlow("send")],
           ["arrow-down", "Receive", "收款", () => onFlow("receive")],
+          ["shield-check", "Team", "团队", () => go("biz-team")],
           ["users", "Accounts", "账户", () => go("biz-accounts")],
           ["file-down", "Reports", "报表", () => go("biz-reports")],
-          ["mail", "Email", "邮箱", () => go("biz-email")],
         ] as const
       ).map(([icon, en, zh, press]) => (
         <Pressable
@@ -542,20 +563,22 @@ function Dashboard({
             return (
               <Pressable
                 key={h.address}
-                accessibilityRole={held ? "button" : undefined}
-                disabled={!held || held.active}
+                accessibilityRole={held || h.team ? "button" : undefined}
+                disabled={(!held || held.active) && !h.team}
                 onPress={() =>
-                  held &&
-                  void onSwitch(held.index).then(() =>
-                    notify({
-                      title: t("Account switched", "已切换账户"),
-                      body: t(
-                        `Payments you send now come from ${accountName(t, held)}.`,
-                        `现在从 ${accountName(t, held)} 付款。`,
-                      ),
-                      tone: "success",
-                    }),
-                  )
+                  h.team
+                    ? go("biz-team")
+                    : held &&
+                      void onSwitch(held.index).then(() =>
+                        notify({
+                          title: t("Account switched", "已切换账户"),
+                          body: t(
+                            `Payments you send now come from ${accountName(t, held)}.`,
+                            `现在从 ${accountName(t, held)} 付款。`,
+                          ),
+                          tone: "success",
+                        }),
+                      )
                 }
                 style={({ pressed }) => ({
                   flexDirection: "row",
@@ -567,7 +590,7 @@ function Dashboard({
               >
                 <View style={[s.iconDisc, held?.active && { backgroundColor: colors.tint }]}>
                   <Icon
-                    name={h.watched ? "eye" : "wallet-outline"}
+                    name={h.team ? "shield-check" : h.watched ? "eye" : "wallet-outline"}
                     size={18}
                     color={held?.active ? colors.green : colors.muted}
                   />
