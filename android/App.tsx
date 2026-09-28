@@ -44,7 +44,12 @@ import { fetchChainHistory, type ChainHistoryEntry } from "./src/explorer";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
-import { contacts as contactsCore, UNVERIFIABLE, value as valueCore } from "./src/core";
+import {
+  contacts as contactsCore,
+  spend as spendCore,
+  UNVERIFIABLE,
+  value as valueCore,
+} from "./src/core";
 import { check, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { screenOrigin } from "./src/viewport";
@@ -90,6 +95,8 @@ type Review = {
   bridgeInput?: any;
   draftId?: number;
   afterSubmitted?: (hash: string) => Promise<void>;
+  /** Where to land once it is sent. Activity when unset. */
+  returnTo?: string;
   simulation?: "checking" | "passed" | "needs-attention";
   isPrivateBridge?: boolean;
   /** The address the owner chose to pay. Read by the address book only. */
@@ -767,6 +774,8 @@ function Wallet() {
     [amountInUsd, setAmountInUsd] = useState(false),
     [usdAmountInput, setUsdAmountInput] = useState(""),
     [recipient, setRecipient] = useState(""),
+    [spendAmount, setSpendAmount] = useState(""),
+    [spendTo, setSpendTo] = useState(""),
     // Which kind of destination the owner is entering. A tag and an address
     // fail in different ways and are checked differently, so the field asks
     // rather than guessing from what has been typed so far.
@@ -1985,7 +1994,7 @@ function Wallet() {
       setUpdateStage("idle");
     }
   }
-  function showProposal(p: any) {
+  function showProposal(p: any, extra: Partial<Review> = {}) {
     const steps = verifyProposal(p, owner);
     const i = p.intent || p.preparedTransaction.intent;
     const asset = assets.find((a) => a.address.toLowerCase() === i.assetAddress.toLowerCase());
@@ -2051,7 +2060,76 @@ function Wallet() {
       payee,
       actionHash: p.preparedTransaction.actionHash,
       draftId: p.createdAt,
+      ...extra,
     });
+  }
+  /**
+   * Pay a dollar amount in USDG. The payee is resolved again here, for the
+   * same reason as a send: the address signed is the one the register holds now.
+   */
+  async function preparePayment(guard: () => void) {
+    const units = spendCore.dollarsToUnits(spendAmount);
+    check(units !== null, t("Enter a dollar amount, to the cent.", "请输入美元金额，精确到分。"));
+    const typed = spendTo.trim();
+    const destination = isAddress(typed) ? typed : (await resolveName(typed)).address;
+    guard();
+    const stable = assets.find((a) => a.symbol === spendCore.STABLE)?.address ?? USDG;
+    const input = {
+      ownerAddress: owner,
+      accountAddress: owner,
+      assetAddress: stable,
+      actionType: "TRANSFER",
+      recipient: destination,
+      amount: units!.toString(),
+    };
+    transferTx(input.assetAddress as Address, input.recipient as Address, input.amount);
+    const checked = await policyFor(input);
+    guard();
+    const result = await api("/api/intent/prepare", checked);
+    guard();
+    const proposal = { ...result, intent: checked, createdAt: Date.now() };
+    await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, proposal] });
+    guard();
+    showProposal(proposal);
+  }
+  /**
+   * Sell enough ETH for USDG to cover a payment — its own swap, reviewed and
+   * signed on its own. It waits for the swap to confirm so the balance the
+   * spend screen comes back to already holds the dollars.
+   */
+  async function prepareTopUp(guard: () => void, wei: bigint) {
+    const input = {
+      ownerAddress: owner,
+      accountAddress: owner,
+      assetAddress: assets.find((a) => a.symbol === "ETH")?.address ?? sources[1].address,
+      actionType: "SELL",
+      amount: wei.toString(),
+    };
+    const checked = await policyFor(input);
+    guard();
+    const result = await api("/api/intent/prepare", checked);
+    guard();
+    const p = { ...result, intent: checked, createdAt: Date.now() };
+    await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, p] });
+    guard();
+    showProposal(p, {
+      title: t("Review top-up", "审核充值"),
+      returnTo: "spend",
+      afterSubmitted: async (hash) => {
+        try {
+          await client.waitForTransactionReceipt({ hash: hash as `0x${string}`, timeout: 60000 });
+        } catch {
+          // Still pending: the screen shows the balance as it stands, and it
+          // updates on the next refresh.
+        }
+      },
+    });
+  }
+  function openSpend() {
+    setError("");
+    setSpendAmount("");
+    setSpendTo("");
+    setPage("spend");
   }
   async function prepareTrade(guard: () => void) {
     const input = {
@@ -2367,7 +2445,7 @@ function Wallet() {
         },
       );
       if (r.afterSubmitted && submittedHash) await r.afterSubmitted(submittedHash);
-      setPage("activity");
+      setPage(r.returnTo ?? "activity");
       await refresh();
       const payee = r.payee && isAddress(r.payee) ? r.payee : "";
       if (
@@ -4279,6 +4357,30 @@ function Wallet() {
                   </Pressable>
                 ))}
               </View>
+              <Pressable
+                accessibilityRole="button"
+                onPress={openSpend}
+                style={({ pressed }) => [
+                  s.panel,
+                  { flexDirection: "row", alignItems: "center", gap: 12, opacity: pressed ? 0.7 : 1 },
+                ]}
+              >
+                <View style={s.quickIcon}>
+                  <Icon name="wallet" color={colors.lime} size={22} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.text, { fontWeight: "700" }]}>{t("Spend dollars", "用美元消费")}</Text>
+                  <Text style={s.small}>
+                    {balance
+                      ? t(
+                          `${spendCore.formatDollars(BigInt(balance[spendCore.STABLE] || "0"))} ready in USDG`,
+                          `${spendCore.formatDollars(BigInt(balance[spendCore.STABLE] || "0"))} USDG 可用`,
+                        )
+                      : t("Pay anyone an exact dollar amount", "向任何人支付精确的美元金额")}
+                  </Text>
+                </View>
+                <Icon name="chevron-right" size={18} color={colors.muted} />
+              </Pressable>
               {!wide && popular}
               <View ref={tourAssetsRef} collapsable={false} style={{ gap: 10 }}>
                 <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
@@ -4570,6 +4672,137 @@ function Wallet() {
             )}
           </Text>
           {action("Review private route", "审核私密路由", preparePrivateSend)}
+        </>
+      );
+    }
+    if (page === "spend") {
+      const stable = BigInt(balance?.[spendCore.STABLE] || "0");
+      const plan = spendCore.plan({
+        amount: spendAmount,
+        stable,
+        eth: BigInt(balance?.ETH || "0"),
+        ethPrice: usablePrice("ETH") ?? NaN,
+      });
+      const topUp = plan.state === "top-up" ? plan.topUp : undefined;
+      const spent = spendCore.spentThisMonth(combinedHistory);
+      const dollars = spendCore.formatDollars;
+      const ready = plan.state === "ready" && !!spendTo.trim();
+      return (
+        <>
+          <Header title={t("Spend", "消费")} onBack={() => setPage("home")} backLabel={t("Back", "返回")} />
+          <View style={[s.panel, { gap: 6 }]}>
+            <Text style={s.eyebrow}>{t("READY TO SPEND", "可消费")}</Text>
+            <Text style={{ fontSize: 36, fontWeight: "800", color: colors.ink }}>
+              {balance ? dollars(stable) : "—"}
+            </Text>
+            <Text style={s.small}>
+              {t(
+                `Held as ${spendCore.unitsToAmount(stable)} USDG, counted at $1.00 each.`,
+                `以 ${spendCore.unitsToAmount(stable)} USDG 持有，每枚按 $1.00 计算。`,
+              )}
+            </Text>
+            <Text style={s.small}>
+              {spent.count
+                ? t(
+                    `Spent this month: ${dollars(spent.units)} across ${spent.count} payment${spent.count === 1 ? "" : "s"}.`,
+                    `本月已消费：${dollars(spent.units)}，共 ${spent.count} 笔。`,
+                  )
+                : t("Nothing spent this month yet.", "本月尚未消费。")}
+            </Text>
+          </View>
+          <View style={{ alignItems: "center", gap: 6, paddingVertical: 18 }}>
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              <Text style={{ fontSize: 44, fontWeight: "700", color: colors.muted }}>$</Text>
+              <TextInput
+                value={spendAmount}
+                onChangeText={(value) => setSpendAmount(value.replace(",", "."))}
+                keyboardType="decimal-pad"
+                placeholder="0.00"
+                placeholderTextColor={colors.faint}
+                accessibilityLabel={t("Amount in dollars", "美元金额")}
+                style={{
+                  color: plan.state === "invalid" && spendAmount ? colors.danger : colors.ink,
+                  fontWeight: "700",
+                  fontSize: 56,
+                  minWidth: 180,
+                  textAlign: "center",
+                }}
+              />
+            </View>
+            <Text style={s.small}>
+              {plan.state === "invalid" && spendAmount
+                ? t("Enter a dollar amount, to the cent.", "请输入美元金额，精确到分。")
+                : t("They receive exactly this, in USDG.", "对方将收到等额 USDG。")}
+            </Text>
+          </View>
+          <Field
+            label={t("Pay", "付款给")}
+            value={spendTo}
+            onChangeText={setSpendTo}
+            autoCapitalize="none"
+            placeholder={
+              biz.emailAvailable()
+                ? "0x… · @astra · pay@acme.com"
+                : tagsAvailable()
+                  ? "0x… · @astra"
+                  : "0x…"
+            }
+          />
+          {plan.state !== "invalid" && plan.state !== "ready" && (
+            <View style={[s.panel, { gap: 10 }]}>
+              <Text style={[s.text, { fontWeight: "700" }]}>
+                {t(
+                  `${dollars(plan.shortfall)} short`,
+                  `还差 ${dollars(plan.shortfall)}`,
+                )}
+              </Text>
+              {topUp ? (
+                <>
+                  <Text style={s.small}>
+                    {t(
+                      `Top up ${dollars(topUp.dollars)} first by selling about ${Number(formatUnits(topUp.wei, 18)).toFixed(6)} ETH for USDG. That's its own swap, reviewed and signed on its own — then you come back here and pay. Anything left over stays in USDG.`,
+                      `先卖出约 ${Number(formatUnits(topUp.wei, 18)).toFixed(6)} ETH 换成 USDG，充值 ${dollars(topUp.dollars)}。这是一笔单独审核和签名的兑换，完成后返回此处付款。多余部分保留为 USDG。`,
+                    )}
+                  </Text>
+                  <Button
+                    onPress={() => void run((guard) => prepareTopUp(guard, topUp.wei))}
+                  >
+                    {t(`Top up ${dollars(topUp.dollars)} from ETH`, `从 ETH 充值 ${dollars(topUp.dollars)}`)}
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Text style={s.small}>
+                    {plan.reason === "no-price"
+                      ? t(
+                          "ETH has no price right now, so Tera won't guess how much to sell. Try again shortly, or add USDG.",
+                          "ETH 当前没有价格，Tera 不会猜测卖出数量。请稍后再试，或充入 USDG。",
+                        )
+                      : t(
+                          "There isn't enough ETH to top up the difference (Tera keeps 0.0005 ETH for fees). Add USDG to this wallet to pay.",
+                          "ETH 不足以补足差额（Tera 保留 0.0005 ETH 用于手续费）。请向此钱包充入 USDG 后付款。",
+                        )}
+                  </Text>
+                  <Button onPress={() => openFlow("receive")}>{t("Receive USDG", "接收 USDG")}</Button>
+                </>
+              )}
+            </View>
+          )}
+          <Button
+            primary
+            disabled={!ready}
+            onPress={() => void run((guard) => preparePayment(guard))}
+          >
+            {plan.state === "ready"
+              ? t(`Review payment of ${dollars(plan.units)}`, `审核付款 ${dollars(plan.units)}`)
+              : t("Review payment", "审核付款")}
+          </Button>
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Payments leave as USDG on Robinhood Chain. USDG is counted at $1.00 here — that's a definition, not a guarantee.",
+              "付款以 Robinhood Chain 上的 USDG 发出。此处 USDG 按 $1.00 计算——这是约定，并非担保。",
+            )}
+          </Text>
         </>
       );
     }
@@ -7391,6 +7624,12 @@ function Wallet() {
             icon: "swap-horizontal",
             label: t("Swap", "兑换"),
             onPress: () => openFlow("swap"),
+          },
+          {
+            key: "spend",
+            icon: "wallet",
+            label: t("Spend", "消费"),
+            onPress: openSpend,
           },
           {
             key: "bridge",
