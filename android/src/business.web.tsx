@@ -57,7 +57,13 @@ import {
   Toggle,
 } from "./ui";
 
-export { emailAvailable, isEmail, loadEmailConfig, resolveEmail } from "./business/email";
+export {
+  emailAvailable,
+  isEmail,
+  linkedEmail,
+  loadEmailConfig,
+  resolveEmail,
+} from "./business/email";
 
 export type Mode = store.VaultKind;
 export const available = true;

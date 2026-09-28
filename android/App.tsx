@@ -621,7 +621,10 @@ function Wallet() {
   // shown while the vault behind it is switched.
   const [bizMode, setBizMode] = useState<biz.Mode>(biz.mode()),
     [bizSplash, setBizSplash] = useState(false),
-    [, setEmailOn] = useState(false);
+    [, setEmailOn] = useState(false),
+    // The email this business wallet is paid at, if one is linked. Stands where
+    // a personal wallet shows its tag.
+    [bizEmail, setBizEmail] = useState<string | null>(null);
   const business = bizMode === "business";
   const brand = business ? "Tera Business" : "Tera Wallet";
   const dataRef = useRef(data);
@@ -1035,6 +1038,19 @@ function Wallet() {
       setPinWallet(present && (await vault.usesPin()));
     });
   }
+  useEffect(() => {
+    setBizEmail(null);
+    if (!business || !owner || !biz.emailAvailable()) return;
+    let live = true;
+    void biz
+      .linkedEmail(owner)
+      .then((found) => live && setBizEmail(found?.email ?? null))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+    // Re-read when the email screen is left, so a new link shows at once.
+  }, [business, owner, page === "biz-email"]);
   /**
    * Close this wallet and open the other one's door. The vault is switched
    * after locking and before forget() re-reads it, so the unlock screen that
@@ -4479,9 +4495,11 @@ function Wallet() {
               style={{ backgroundColor: colors.tint, padding: 18, alignItems: "center", gap: 6 }}
             >
               <Text style={[s.text, { fontWeight: "700" }]}>
-                {tagsAvailable() && myTag
-                  ? tags.display(myTag)
-                  : walletName(accounts.find((entry) => entry.active) || { index: 0, name: "" })}
+                {business && bizEmail
+                  ? bizEmail
+                  : !business && tagsAvailable() && myTag
+                    ? tags.display(myTag)
+                    : walletName(accounts.find((entry) => entry.active) || { index: 0, name: "" })}
               </Text>
               <Text selectable style={[s.mono, { textAlign: "center", color: colors.muted }]}>
                 {owner}
@@ -6113,7 +6131,23 @@ function Wallet() {
                 <Text style={[s.mono, { color: colors.muted }]}>{short(owner)}</Text>
                 <Icon name="content-copy" size={14} color={colors.muted} />
               </Pressable>
-              {tagsAvailable() ? (
+              {business ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setPage("biz-email")}
+                  style={{
+                    alignSelf: "flex-start",
+                    backgroundColor: bizEmail ? colors.tint : colors.raised,
+                    borderRadius: 999,
+                    paddingHorizontal: 10,
+                    paddingVertical: 3,
+                  }}
+                >
+                  <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                    {bizEmail || t("Link email for payments", "绑定收款邮箱")}
+                  </Text>
+                </Pressable>
+              ) : tagsAvailable() ? (
                 <Pressable
                   accessibilityRole="button"
                   onPress={() => setPage("tag")}
@@ -6231,7 +6265,14 @@ function Wallet() {
               onPress={toggleTheme}
               right={<Toggle on={theme === "dark"} />}
             /> */}
-            {tagsAvailable() ? (
+            {business ? (
+              <ListRow
+                icon="mail"
+                label={t("Payment email", "收款邮箱")}
+                detail={bizEmail || t("Link an email to be paid at", "绑定一个用于收款的邮箱")}
+                onPress={() => setPage("biz-email")}
+              />
+            ) : tagsAvailable() ? (
               <ListRow
                 icon="at"
                 label={t("Your tag", "你的标签")}
