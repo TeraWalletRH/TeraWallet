@@ -37,6 +37,7 @@ import { api } from "./src/api";
 import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
 import * as biz from "./src/business";
+import * as payLinks from "./src/paylinks";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
 import { balances, client, execute, transactionStatus } from "./src/network";
@@ -776,6 +777,9 @@ function Wallet() {
     [recipient, setRecipient] = useState(""),
     [spendAmount, setSpendAmount] = useState(""),
     [spendTo, setSpendTo] = useState(""),
+    // A merchant's payment link being paid: it fixes the amount and the payee.
+    [spendLink, setSpendLink] = useState<payLinks.PayLink | null>(null),
+    [pendingPay, setPendingPay] = useState<string | null>(null),
     // Which kind of destination the owner is entering. A tag and an address
     // fail in different ways and are checked differently, so the field asks
     // rather than guessing from what has been typed so far.
@@ -1083,7 +1087,25 @@ function Wallet() {
     // Whether a business can be paid at an email here. Web only; off on the phone.
     void biz.loadEmailConfig().then(setEmailOn);
     void biz.loadTeamsConfig();
+    void payLinks.loadPayLinksConfig();
+    // A payment link opened on the web arrives as ?pay=…. It is taken off the
+    // address bar at once and opened on the Spend screen after unlock.
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      const id = payLinks.parseLink(window.location.search);
+      if (id) {
+        setPendingPay(id);
+        const url = new URL(window.location.href);
+        url.searchParams.delete("pay");
+        window.history.replaceState(null, "", url.toString());
+      }
+    }
   }, []);
+  useEffect(() => {
+    if (!owner || !pendingPay) return;
+    const id = pendingPay;
+    setPendingPay(null);
+    openPayLink(id);
+  }, [owner, pendingPay]);
   useEffect(() => {
     vault
       .hasWallet()
@@ -2073,6 +2095,23 @@ function Wallet() {
     const typed = spendTo.trim();
     const destination = isAddress(typed) ? typed : (await resolveName(typed)).address;
     guard();
+    const link = spendLink;
+    if (link) {
+      // Read again: the merchant may have cancelled it, or someone paid it, since it opened.
+      const fresh = await payLinks.viewLink(link.id);
+      guard();
+      check(
+        fresh.status === "open",
+        fresh.status === "paid"
+          ? t("This link has already been paid.", "此链接已付款。")
+          : t("The merchant cancelled this link.", "商家已取消此链接。"),
+      );
+      check(
+        destination.toLowerCase() === fresh.merchant.toLowerCase() &&
+          units === BigInt(fresh.amount),
+        t("This payment no longer matches the link. Open the link again.", "此付款与链接不一致，请重新打开链接。"),
+      );
+    }
     const stable = assets.find((a) => a.symbol === spendCore.STABLE)?.address ?? USDG;
     const input = {
       ownerAddress: owner,
@@ -2090,7 +2129,54 @@ function Wallet() {
     const proposal = { ...result, intent: checked, createdAt: Date.now() };
     await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, proposal] });
     guard();
-    showProposal(proposal);
+    showProposal(
+      proposal,
+      link ? { afterSubmitted: (hash) => settleLink(link.id, hash) } : {},
+    );
+  }
+  /**
+   * Tell Tera which transaction paid a link, once it is on chain — Tera reads
+   * it there before marking the link paid. Tried twice; a failure never
+   * undoes the payment, which has already gone.
+   */
+  async function settleLink(id: string, hash: string) {
+    try {
+      await client.waitForTransactionReceipt({ hash: hash as `0x${string}`, timeout: 60000 });
+    } catch {
+      // Reported anyway: the service answers "not on chain yet" if so.
+    }
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await payLinks.reportPaid(id, hash);
+        setSpendLink(null);
+        return;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 4000));
+      }
+    }
+  }
+  // Not through run(): a link from the address bar opens as unlock finishes,
+  // while run() is still busy with the unlock and would drop it.
+  function openPayLink(id: string) {
+    const version = vault.sessionVersion();
+    payLinks
+      .viewLink(id)
+      .then((link) => {
+        if (version !== vault.sessionVersion()) return;
+        setError("");
+        setSpendLink(link);
+        setSpendAmount(spendCore.unitsToAmount(BigInt(link.amount)));
+        setSpendTo(link.merchant);
+        setPage("spend");
+      })
+      .catch((e) => {
+        if (version !== vault.sessionVersion()) return;
+        setNotice({
+          title: t("Payment link", "收款链接"),
+          body: e instanceof Error ? e.message : t("This link could not be opened.", "无法打开此链接。"),
+          tone: "error",
+        });
+      });
   }
   /**
    * Sell enough ETH for USDG to cover a payment — its own swap, reviewed and
@@ -2127,6 +2213,7 @@ function Wallet() {
   }
   function openSpend() {
     setError("");
+    setSpendLink(null);
     setSpendAmount("");
     setSpendTo("");
     setPage("spend");
@@ -4686,7 +4773,14 @@ function Wallet() {
       const topUp = plan.state === "top-up" ? plan.topUp : undefined;
       const spent = spendCore.spentThisMonth(combinedHistory);
       const dollars = spendCore.formatDollars;
-      const ready = plan.state === "ready" && !!spendTo.trim();
+      const link = spendLink;
+      const ready =
+        plan.state === "ready" && !!spendTo.trim() && (!link || link.status === "open");
+      const leaveLink = () => {
+        setSpendLink(null);
+        setSpendAmount("");
+        setSpendTo("");
+      };
       return (
         <>
           <Header title={t("Spend", "消费")} onBack={() => setPage("home")} backLabel={t("Back", "返回")} />
@@ -4715,6 +4809,7 @@ function Wallet() {
               <Text style={{ fontSize: 44, fontWeight: "700", color: colors.muted }}>$</Text>
               <TextInput
                 value={spendAmount}
+                editable={!link}
                 onChangeText={(value) => setSpendAmount(value.replace(",", "."))}
                 keyboardType="decimal-pad"
                 placeholder="0.00"
@@ -4735,19 +4830,71 @@ function Wallet() {
                 : t("They receive exactly this, in USDG.", "对方将收到等额 USDG。")}
             </Text>
           </View>
-          <Field
-            label={t("Pay", "付款给")}
-            value={spendTo}
-            onChangeText={setSpendTo}
-            autoCapitalize="none"
-            placeholder={
-              biz.emailAvailable()
-                ? "0x… · @astra · pay@acme.com"
-                : tagsAvailable()
-                  ? "0x… · @astra"
-                  : "0x…"
-            }
-          />
+          {link ? (
+            <View style={[s.panel, { gap: 8 }]}>
+              <Text style={s.eyebrow}>{t("PAYMENT REQUEST", "收款请求")}</Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Icon
+                  name={link.email ? "shield-check" : "alert"}
+                  size={18}
+                  color={link.email ? colors.green : colors.copper}
+                />
+                <Text style={[s.text, { fontWeight: "700", flex: 1 }]}>
+                  {link.email
+                    ? link.name || link.email
+                    : t("Unverified merchant", "未验证商家")}
+                </Text>
+              </View>
+              <Text style={s.small}>
+                {link.email
+                  ? t(
+                      `${link.email} · a business email this wallet proved to Tera`,
+                      `${link.email} · 此钱包已向 Tera 证明的商业邮箱`,
+                    )
+                  : t(
+                      "This wallet has not proved a business email. Check the address with whoever sent you the link before you pay.",
+                      "此钱包尚未证明商业邮箱。付款前请与发送链接的人核对地址。",
+                    )}
+              </Text>
+              <Text style={[s.small, { color: colors.ink }]} selectable>
+                {link.merchant}
+              </Text>
+              {link.note ? (
+                <Text style={[s.text, { fontStyle: "italic" }]}>{`“${link.note}”`}</Text>
+              ) : null}
+              {link.status !== "open" && (
+                <Text style={[s.small, { color: colors.danger, fontWeight: "700" }]}>
+                  {link.status === "paid"
+                    ? t("This link has already been paid.", "此链接已付款。")
+                    : t("The merchant cancelled this link.", "商家已取消此链接。")}
+                </Text>
+              )}
+              <Pressable accessibilityRole="button" onPress={leaveLink} hitSlop={6}>
+                <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                  {t("Pay someone else instead", "改为向他人付款")}
+                </Text>
+              </Pressable>
+            </View>
+          ) : (
+            <Field
+              label={t("Pay", "付款给")}
+              value={spendTo}
+              onChangeText={(value) => {
+                // A pasted payment link opens that request rather than being read as a name.
+                const id = /[?&]pay=/.test(value) ? payLinks.parseLink(value) : null;
+                if (id) openPayLink(id);
+                else setSpendTo(value);
+              }}
+              autoCapitalize="none"
+              placeholder={
+                biz.emailAvailable()
+                  ? t("0x… · @astra · pay@acme.com · or a payment link", "0x… · @astra · pay@acme.com · 或收款链接")
+                  : tagsAvailable()
+                    ? t("0x… · @astra · or a payment link", "0x… · @astra · 或收款链接")
+                    : t("0x… or a payment link", "0x… 或收款链接")
+              }
+            />
+          )}
           {plan.state !== "invalid" && plan.state !== "ready" && (
             <View style={[s.panel, { gap: 10 }]}>
               <Text style={[s.text, { fontWeight: "700" }]}>
@@ -7423,6 +7570,7 @@ function Wallet() {
               ? ([
                   ["layout-dashboard", "Dashboard", "概览", "home"],
                   ["shield-check", "Team", "团队", "biz-team"],
+                  ["link", "Links", "链接", "biz-links"],
                   ["users", "Accounts", "账户", "biz-accounts"],
                   ["file-down", "Reports", "报表", "biz-reports"],
                   ["history", "Activity", "记录", "activity"],
