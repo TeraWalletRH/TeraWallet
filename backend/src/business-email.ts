@@ -183,7 +183,21 @@ async function deliver(email: string, code: string, name: string) {
     }),
     signal: AbortSignal.timeout(15_000),
   });
-  if (!response.ok) throw new Error(`Mail provider answered ${response.status}.`);
+  if (!response.ok) {
+    // Resend says why in its body ("domain is not verified", "API key is
+    // invalid"). Logged in full for whoever runs this service, and passed on
+    // in short, because "could not be reached" sent the owner looking in the
+    // wrong place when the real answer was a setting.
+    const detail = await response
+      .json()
+      .then((body: { message?: unknown }) => String(body?.message ?? ""))
+      .catch(() => "");
+    console.error(`business_email.deliver_failed status=${response.status} ${detail}`);
+    throw new BusinessEmailError(
+      `The code could not be sent${detail ? `: ${detail}` : ` (mail provider answered ${response.status})`}.`,
+      502,
+    );
+  }
 }
 
 /**
@@ -237,7 +251,18 @@ export async function startLink(body: {
            expires_at=EXCLUDED.expires_at, created_at=NOW()`,
     [email, owner, name, hashCode(email, owner, code), new Date(Date.now() + CODE_TTL_MS)],
   );
-  await deliver(email, code, name);
+  try {
+    await deliver(email, code, name);
+  } catch (error) {
+    // A code that never arrived must not count toward the wait before the
+    // next one, or a failed send would lock the owner out for a minute.
+    await pool!
+      .query("DELETE FROM business_email_codes WHERE email=$1 AND owner_address=$2", [email, owner])
+      .catch(() => {});
+    if (error instanceof BusinessEmailError) throw error;
+    console.error("business_email.deliver_failed", error);
+    throw new BusinessEmailError("The code could not be sent. Try again in a minute.", 502);
+  }
   return { email, owner, sent: true, expiresInSeconds: CODE_TTL_MS / 1000 };
 }
 
