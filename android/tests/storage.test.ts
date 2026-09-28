@@ -238,3 +238,19 @@ it("rejects text that is neither a phrase nor a key", async () => {
   await expect(vault.createWallet("0x1234", password)).rejects.toThrow();
   expect(await vault.hasWallet()).toBe(false);
 });
+
+it(
+  "seals a named record for the whole wallet, readable from any of its accounts",
+  async () => {
+    await vault.createWallet(phrase, password);
+    const book = { watch: ["0xcd3B766CCDd6AE721141F452C550Ca635964ce71"], groups: { a: "Payroll" } };
+    await vault.saveSealed("business-book", book);
+    expect([...files.values()].join("")).not.toContain("Payroll");
+    await vault.addAccount();
+    expect(await vault.loadSealed<typeof book>("business-book")).toEqual(book);
+    expect(await vault.loadSealed("missing")).toBeNull();
+    vault.lock();
+    await expect(vault.loadSealed("business-book")).rejects.toThrow();
+  },
+  DERIVES_A_KEY,
+);

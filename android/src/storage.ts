@@ -469,6 +469,33 @@ export function saveData(data: LocalData) {
   serial = work;
   return work;
 }
+/**
+ * A small named record sealed with this wallet's data key, shared by all its
+ * accounts rather than kept per account. Tera Business keeps its watch-only
+ * addresses, account groups and report labels here — lists of addresses that
+ * are nobody else's business, so they are sealed like everything else.
+ */
+const sealedFile = (name: string) =>
+  `tera-${walletFromSecret(phrase!).address.toLowerCase()}.${name}.json`;
+export async function loadSealed<T>(name: string): Promise<T | null> {
+  currentAccount();
+  const key = dataKey(phrase!);
+  try {
+    const raw = await store.readFile(sealedFile(name));
+    return raw === null ? null : (JSON.parse(open(key, JSON.parse(raw))) as T);
+  } finally {
+    key.fill(0);
+  }
+}
+export async function saveSealed(name: string, value: unknown) {
+  currentAccount();
+  const key = dataKey(phrase!);
+  try {
+    await store.writeFile(sealedFile(name), JSON.stringify(seal(key, JSON.stringify(value), random(12))));
+  } finally {
+    key.fill(0);
+  }
+}
 export async function eraseWallet() {
   const saved = await envelope();
   lock();

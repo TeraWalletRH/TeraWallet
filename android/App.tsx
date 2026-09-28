@@ -36,6 +36,7 @@ import { erc20Abi, formatUnits, parseUnits, zeroAddress, isAddress, type Address
 import { api } from "./src/api";
 import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
+import * as biz from "./src/business";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
 import { balances, client, execute, transactionStatus } from "./src/network";
@@ -614,6 +615,15 @@ function Wallet() {
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   const [data, setData] = useState(vault.emptyData());
+  // Which wallet this session opens: the personal one, or Tera Business — a
+  // separate wallet with its own secret and PIN, web only for now (on the
+  // phone biz.mode() is always "personal"). `bizSplash` is the door screen
+  // shown while the vault behind it is switched.
+  const [bizMode, setBizMode] = useState<biz.Mode>(biz.mode()),
+    [bizSplash, setBizSplash] = useState(false),
+    [, setEmailOn] = useState(false);
+  const business = bizMode === "business";
+  const brand = business ? "Tera Business" : "Tera Wallet";
   const dataRef = useRef(data);
   const holdProgress = useRef(new Animated.Value(0)).current;
   const [balance, setBalance] = useState<Record<string, string> | null>(null),
@@ -1025,6 +1035,18 @@ function Wallet() {
       setPinWallet(present && (await vault.usesPin()));
     });
   }
+  /**
+   * Close this wallet and open the other one's door. The vault is switched
+   * after locking and before forget() re-reads it, so the unlock screen that
+   * follows asks for the other wallet's PIN, or offers to create it.
+   */
+  function switchMode(next: biz.Mode) {
+    if (next === "business") setBizSplash(true);
+    vault.lock();
+    biz.setMode(next);
+    setBizMode(next);
+    forget();
+  }
   useEffect(() => {
     // Asked once, on launch, and never retried in a loop: an update is not
     // urgent enough to keep a phone talking to the network about it.
@@ -1033,6 +1055,8 @@ function Wallet() {
     // yes, so a failed call hides the controls rather than offering ones that
     // cannot work.
     void tags.loadTagConfig().then(setTagsOn);
+    // Whether a business can be paid at an email here. Web only; off on the phone.
+    void biz.loadEmailConfig().then(setEmailOn);
   }, []);
   useEffect(() => {
     vault
@@ -1370,7 +1394,8 @@ function Wallet() {
         setTheme("dark");
         if (!saved.tourSeen) {
           void vault.saveData(next).catch(() => {});
-          startTour();
+          // The tour points at the personal home screen, which a business wallet does not show.
+          if (!business) startTour();
         }
       })
       .catch(() => {});
@@ -1720,6 +1745,10 @@ function Wallet() {
    * registry and the address it resolved to is shown, because that address is
    * what the owner is actually agreeing to.
    */
+  /** A tag, or on the web a business email: whichever the owner typed. */
+  const resolveName = (input: string) =>
+    biz.isEmail(input) ? biz.resolveEmail(input) : tags.resolveTag(input);
+  const nameLabel = (name: string) => (biz.isEmail(name) ? name : tags.display(name));
   async function resolveRecipientStep() {
     if (recipientKind === "address") {
       setTagLookup({ state: "idle" });
@@ -1735,14 +1764,18 @@ function Wallet() {
     const typed = recipient.trim();
     setTagLookup({ state: "looking", tag: typed.replace(/^@+/, "") });
     try {
-      const found = await tags.resolveTag(typed);
+      const found = await resolveName(typed);
       setTagLookup({ state: "found", tag: found.tag, address: found.address });
       return true;
     } catch (e) {
       const message = e instanceof Error ? e.message : t("Lookup failed.", "查询失败。");
       setTagLookup({ state: "error", message });
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      setNotice({ title: t("Tag not found", "未找到标签"), body: message, tone: "error" });
+      setNotice({
+        title: biz.isEmail(typed) ? t("Email not found", "未找到邮箱") : t("Tag not found", "未找到标签"),
+        body: message,
+        tone: "error",
+      });
       return false;
     }
   }
@@ -1871,7 +1904,7 @@ function Wallet() {
     // A tag can be released and re-claimed between the two, and the address
     // that gets signed must be the one the registry holds now.
     const destination =
-      recipientKind === "tag" ? (await tags.resolveTag(recipient)).address : recipient.trim();
+      recipientKind === "tag" ? (await resolveName(recipient)).address : recipient.trim();
     guard();
     const input = {
       ownerAddress: owner,
@@ -2032,7 +2065,7 @@ function Wallet() {
     // between that screen and this one. The payout goes where the registry
     // points now, not where it pointed when the owner typed the name.
     const destination =
-      recipientKind === "tag" ? (await tags.resolveTag(recipient)).address : recipient.trim();
+      recipientKind === "tag" ? (await resolveName(recipient)).address : recipient.trim();
     guard();
     check(isAddress(destination), t("Enter a valid recipient address.", "请输入有效收款地址。"));
     const created = await api("/api/private-send/jobs", {
@@ -2483,6 +2516,27 @@ function Wallet() {
       <Text style={s.mono}>{language === "en" ? "中文" : "EN"}</Text>
     </Pressable>
   );
+  // Tera Business opens on its own door; this is the way back to the personal one.
+  const backToPersonal = business ? (
+    <Pressable
+      accessibilityRole="button"
+      disabled={busy}
+      onPress={() => switchMode("personal")}
+      style={({ pressed }) => ({
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 6,
+        paddingVertical: 8,
+        opacity: busy ? 0.4 : pressed ? 0.6 : 1,
+      })}
+    >
+      <Icon name="wallet-outline" size={16} color={colors.green} />
+      <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+        {t("Back to Tera Wallet", "返回 Tera 钱包")}
+      </Text>
+    </Pressable>
+  ) : null;
   function onboarding() {
     if (!ready)
       return (
@@ -2496,11 +2550,17 @@ function Wallet() {
         <>
           {authHeader(
             <Illustration />,
-            title(
-              "Your wallet.\nYour authority.",
-              "你的钱包。\n你的权限。",
-              t("Unlock on this device.", "在此设备上解锁。"),
-            ),
+            business
+              ? title(
+                  "Tera Business.",
+                  "Tera 商业版。",
+                  t("Unlock your business wallet on this device.", "在此设备上解锁你的商业钱包。"),
+                )
+              : title(
+                  "Your wallet.\nYour authority.",
+                  "你的钱包。\n你的权限。",
+                  t("Unlock on this device.", "在此设备上解锁。"),
+                ),
           )}
           {pinWallet ? (
             <>
@@ -2612,6 +2672,7 @@ function Wallet() {
               {t("Recover with a phrase", "使用助记词恢复")}
             </Text>
           </Pressable>
+          {backToPersonal}
         </>
       );
     if (setup === "start")
@@ -2619,14 +2680,23 @@ function Wallet() {
         <>
           {authHeader(
             <WelcomeHero />,
-            title(
-              "Your assets.\nYour rules.",
-              "你的资产。\n你的规则。",
-              t(
-                "Self-custodial. Your recovery phrase and keys never leave this device.",
-                "自主保管。助记词和密钥永远只保存在此设备上。",
-              ),
-            ),
+            business
+              ? title(
+                  "Your business.\nYour treasury.",
+                  "你的业务。\n你的资金库。",
+                  t(
+                    "A separate wallet for your business, with its own recovery phrase and PIN. It never mixes with your personal wallet.",
+                    "为业务单独设立的钱包，拥有独立的助记词和 PIN，与个人钱包完全分开。",
+                  ),
+                )
+              : title(
+                  "Your assets.\nYour rules.",
+                  "你的资产。\n你的规则。",
+                  t(
+                    "Self-custodial. Your recovery phrase and keys never leave this device.",
+                    "自主保管。助记词和密钥永远只保存在此设备上。",
+                  ),
+                ),
           )}
           <View style={{ flex: 1 }} />
           <Button
@@ -2637,11 +2707,14 @@ function Wallet() {
               goSetup("phrase");
             }}
           >
-            {t("Create wallet", "创建钱包")}
+            {business ? t("Create business wallet", "创建商业钱包") : t("Create wallet", "创建钱包")}
           </Button>
           <Button onPress={() => goSetup("import")}>
-            {t("I already have a wallet", "我已有钱包")}
+            {business
+              ? t("Import an existing wallet", "导入现有钱包")
+              : t("I already have a wallet", "我已有钱包")}
           </Button>
+          {backToPersonal}
         </>
       );
     if (setup === "phrase" || setup === "backup") {
@@ -3771,7 +3844,27 @@ function Wallet() {
       </Pressable>
     );
   }
+  // On the web a business can be paid at its email, typed in the same field as a tag.
+  const nameChoice = biz.emailAvailable() ? t("Tag or email", "标签或邮箱") : t("Tera tag", "Tera 标签");
   function main() {
+    if (business && (page === "home" || page.startsWith("biz-")))
+      return (
+        <biz.Screens
+          page={page}
+          go={setPage}
+          t={t}
+          wide={wide}
+          owner={owner as Address}
+          accounts={accounts}
+          assets={assets}
+          prices={prices}
+          onFlow={(flow: string) => openFlow(flow)}
+          onSwitch={switchTo}
+          onAdopt={adopt}
+          onAccountsChanged={syncAccounts}
+          notify={setNotice}
+        />
+      );
     if (page === "tokens")
       return (
         <>
@@ -4649,18 +4742,18 @@ function Wallet() {
           )}
           {flowStep === 3 && (
             <View style={{ gap: 12 }}>
-              {tagsAvailable() && (
+              {(tagsAvailable() || biz.emailAvailable()) && (
                 <>
                   <Text style={s.eyebrow}>{t("SEND TO", "发送至")}</Text>
                   <Choices
-                    options={[t("Tera tag", "Tera 标签"), t("Wallet address", "钱包地址")]}
+                    options={[nameChoice, t("Wallet address", "钱包地址")]}
                     value={
                       recipientKind === "tag"
-                        ? t("Tera tag", "Tera 标签")
+                        ? nameChoice
                         : t("Wallet address", "钱包地址")
                     }
                     select={(choice) => {
-                      setRecipientKind(choice === t("Tera tag", "Tera 标签") ? "tag" : "address");
+                      setRecipientKind(choice === nameChoice ? "tag" : "address");
                       setRecipient("");
                       setTagLookup({ state: "idle" });
                     }}
@@ -4670,11 +4763,17 @@ function Wallet() {
               <Field
                 label={
                   recipientKind === "tag"
-                    ? t("Tera tag", "Tera 标签")
+                    ? nameChoice
                     : t("Receiving wallet address", "收款钱包地址")
                 }
                 value={recipient}
-                placeholder={recipientKind === "tag" ? "@astra" : "0x…"}
+                placeholder={
+                  recipientKind === "tag"
+                    ? biz.emailAvailable()
+                      ? "@astra · pay@acme.com"
+                      : "@astra"
+                    : "0x…"
+                }
                 onChangeText={(value) => {
                   setRecipient(value);
                   // Any edit invalidates what the registry said a moment ago.
@@ -4689,7 +4788,7 @@ function Wallet() {
                   {tagLookup.state === "looking"
                     ? t("Looking up the tag…", "正在查询标签…")
                     : tagLookup.state === "found"
-                      ? `${tags.display(tagLookup.tag)} · ${tagLookup.address}`
+                      ? `${nameLabel(tagLookup.tag)} · ${tagLookup.address}`
                       : tagLookup.state === "error"
                         ? tagLookup.message
                         : t(
@@ -4727,7 +4826,10 @@ function Wallet() {
                 value={usdReviewRow(selectedAsset.symbol, amount || "0")[1]}
               />
               {tagLookup.state === "found" && (
-                <Row label={t("Tag", "标签")} value={tags.display(tagLookup.tag)} />
+                <Row
+                  label={biz.isEmail(tagLookup.tag) ? t("Email", "邮箱") : t("Tag", "标签")}
+                  value={nameLabel(tagLookup.tag)}
+                />
               )}
               <Row
                 label={t("To", "收款方")}
@@ -6081,6 +6183,22 @@ function Wallet() {
               detail={t("Address and device controls", "地址与设备管理")}
               onPress={() => setSettingsSection("device")}
             />
+            {biz.available ? (
+              <ListRow
+                icon="briefcase"
+                label={
+                  business
+                    ? t("Switch to Tera Wallet", "切换到 Tera 钱包")
+                    : t("Switch to Tera Business", "切换到 Tera 商业版")
+                }
+                detail={
+                  business
+                    ? t("Your personal wallet, with its own PIN", "你的个人钱包，使用其自己的 PIN")
+                    : t("A separate wallet for your business, with its own PIN", "为业务单独设立的钱包，使用独立 PIN")
+                }
+                onPress={() => switchMode(business ? "personal" : "business")}
+              />
+            ) : null}
           </Group>
           <Group title={t("Preferences", "偏好设置")}>
             <ListRow
@@ -6093,11 +6211,13 @@ function Wallet() {
                 </Text>
               }
             />
-            <ListRow
-              icon="compass"
-              label={t("Replay app tour", "重新查看引导")}
-              onPress={startTour}
-            />
+            {!business ? (
+              <ListRow
+                icon="compass"
+                label={t("Replay app tour", "重新查看引导")}
+                onPress={startTour}
+              />
+            ) : null}
             {/*
               The app is dark-mode only for now — toggleTheme/setColorTheme
               still work underneath, so this just needs uncommenting (and a
@@ -6862,7 +6982,7 @@ function Wallet() {
                 resizeMode="contain"
               />
               <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 16 }}>
-                Tera Wallet
+                {brand}
               </Text>
             </Pressable>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
@@ -6914,7 +7034,7 @@ function Wallet() {
             />
             <View>
               <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 14 }}>
-                Tera Wallet
+                {brand}
               </Text>
             </View>
           </Pressable>
@@ -7024,14 +7144,22 @@ function Wallet() {
               shadowOffset: { width: 0, height: 12 },
             }}
           >
-            {(
-              [
-                ["wallet-outline", "Wallet", "钱包", "home"],
-                ["history", "Activity", "记录", "activity"],
-                ["lightning-bolt-outline", "Actions", "操作", "actions"],
-                ["message-text-outline", "Assistant", "助手", "assistant"],
-                ["cog-outline", "Settings", "设置", "settings"],
-              ] as const
+            {(business
+              ? ([
+                  ["layout-dashboard", "Dashboard", "概览", "home"],
+                  ["users", "Accounts", "账户", "biz-accounts"],
+                  ["file-down", "Reports", "报表", "biz-reports"],
+                  ["history", "Activity", "记录", "activity"],
+                  ["lightning-bolt-outline", "Actions", "操作", "actions"],
+                  ["cog-outline", "Settings", "设置", "settings"],
+                ] as ReadonlyArray<readonly [string, string, string, string]>)
+              : ([
+                  ["wallet-outline", "Wallet", "钱包", "home"],
+                  ["history", "Activity", "记录", "activity"],
+                  ["lightning-bolt-outline", "Actions", "操作", "actions"],
+                  ["message-text-outline", "Assistant", "助手", "assistant"],
+                  ["cog-outline", "Settings", "设置", "settings"],
+                ] as ReadonlyArray<readonly [string, string, string, string]>)
             ).map(([icon, en, zh, p]) => {
               const active = p === "actions" ? sheetOpen : page === p;
               return (
@@ -8455,6 +8583,7 @@ function Wallet() {
           </SafeAreaView>
         </SafeAreaProvider>
       </Modal>
+      {bizSplash ? <biz.Splash onDone={() => setBizSplash(false)} /> : null}
     </SafeAreaView>
   );
 }

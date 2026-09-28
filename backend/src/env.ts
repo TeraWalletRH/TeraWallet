@@ -50,6 +50,16 @@ export const env = {
   // that switched itself on would answer "this name is free" in an
   // environment where nothing is actually stored.
   tagsEnabled: process.env.TAGS_ENABLED === "true",
+  // Business emails. Off unless switched on, for the same reason as tags, and
+  // unusable without a mail provider: a code that is never delivered is a
+  // form that cannot be finished. Resend is called over plain HTTPS.
+  businessEmailEnabled: process.env.BUSINESS_EMAIL_ENABLED === "true",
+  resendApiKey: process.env.RESEND_API_KEY ?? "",
+  emailFrom: process.env.EMAIL_FROM ?? "Tera Business <business@terawallet.app>",
+  // Keys the stored hash of each code. Without it a restart would still work,
+  // because codes are short-lived, but a stable secret keeps them checkable
+  // across instances.
+  emailCodeSecret: process.env.EMAIL_CODE_SECRET ?? "",
   get privateSendVaultPrivateKey(): string {
     return (
       process.env.PRIVATE_SEND_VAULT_PRIVATE_KEY ||

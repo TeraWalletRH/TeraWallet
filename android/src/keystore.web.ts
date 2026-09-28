@@ -8,7 +8,37 @@
 // No biometrics: a browser cannot hold a key behind Face ID the way the phone's
 // keychain does, so the web build offers the PIN only.
 
-const PREFIX = "tera.web.";
+// Two vaults can live side by side: the personal wallet, and a Tera Business
+// wallet with its own secret, PIN and data. Only one is open at a time, and
+// which one was last used is remembered so a reload opens the same door.
+// Personal keeps the original prefix, so a wallet created before business
+// mode existed is exactly where it always was.
+export type VaultKind = "personal" | "business";
+const MODE = "tera.web.mode";
+const prefixes: Record<VaultKind, string> = {
+  personal: "tera.web.",
+  business: "tera.web.business.",
+};
+let kind: VaultKind = "personal";
+try {
+  if (localStorage.getItem(MODE) === "business") kind = "business";
+} catch {
+  // Storage blocked: open the personal vault, as before business mode existed.
+}
+let PREFIX = prefixes[kind];
+
+export const vaultKind = () => kind;
+
+/** Point every read and write below at the other vault. Lock the wallet first. */
+export function useVault(next: VaultKind) {
+  kind = next;
+  PREFIX = prefixes[next];
+  try {
+    localStorage.setItem(MODE, next);
+  } catch {
+    // Not remembered across a reload, which only means the next visit opens personal.
+  }
+}
 
 // Ask once for storage the browser will not clear to make room. An installed
 // app usually gets it; a tab may not, and the recovery phrase is the answer then.
