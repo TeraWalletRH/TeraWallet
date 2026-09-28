@@ -3,7 +3,7 @@ import request from "supertest";
 import { hashTypedData, recoverTypedDataAddress, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import app from "../src/app";
-import { memberField } from "../src/teams";
+import { applyChange, changeArgs, memberField, SENTINEL } from "../src/teams";
 import * as backendCore from "../src/teams-core";
 import * as siteCore from "../../public/tera/core/teams.js";
 
@@ -125,5 +125,39 @@ describe("What a team member is allowed and asked to sign", () => {
         { signer: "0x0000000000000000000000000000000000000001", signature: "0xaa" },
       ]),
     ).toBe(packed);
+  });
+});
+
+describe("Signer changes, worked out for their place in the queue", () => {
+  const A = "0x000000000000000000000000000000000000000A" as `0x${string}`;
+  const B = "0x000000000000000000000000000000000000000b" as `0x${string}`;
+  const C = "0x000000000000000000000000000000000000000C" as `0x${string}`;
+  const D = "0x000000000000000000000000000000000000000d" as `0x${string}`;
+
+  it("follows the Safe's own list: a new signer goes to the head", () => {
+    expect(applyChange([A, B, C], { kind: "add-signer", subject: D })).toEqual([D, A, B, C]);
+    expect(applyChange([A, B, C], { kind: "remove-signer", subject: B })).toEqual([A, C]);
+  });
+
+  it("names the signer before the one removed, as the list will stand then", () => {
+    // Removing B with nothing queued ahead: A comes before it.
+    expect(changeArgs([A, B, C], { kind: "remove-signer", subject: B })?.args[0]).toBe(A);
+    // With an add of D queued ahead, the list is [D, A, B, C]: still A.
+    const afterAdd = applyChange([A, B, C], { kind: "add-signer", subject: D });
+    expect(changeArgs(afterAdd, { kind: "remove-signer", subject: A })?.args[0]).toBe(D);
+    // Removing the head uses the Safe's sentinel.
+    expect(changeArgs([A, B, C], { kind: "remove-signer", subject: A })?.args[0]).toBe(SENTINEL);
+  });
+
+  it("keeps the threshold at a majority of the signers after the change", () => {
+    expect(changeArgs([A, B], { kind: "add-signer", subject: C })?.args[1]).toBe(2n);
+    expect(changeArgs([A, B, C], { kind: "add-signer", subject: D })?.args[1]).toBe(3n);
+    expect(changeArgs([A, B, C], { kind: "remove-signer", subject: C })?.args[2]).toBe(2n);
+  });
+
+  it("refuses changes that no longer make sense, so they close instead of failing", () => {
+    expect(changeArgs([A, B], { kind: "add-signer", subject: A })).toBeNull();
+    expect(changeArgs([A, B], { kind: "remove-signer", subject: C })).toBeNull();
+    expect(changeArgs([A], { kind: "remove-signer", subject: A })).toBeNull();
   });
 });
