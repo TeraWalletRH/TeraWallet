@@ -41,6 +41,7 @@ import {
   type PriceSource,
 } from "./business/data";
 import { confirmCode, emailAvailable, linkedEmail, sendCode, unlinkEmail } from "./business/email";
+import { LinksScreen } from "./business/Links";
 import { TeamScreen } from "./business/Team";
 import { inbox, myTeams, teamsAvailable, type Inbox } from "./business/teams";
 import {
@@ -181,6 +182,7 @@ export function Screens(props: ScreensProps) {
   if (props.page === "biz-reports") return <Reports {...props} />;
   if (props.page === "biz-email") return <Email {...props} />;
   if (props.page === "biz-team") return <TeamScreen {...props} />;
+  if (props.page === "biz-links") return <LinksScreen {...props} />;
   return <Dashboard {...props} />;
 }
 
@@ -448,6 +450,7 @@ function Dashboard({
         [
           ["arrow-top-right", "Send", "发送", () => onFlow("send")],
           ["arrow-down", "Receive", "收款", () => onFlow("receive")],
+          ["link", "Links", "链接", () => go("biz-links")],
           ["shield-check", "Team", "团队", () => go("biz-team")],
           ["users", "Accounts", "账户", () => go("biz-accounts")],
           ["file-down", "Reports", "报表", () => go("biz-reports")],

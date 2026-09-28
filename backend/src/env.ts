@@ -64,6 +64,9 @@ export const env = {
   // the member list and the approval queue, and like tags it is off until
   // switched on.
   teamsEnabled: process.env.TEAMS_ENABLED === "true",
+  // Merchant payment links. Off until switched on, like tags: a link that is
+  // never stored would be a request nobody can pay.
+  payLinksEnabled: process.env.PAY_LINKS_ENABLED === "true",
   get privateSendVaultPrivateKey(): string {
     return (
       process.env.PRIVATE_SEND_VAULT_PRIVATE_KEY ||

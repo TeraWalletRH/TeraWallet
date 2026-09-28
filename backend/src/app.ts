@@ -18,6 +18,7 @@ import privateBridgeRouter from "./routes/private-bridge";
 import tagsRouter from "./routes/tags";
 import businessEmailRouter from "./routes/business-email";
 import teamsRouter from "./routes/teams";
+import payLinksRouter from "./routes/pay-links";
 import leaderboardRouter from "./routes/leaderboard";
 
 const app = express();
@@ -57,6 +58,7 @@ app.use(privateSendRouter);
 app.use(tagsRouter);
 app.use(businessEmailRouter);
 app.use(teamsRouter);
+app.use(payLinksRouter);
 app.use(leaderboardRouter);
 app.use(assetsRouter);
 app.use(intentRouter);
