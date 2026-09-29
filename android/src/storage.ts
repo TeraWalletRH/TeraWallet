@@ -77,7 +77,14 @@ export type LocalData = {
    * the newest activity already announced, so what arrived while the app was
    * closed is announced once when it opens, and nothing older.
    */
-  alerts?: { off?: boolean; lastSeen?: number };
+  alerts?: {
+    off?: boolean;
+    lastSeen?: number;
+    /** Everything announced, newest first, kept on this device only (capped). */
+    items?: { hash: string; direction: "send" | "receive"; title: string; body: string; at: number }[];
+    /** When the notifications page was last opened; newer items count as unread. */
+    readAt?: number;
+  };
 };
 export const emptyData = (): LocalData => ({
   drafts: [],

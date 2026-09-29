@@ -896,6 +896,29 @@ function Wallet() {
     const who = (address: string) =>
       (isAddress(address) && contactsCore.nameFor(book, address)) ||
       (isAddress(address) ? contactsCore.short(address) : address);
+    const lineFor = (item: notify.Heard) => ({
+      title:
+        item.direction === "receive"
+          ? t(`Received ${item.amount} ${item.symbol}`, `收到 ${item.amount} ${item.symbol}`)
+          : t(`Sent ${item.amount} ${item.symbol}`, `已发送 ${item.amount} ${item.symbol}`),
+      body:
+        item.direction === "receive"
+          ? t(`From ${who(item.counterparty)}`, `来自 ${who(item.counterparty)}`)
+          : t(`To ${who(item.counterparty)}, from another device`, `发往 ${who(item.counterparty)}，来自另一台设备`),
+    });
+    // Kept for the notifications page: every item, not just what the banner showed.
+    const now = Date.now();
+    const kept = (shown.items as notify.Heard[]).map((item) => ({
+      hash: item.hash.toLowerCase(),
+      direction: item.direction,
+      ...lineFor(item),
+      at: item.timestamp && item.timestamp < now ? item.timestamp : now,
+    }));
+    const alertsNow = dataRef.current.alerts || {};
+    void store({
+      ...dataRef.current,
+      alerts: { ...alertsNow, items: [...kept, ...(alertsNow.items || [])].slice(0, 100) },
+    }).catch(() => {});
     let title: string, body: string;
     if (shown.kind === "summary") {
       title = t("While you were away", "离开期间");
@@ -905,14 +928,7 @@ function Wallet() {
       );
     } else {
       const [first, ...rest] = shown.items as notify.Heard[];
-      title =
-        first.direction === "receive"
-          ? t(`Received ${first.amount} ${first.symbol}`, `收到 ${first.amount} ${first.symbol}`)
-          : t(`Sent ${first.amount} ${first.symbol}`, `已发送 ${first.amount} ${first.symbol}`);
-      body =
-        first.direction === "receive"
-          ? t(`From ${who(first.counterparty)}`, `来自 ${who(first.counterparty)}`)
-          : t(`To ${who(first.counterparty)}, from another device`, `发往 ${who(first.counterparty)}，来自另一台设备`);
+      ({ title, body } = lineFor(first));
       if (rest.length) body += t(` · and ${rest.length} more`, ` · 另有 ${rest.length} 笔`);
     }
     const hash = shown.items[0].hash;
@@ -920,7 +936,7 @@ function Wallet() {
     if (alertTimer.current) clearTimeout(alertTimer.current);
     alertTimer.current = setTimeout(() => setTxAlert(null), 6000);
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    notify.showSystem(title, body, hash, () => setPage("activity"));
+    notify.showSystem(title, body, hash, () => setPage("notifications"));
     void refresh();
   }
   useEffect(() => {
@@ -991,6 +1007,19 @@ function Wallet() {
     }, 60_000);
     return () => clearInterval(interval);
   }, [alertsOn, owner]);
+  // Opening the notifications page marks everything read. The dots on this
+  // visit still show what was new as of when it was opened.
+  const notificationsReadAt = useRef(0);
+  useEffect(() => {
+    if (page !== "notifications" || !owner) return;
+    notificationsReadAt.current = dataRef.current.alerts?.readAt ?? 0;
+    const newest = dataRef.current.alerts?.items?.[0]?.at ?? 0;
+    if (newest > notificationsReadAt.current)
+      void store({
+        ...dataRef.current,
+        alerts: { ...dataRef.current.alerts, readAt: Date.now() },
+      }).catch(() => {});
+  }, [page, owner]);
   useEffect(() => {
     if (page !== "activity" || !owner) return;
     let live = true;
@@ -2893,6 +2922,53 @@ function Wallet() {
     setLanguage(next);
     if (owner) void store({ ...dataRef.current, language: next }).catch(() => {});
   }
+  const unreadAlerts = (data.alerts?.items || []).filter(
+    (item) => item.at > (data.alerts?.readAt ?? 0),
+  ).length;
+  const bellControl = (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={
+        unreadAlerts
+          ? t(`Notifications, ${unreadAlerts} new`, `通知，${unreadAlerts} 条新消息`)
+          : t("Notifications", "通知")
+      }
+      onPress={() => setPage("notifications")}
+      hitSlop={6}
+      style={({ pressed }) => ({
+        width: 34,
+        height: 34,
+        borderRadius: 17,
+        borderWidth: 1,
+        borderColor: colors.line,
+        alignItems: "center",
+        justifyContent: "center",
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <Icon name="bell" size={16} color={colors.ink} />
+      {unreadAlerts ? (
+        <View
+          style={{
+            position: "absolute",
+            top: -4,
+            right: -4,
+            minWidth: 18,
+            height: 18,
+            paddingHorizontal: 4,
+            borderRadius: 9,
+            backgroundColor: colors.green,
+            alignItems: "center",
+            justifyContent: "center",
+          }}
+        >
+          <Text style={{ color: colors.paper, fontSize: 10, fontWeight: "800" }}>
+            {unreadAlerts > 9 ? "9+" : unreadAlerts}
+          </Text>
+        </View>
+      ) : null}
+    </Pressable>
+  );
   const languageControl = (
     <Pressable accessibilityRole="button" onPress={toggleLanguage}>
       <Text style={s.mono}>{language === "en" ? "中文" : "EN"}</Text>
@@ -6483,6 +6559,120 @@ function Wallet() {
         </>
       );
     }
+    if (page === "notifications") {
+      const items = data.alerts?.items || [];
+      const readAt = notificationsReadAt.current;
+      const openItem = (hash: string) => {
+        const row = combinedHistory.find((h) => String(h.hash || "").toLowerCase() === hash);
+        if (row) {
+          setActivityDetail(row.hash);
+          setPage("activity-detail");
+        } else setPage("activity");
+      };
+      return (
+        <>
+          <Header
+            title={t("Notifications", "通知")}
+            onBack={() => setPage("home")}
+            backLabel={t("Home", "首页")}
+            right={
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("Notification settings", "通知设置")}
+                hitSlop={8}
+                onPress={() => {
+                  setSystemAlerts(notify.systemPermission());
+                  setSettingsSection("alerts");
+                  setPage("settings");
+                }}
+                style={({ pressed }) => ({
+                  width: 36,
+                  height: 36,
+                  borderRadius: 18,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  backgroundColor: pressed ? colors.raised : colors.wash,
+                })}
+              >
+                <Icon name="cog-outline" size={19} color={colors.ink} />
+              </Pressable>
+            }
+          />
+          {data.alerts?.off ? (
+            <View style={[s.panel, { gap: 6 }]}>
+              <Text style={s.label}>{t("Notifications are off", "通知已关闭")}</Text>
+              <Text style={s.small}>
+                {t(
+                  "Turn them on in settings to hear about payments as they land.",
+                  "在设置中开启，即可在到账时收到提醒。",
+                )}
+              </Text>
+            </View>
+          ) : null}
+          {!items.length ? (
+            <View style={[s.panel, { alignItems: "center", paddingVertical: 28, gap: 8 }]}>
+              <Icon name="bell" size={32} color={colors.faint} />
+              <Text style={[s.small, { textAlign: "center" }]}>
+                {t(
+                  "Payments in and out of this wallet will show up here.",
+                  "此钱包的收款与付款会显示在这里。",
+                )}
+              </Text>
+            </View>
+          ) : (
+            <Group>
+              {items.map((item) => (
+                <Pressable
+                  key={`${item.hash}-${item.direction}-${item.title}`}
+                  accessibilityRole="button"
+                  onPress={() => openItem(item.hash)}
+                  style={({ pressed }) => ({
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 12,
+                    paddingVertical: 10,
+                    opacity: pressed ? 0.7 : 1,
+                  })}
+                >
+                  <View style={s.iconDisc}>
+                    <Icon
+                      name={item.direction === "receive" ? "arrow-down" : "arrow-top-right"}
+                      size={20}
+                      color={colors.ink}
+                    />
+                  </View>
+                  <View style={{ flex: 1, gap: 3 }}>
+                    <Text style={s.label} numberOfLines={1}>
+                      {item.title}
+                    </Text>
+                    <Text style={s.small} numberOfLines={1}>
+                      {item.body}
+                    </Text>
+                    <Text style={s.small}>{new Date(item.at).toLocaleString()}</Text>
+                  </View>
+                  {item.at > readAt ? (
+                    <View
+                      style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: colors.green }}
+                    />
+                  ) : null}
+                </Pressable>
+              ))}
+            </Group>
+          )}
+          {items.length ? (
+            <Button
+              onPress={() =>
+                void run(() =>
+                  store({ ...dataRef.current, alerts: { ...dataRef.current.alerts, items: [] } }),
+                )
+              }
+            >
+              {t("Clear all", "全部清除")}
+            </Button>
+          ) : null}
+        </>
+      );
+    }
     if (page === "activity")
       return (
         <>
@@ -7806,6 +7996,7 @@ function Wallet() {
               </Text>
             </Pressable>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+              {bellControl}
               <View
                 style={{
                   borderWidth: 1,
@@ -7858,16 +8049,19 @@ function Wallet() {
               </Text>
             </View>
           </Pressable>
-          <View
-            style={{
-              borderWidth: 1,
-              borderColor: colors.line,
-              borderRadius: 999,
-              paddingHorizontal: 12,
-              paddingVertical: 7,
-            }}
-          >
-            {languageControl}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+            {bellControl}
+            <View
+              style={{
+                borderWidth: 1,
+                borderColor: colors.line,
+                borderRadius: 999,
+                paddingHorizontal: 12,
+                paddingVertical: 7,
+              }}
+            >
+              {languageControl}
+            </View>
           </View>
         </View>
       )}
@@ -9417,8 +9611,7 @@ function Wallet() {
           accessibilityLabel={`${txAlert.title}. ${txAlert.body}`}
           onPress={() => {
             setTxAlert(null);
-            setSettingsSection("root");
-            setPage("activity");
+            setPage("notifications");
           }}
           style={({ pressed }) => ({
             position: "absolute",
