@@ -2,13 +2,14 @@ import {
   createPublicClient,
   createWalletClient,
   erc20Abi,
+  fallback,
   http,
   keccak256,
   type Address,
   type Hash,
 } from "viem";
-import { chain, RPC, sources, type Tx } from "./config";
-import { currentAccount, sessionVersion } from "./storage";
+import { chain, RPC, RPCS, sources, type Tx } from "./config";
+import { currentAccount, notePending, sessionVersion } from "./storage";
 import { txCheck } from "./validation";
 // retryCount: 0 stays on the wallet transport used for sending a
 // transaction (below) — retrying a broadcast is a real idempotency risk.
@@ -17,7 +18,9 @@ import { txCheck } from "./validation";
 // an owner as "the transfer I received isn't showing up."
 export const client = createPublicClient({
   chain,
-  transport: http(RPC, { timeout: 20000, retryCount: 2 }),
+  transport: fallback(
+    RPCS.map((url) => http(url, { timeout: 20000, retryCount: 2 })),
+  ),
 });
 export async function balances(
   address: Address,
@@ -67,20 +70,44 @@ export async function execute(
       throw new Error("Wallet locked. Review again. / 钱包已锁定，请重新审核。");
     verify();
   };
+  // The chain cannot change between two steps of the same transaction, so it
+  // is read once here instead of once per step. It is read again after any
+  // wait for a receipt, because that wait is the only point where enough time
+  // passes for the answer to have become stale.
+  const checkChain = async () => {
+    if ((await client.getChainId()) !== chain.id) throw new Error("RPC network mismatch.");
+  };
+  // One wallet client for the whole run. Building one per step threw away the
+  // chain id viem had already cached on it and paid for it again every step.
+  const wallet = createWalletClient({
+    chain,
+    transport: http(RPC, { timeout: 20000, retryCount: 0 }),
+  });
   try {
+    await checkChain();
     for (let index = 0; index < steps.length; index++) {
       active();
-      if ((await client.getChainId()) !== chain.id) throw new Error("RPC network mismatch.");
       const tx = steps[index];
       txCheck(tx);
-      if (tx.data !== "0x" && !(await client.getCode({ address: tx.to })))
-        throw new Error("Contract unavailable. / 合约不可用。");
-      const simulation = await client.call({
-        account: owner,
-        to: tx.to,
-        data: tx.data,
-        value: BigInt(tx.value),
-      });
+      // The code read and the simulation do not depend on each other, so they
+      // go out together rather than one after the other. They are still judged
+      // in the original order, so a missing contract is still reported as a
+      // missing contract rather than as whatever the simulation said about it.
+      const [code, simulated] = await Promise.allSettled([
+        tx.data !== "0x" ? client.getCode({ address: tx.to }) : Promise.resolve(undefined),
+        client.call({
+          account: owner,
+          to: tx.to,
+          data: tx.data,
+          value: BigInt(tx.value),
+        }),
+      ]);
+      if (tx.data !== "0x") {
+        if (code.status === "rejected") throw code.reason;
+        if (!code.value) throw new Error("Contract unavailable. / 合约不可用。");
+      }
+      if (simulated.status === "rejected") throw simulated.reason;
+      const simulation = simulated.value;
       if (
         (tx.data.startsWith("0xa9059cbb") || tx.data.startsWith("0x095ea7b3")) &&
         simulation.data &&
@@ -88,16 +115,31 @@ export async function execute(
         BigInt(simulation.data) !== 1n
       )
         throw new Error("Token rejected this transaction. / 代币拒绝了该交易。");
-      const wallet = createWalletClient({
-        chain,
-        transport: http(RPC, { timeout: 20000, retryCount: 0 }),
-      });
+      // The nonce, the gas estimate and the fees do not depend on each other,
+      // so they are read together and handed to viem rather than left for it
+      // to collect one at a time. They are still read fresh on every step:
+      // fees move while a step waits to confirm, and a fee carried over from
+      // the step before is how a transaction gets stuck.
+      const [nonce, gas, fees] = await Promise.all([
+        client.getTransactionCount({ address: owner, blockTag: "pending" }),
+        client.estimateGas({
+          account: owner,
+          to: tx.to,
+          data: tx.data,
+          value: BigInt(tx.value),
+        }),
+        client.estimateFeesPerGas(),
+      ]);
       const request = await wallet.prepareTransactionRequest({
         account: owner,
         to: tx.to,
         data: tx.data,
         value: BigInt(tx.value),
         type: "eip1559",
+        nonce,
+        gas,
+        maxFeePerGas: fees.maxFeePerGas,
+        maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
       });
       if (request.gas * request.maxFeePerGas > 1000000000000000n)
         throw new Error(
@@ -117,15 +159,33 @@ export async function execute(
       });
       active();
       const hash = keccak256(serialized);
+      const createdAt = Date.now();
       // Persist the deterministic hash BEFORE broadcasting. Never blindly retry
       // after a timeout: a node may have accepted the signed transaction.
-      await record({
+      //
+      // Only the hash waits here. It goes to its own small sealed file, so the
+      // guarantee costs a few hundred bytes instead of re-encrypting the whole
+      // wallet, which used to put every past transaction between the owner and
+      // this one. The full history row is written once the bytes are gone.
+      await notePending({
+        hash,
+        owner,
+        step: index + 1,
+        totalSteps: steps.length,
+        createdAt,
+      });
+      // The row the owner actually sees. It is started here rather than after
+      // the broadcast, so the transaction still appears the moment it is
+      // signed — but it is not waited on, because its write is the expensive
+      // one and the hash it protects is already safe above. If it fails, the
+      // pending file still has the hash and loadData puts the row back.
+      void record({
         hash,
         status: "broadcasting",
         step: index + 1,
         totalSteps: steps.length,
-        createdAt: Date.now(),
-      });
+        createdAt,
+      }).catch(() => {});
       active();
       await client.sendRawTransaction({ serializedTransaction: serialized });
       await record({
@@ -133,12 +193,15 @@ export async function execute(
         status: "pending",
         step: index + 1,
         totalSteps: steps.length,
-        createdAt: Date.now(),
+        createdAt,
       });
       if (index < steps.length - 1) {
         const receipt = await client.waitForTransactionReceipt({ hash, timeout: 90000 });
         if (receipt.status !== "success") throw new Error("Approval reverted. / 授权交易失败。");
         active();
+        // Minutes may have passed here, so the network is worth checking again
+        // before the next step is signed against it.
+        await checkChain();
       }
     }
   } finally {
