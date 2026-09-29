@@ -47,6 +47,7 @@ import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
 import {
   contacts as contactsCore,
+  limits as limitsCore,
   spend as spendCore,
   UNVERIFIABLE,
   value as valueCore,
@@ -98,6 +99,12 @@ type Review = {
   afterSubmitted?: (hash: string) => Promise<void>;
   /** Where to land once it is sent. Activity when unset. */
   returnTo?: string;
+  /**
+   * A payment's value in dollars (USDG base units), checked against the
+   * spending limits again at signing; null when it has no price. Unset for
+   * anything that is not a payment — swaps, bridges, NFTs.
+   */
+  spendUsd?: string | null;
   simulation?: "checking" | "passed" | "needs-attention";
   isPrivateBridge?: boolean;
   /** The address the owner chose to pay. Read by the address book only. */
@@ -651,8 +658,10 @@ function Wallet() {
     [flowStep, setFlowStep] = useState(0),
     [amountInvalid, setAmountInvalid] = useState(false),
     [settingsSection, setSettingsSection] = useState<
-      "root" | "security" | "privacy" | "sessions" | "device" | "accounts" | "contacts"
+      "root" | "security" | "privacy" | "sessions" | "device" | "accounts" | "contacts" | "limits"
     >("root"),
+    [limitFields, setLimitFields] = useState<Record<string, string>>({}),
+    [limitError, setLimitError] = useState(""),
     // Every account on this wallet, derived on unlock and after each change.
     // Addresses only live here while the wallet is open; locking clears them,
     // the same as the ledger that records who has read them.
@@ -1780,6 +1789,48 @@ function Wallet() {
       ? `\u2248 ${estimate}`
       : t("USD value unavailable", "\u7f8e\u5143\u4f30\u503c\u6682\u4e0d\u53ef\u7528");
   }
+  /** A payment's value in dollars, as USDG base units; null when it has no price. */
+  function paymentUsd(symbol: string, raw: string | bigint, decimals: number): string | null {
+    if (symbol === spendCore.STABLE) return BigInt(raw).toString();
+    const price = usablePrice(symbol);
+    if (!price) return null;
+    const priceUnits = parseUnits(price.toFixed(12), 12);
+    return ((BigInt(raw) * priceUnits) / 10n ** BigInt(decimals) / 10n ** 6n).toString();
+  }
+  /** Why a payment breaks a limit, in words, or "" when it fits. */
+  function limitProblem(usd: string | null) {
+    const result = limitsCore.check({
+      limits: dataRef.current.limits,
+      amount: usd === null ? null : BigInt(usd),
+      rows: combinedHistory,
+    });
+    if (result.ok) return "";
+    const dollars = spendCore.formatDollars;
+    if (result.kind === "unpriced")
+      return t(
+        "This asset has no price right now, so it can't be checked against your spending limits. Nothing was sent.",
+        "此资产当前没有价格，无法按你的消费限额检查。未发送任何内容。",
+      );
+    if (result.kind === "perPayment")
+      return t(
+        `This payment is ${dollars(result.after)}, over your ${dollars(result.limit)} limit per payment.`,
+        `此笔付款为 ${dollars(result.after)}，超过你的单笔限额 ${dollars(result.limit)}。`,
+      );
+    return result.kind === "daily"
+      ? t(
+          `This would take today's payments to ${dollars(result.after)}, over your ${dollars(result.limit)} daily limit (${dollars(result.used)} paid so far).`,
+          `这将使今日付款达到 ${dollars(result.after)}，超过每日限额 ${dollars(result.limit)}（今日已付 ${dollars(result.used)}）。`,
+        )
+      : t(
+          `This would take this month's payments to ${dollars(result.after)}, over your ${dollars(result.limit)} monthly limit (${dollars(result.used)} paid so far).`,
+          `这将使本月付款达到 ${dollars(result.after)}，超过每月限额 ${dollars(result.limit)}（本月已付 ${dollars(result.used)}）。`,
+        );
+  }
+  /** Stop here when a payment breaks a limit. */
+  function enforceLimits(usd: string | null) {
+    const problem = limitProblem(usd);
+    if (problem) throw new Error(problem);
+  }
   function usdReviewRow(symbol: string, tokenAmount: string): [string, string] {
     return [
       t("Estimated USD", "\u9884\u8ba1\u7f8e\u5143\u4ef7\u503c"),
@@ -1962,6 +2013,7 @@ function Wallet() {
       recipient: destination,
       amount: units(amount, selectedAsset.decimals),
     };
+    enforceLimits(paymentUsd(selectedAsset.symbol, input.amount, selectedAsset.decimals));
     transferTx(input.assetAddress as Address, input.recipient as Address, input.amount);
     const checked = await policyFor(input);
     guard();
@@ -2082,6 +2134,9 @@ function Wallet() {
       payee,
       actionHash: p.preparedTransaction.actionHash,
       draftId: p.createdAt,
+      ...(i.actionType === "TRANSFER"
+        ? { spendUsd: paymentUsd(input.symbol, i.amount, input.decimals) }
+        : {}),
       ...extra,
     });
   }
@@ -2121,6 +2176,7 @@ function Wallet() {
       recipient: destination,
       amount: units!.toString(),
     };
+    enforceLimits(units!.toString());
     transferTx(input.assetAddress as Address, input.recipient as Address, input.amount);
     const checked = await policyFor(input);
     guard();
@@ -2250,6 +2306,8 @@ function Wallet() {
       recipientKind === "tag" ? (await resolveName(recipient)).address : recipient.trim();
     guard();
     check(isAddress(destination), t("Enter a valid recipient address.", "请输入有效收款地址。"));
+    const spendUsd = paymentUsd(asset, raw, decimals);
+    enforceLimits(spendUsd);
     const created = await api("/api/private-send/jobs", {
       asset,
       amount: raw,
@@ -2283,6 +2341,7 @@ function Wallet() {
       recipient: created.job.intake_address,
       payee: destination,
       reference: created.job.id,
+      spendUsd,
       afterSubmitted: async (hash) => {
         await api(`/api/private-send/jobs/${created.job.id}/deposit`, { txHash: hash });
       },
@@ -2490,6 +2549,16 @@ function Wallet() {
     // Consume the review before broadcasting so a timeout cannot lead to a
     // second tap resending a bridge or transfer.
     r.verify();
+    // Checked again here, not only when the payment was prepared: a review can
+    // sit open while another payment goes out, or a limit is lowered.
+    if (r.spendUsd !== undefined) {
+      const problem = limitProblem(r.spendUsd);
+      if (problem) {
+        setReview(null);
+        setNotice({ title: t("Over your spending limit", "超出消费限额"), body: problem, tone: "error" });
+        return;
+      }
+    }
     setSigning(true);
     try {
       let submittedHash = "";
@@ -2523,6 +2592,7 @@ function Wallet() {
             actionHash: record.step === record.totalSteps ? r.actionHash : undefined,
             isPrivateBridge: record.step === record.totalSteps ? r.isPrivateBridge : undefined,
             payee: record.step === record.totalSteps ? r.payee : undefined,
+            spendUsd: record.step === record.totalSteps ? (r.spendUsd ?? undefined) : undefined,
           };
           await store({
             ...dataRef.current,
@@ -4774,8 +4844,15 @@ function Wallet() {
       const spent = spendCore.spentThisMonth(combinedHistory);
       const dollars = spendCore.formatDollars;
       const link = spendLink;
+      const overLimit = plan.state !== "invalid" && plan.units ? limitProblem(plan.units.toString()) : "";
+      const left = limitsCore.hasAny(data.limits)
+        ? limitsCore.remaining(data.limits, combinedHistory)
+        : null;
       const ready =
-        plan.state === "ready" && !!spendTo.trim() && (!link || link.status === "open");
+        plan.state === "ready" &&
+        !!spendTo.trim() &&
+        (!link || link.status === "open") &&
+        !overLimit;
       const leaveLink = () => {
         setSpendLink(null);
         setSpendAmount("");
@@ -4803,6 +4880,20 @@ function Wallet() {
                   )
                 : t("Nothing spent this month yet.", "本月尚未消费。")}
             </Text>
+            {left && (
+              <Text style={s.small}>
+                {[
+                  left.perPayment !== null &&
+                    t(`${dollars(left.perPayment)} per payment`, `单笔 ${dollars(left.perPayment)}`),
+                  left.daily !== null &&
+                    t(`${dollars(left.daily)} left today`, `今日剩余 ${dollars(left.daily)}`),
+                  left.monthly !== null &&
+                    t(`${dollars(left.monthly)} left this month`, `本月剩余 ${dollars(left.monthly)}`),
+                ]
+                  .filter(Boolean)
+                  .join(" · ")}
+              </Text>
+            )}
           </View>
           <View style={{ alignItems: "center", gap: 6, paddingVertical: 18 }}>
             <View style={{ flexDirection: "row", alignItems: "center" }}>
@@ -4895,7 +4986,12 @@ function Wallet() {
               }
             />
           )}
-          {plan.state !== "invalid" && plan.state !== "ready" && (
+          {overLimit ? (
+            <View style={s.error}>
+              <Text style={s.text}>{overLimit}</Text>
+            </View>
+          ) : null}
+          {!overLimit && plan.state !== "invalid" && plan.state !== "ready" && (
             <View style={[s.panel, { gap: 10 }]}>
               <Text style={[s.text, { fontWeight: "700" }]}>
                 {t(
@@ -6570,6 +6666,20 @@ function Wallet() {
               onPress={() => setSettingsSection("contacts")}
             />
             <ListRow
+              icon="wallet"
+              label={t("Spending limits", "消费限额")}
+              detail={
+                limitsCore.hasAny(data.limits)
+                  ? t("On — caps per payment, day or month", "已开启 — 单笔、每日或每月上限")
+                  : t("Cap what this wallet pays out", "限制此钱包的付款金额")
+              }
+              onPress={() => {
+                setLimitFields(limitsCore.toDollars(data.limits) as Record<string, string>);
+                setLimitError("");
+                setSettingsSection("limits");
+              }}
+            />
+            <ListRow
               icon="shield-lock-outline"
               label={t("Security", "安全")}
               detail={t("Recovery phrase, biometrics and lock", "助记词、生物识别与锁定")}
@@ -6717,6 +6827,86 @@ function Wallet() {
           <Group>
             <ListRow icon="lock-outline" label={t("Lock wallet", "锁定钱包")} onPress={forget} />
           </Group>
+        </>
+      );
+    }
+    if (settingsSection === "limits") {
+      const used = limitsCore.usage(combinedHistory);
+      const dollars = spendCore.formatDollars;
+      const save = async (limits: NonNullable<vault.LocalData["limits"]>) => {
+        await store({ ...dataRef.current, limits });
+        setLimitFields(limitsCore.toDollars(limits) as Record<string, string>);
+        setNotice({
+          title: t("Spending limits saved", "消费限额已保存"),
+          body: limitsCore.hasAny(limits)
+            ? t("Payments over a limit are now stopped before you sign.", "超过限额的付款将在签名前被拦截。")
+            : t("No limits are set.", "未设置任何限额。"),
+          tone: "success",
+        });
+      };
+      const fields: [string, string, string, string, string][] = [
+        ["perPayment", "Per payment", "单笔", "The most one payment can be", "单笔付款上限"],
+        ["daily", "Per day", "每日", `Paid today: ${dollars(used.today)}`, `今日已付：${dollars(used.today)}`],
+        ["monthly", "Per month", "每月", `Paid this month: ${dollars(used.month)}`, `本月已付：${dollars(used.month)}`],
+      ];
+      return (
+        <>
+          <Header title={t("Spending limits", "消费限额")} onBack={toSettings} backLabel={t("Settings", "设置")} />
+          <View style={[s.panel, { gap: 8 }]}>
+            <Text style={s.small}>
+              {t(
+                "Caps, in dollars, on what this wallet pays out: sends, private sends, Spend and payment links, in any asset, valued when you sign. A payment over a limit is stopped before you sign. Leave a field blank for no cap.",
+                "以美元计的付款上限：适用于发送、私密发送、消费和收款链接，任何资产按签名时的价值计算。超过限额的付款会在签名前被拦截。留空表示不设上限。",
+              )}
+            </Text>
+            <Text style={s.small}>
+              {t(
+                "Lowering a limit takes effect at once. Raising or removing one asks for your password or biometrics.",
+                "降低限额立即生效。提高或取消限额需要验证密码或生物识别。",
+              )}
+            </Text>
+          </View>
+          {fields.map(([kind, en, zh, hintEn, hintZh]) => (
+            <Field
+              key={kind}
+              label={t(`${en} ($)`, `${zh}（美元）`)}
+              hint={t(hintEn, hintZh)}
+              value={limitFields[kind] || ""}
+              onChangeText={(value) => {
+                setLimitFields((current) => ({ ...current, [kind]: value.replace(",", ".") }));
+                setLimitError("");
+              }}
+              keyboardType="decimal-pad"
+              placeholder={t("No limit", "不限")}
+            />
+          ))}
+          {limitError ? (
+            <View style={s.error}>
+              <Text style={s.text}>{limitError}</Text>
+            </View>
+          ) : null}
+          <Button
+            primary
+            onPress={() => {
+              const read = limitsCore.fromDollars(limitFields);
+              if (!read.ok) {
+                setLimitError(read.reason || "");
+                return;
+              }
+              const next = read.limits as NonNullable<vault.LocalData["limits"]>;
+              if (limitsCore.loosens(dataRef.current.limits, next))
+                authenticate(t("Loosen spending limits", "放宽消费限额"), () => save(next));
+              else void run(() => save(next));
+            }}
+          >
+            {t("Save limits", "保存限额")}
+          </Button>
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Limits live in this app, with this wallet's data. They stop payments made here — not the funds themselves: anyone with the recovery phrase can move them with another wallet. Swaps and bridges aren't payments and aren't counted.",
+              "限额保存在此应用和此钱包的数据中。它们拦截在此发起的付款，而不是锁定资金：持有助记词的人可用其他钱包转移资金。兑换和跨链不属于付款，不计入。",
+            )}
+          </Text>
         </>
       );
     }
