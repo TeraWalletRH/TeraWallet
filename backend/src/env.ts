@@ -67,6 +67,9 @@ export const env = {
   // Merchant payment links. Off until switched on, like tags: a link that is
   // never stored would be a request nobody can pay.
   payLinksEnabled: process.env.PAY_LINKS_ENABLED === "true",
+  // Transaction notifications. Needs no database, only the chain; off until
+  // switched on, because it reads the chain for as long as anyone listens.
+  notifyEnabled: process.env.NOTIFY_ENABLED === "true",
   get privateSendVaultPrivateKey(): string {
     return (
       process.env.PRIVATE_SEND_VAULT_PRIVATE_KEY ||
