@@ -102,6 +102,8 @@ export const emptyData = (): LocalData => ({
 let phrase: string | null = null;
 let epoch = 0;
 let serial: Promise<void> = Promise.resolve();
+/** Read once per unlock; see notePending below for what this holds and why. */
+let pendingCache: PendingSend[] | null = null;
 export let authenticating = false;
 // The derivation indices this wallet has, and which one is active. Both are read
 // from the envelope on unlock; the defaults here are what an envelope written
@@ -139,6 +141,7 @@ export function lock() {
   indices = [0];
   selected = 0;
   names = {};
+  pendingCache = null;
   epoch++;
 }
 
@@ -458,8 +461,10 @@ export async function loadData(): Promise<LocalData> {
   const key = dataKey(phrase!);
   try {
     const raw = await store.readFile(dataFile(address));
-    if (raw === null) return emptyData();
-    const saved = JSON.parse(open(key, JSON.parse(raw)));
+    // A wallet with nothing saved yet still reaches the end of this function,
+    // because the first send is precisely when there is no file — and it is
+    // the send most worth recovering.
+    const saved = raw === null ? {} : JSON.parse(open(key, JSON.parse(raw)));
     const data: LocalData = { ...emptyData(), ...saved };
     const cutoff = Date.now() - data.retention * 86400000;
     data.drafts = data.drafts.filter((d) => d.createdAt > cutoff);
@@ -468,6 +473,27 @@ export async function loadData(): Promise<LocalData> {
         d.createdAt > cutoff ||
         !["confirmed", "success", "refund", "reverted", "failure"].includes(d.status),
     );
+    // A send that was interrupted between the broadcast and the write of its
+    // history row left its hash in the pending file and nothing else. Put it
+    // back, so the owner sees a transaction they may well have made rather
+    // than nothing at all. It carries no title or amount because the wallet
+    // genuinely does not know them any more, and inventing either would be
+    // describing a payment it cannot actually account for.
+    for (const row of await pendingSends()) {
+      if (row.owner.toLowerCase() !== address.toLowerCase()) continue;
+      if (data.history.some((entry) => entry.hash === row.hash)) continue;
+      data.history = [
+        {
+          hash: row.hash,
+          status: "broadcasting",
+          step: row.step,
+          totalSteps: row.totalSteps,
+          createdAt: row.createdAt,
+          recovered: true,
+        },
+        ...data.history,
+      ];
+    }
     return data;
   } finally {
     key.fill(0);
@@ -517,6 +543,41 @@ export async function saveSealed(name: string, value: unknown) {
   } finally {
     key.fill(0);
   }
+}
+/**
+ * Hashes that have been signed and are about to be broadcast.
+ *
+ * This is the one fact that has to reach disk before a transaction is sent. A
+ * signed transaction that a node may already have accepted, whose hash the
+ * wallet has forgotten, is a payment its owner cannot see, chase or account
+ * for. It is kept in a small file of its own rather than in the history,
+ * because writing the history means re-encrypting every transaction the wallet
+ * has ever made, and that cost grows for as long as somebody keeps using the
+ * app — so the longer they have used Tera, the longer they wait to send.
+ *
+ * Nothing deletes an entry on the way out. loadData() folds anything still
+ * here into the history, and the next send drops whatever is over a day old,
+ * so the crash-safe path costs one small write and never a second one.
+ */
+export type PendingSend = {
+  hash: string;
+  owner: string;
+  step: number;
+  totalSteps: number;
+  createdAt: number;
+};
+const PENDING = "pending-sends";
+const PENDING_KEPT_FOR = 86400000;
+async function pendingSends(): Promise<PendingSend[]> {
+  if (!pendingCache) pendingCache = (await loadSealed<PendingSend[]>(PENDING)) ?? [];
+  return pendingCache;
+}
+export async function notePending(entry: PendingSend) {
+  const kept = (await pendingSends()).filter(
+    (row) => row.hash !== entry.hash && entry.createdAt - row.createdAt < PENDING_KEPT_FOR,
+  );
+  pendingCache = [entry, ...kept];
+  await saveSealed(PENDING, pendingCache);
 }
 export async function eraseWallet() {
   const saved = await envelope();

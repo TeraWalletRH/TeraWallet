@@ -254,3 +254,81 @@ it(
   },
   DERIVES_A_KEY,
 );
+
+// The recovery path below only ever runs after a crash, which is exactly why
+// it is tested here: nothing in ordinary use would reveal it as broken, and
+// what it protects is a transaction that may already be on chain under a hash
+// the wallet would otherwise have forgotten.
+
+it(
+  "a send interrupted before its history row is written comes back as a pending row",
+  async () => {
+    const address = await vault.createWallet(phrase, password);
+    const hash = `0x${"ab".repeat(32)}`;
+    // No saveData first: the first send is the one most worth recovering, and
+    // at that point the wallet has no data file at all.
+    await vault.notePending({ hash, owner: address, step: 1, totalSteps: 1, createdAt: Date.now() });
+    expect([...files.values()].join("")).not.toContain(hash);
+
+    const recovered = await vault.loadData();
+    expect(recovered.history).toHaveLength(1);
+    expect(recovered.history[0]).toMatchObject({ hash, status: "broadcasting", recovered: true });
+    // No title and no amount: after a crash the wallet does not know them, and
+    // inventing either would describe a payment it cannot account for.
+    expect(recovered.history[0].title).toBeUndefined();
+
+    // Once the real row lands, the recovered one must not double it.
+    await vault.saveData({
+      ...vault.emptyData(),
+      history: [{ hash, status: "pending", createdAt: Date.now(), title: "Sent 1 ETH" }],
+    });
+    const settled = await vault.loadData();
+    expect(settled.history).toHaveLength(1);
+    expect(settled.history[0]).toMatchObject({ hash, status: "pending", title: "Sent 1 ETH" });
+  },
+  DERIVES_A_KEY,
+);
+
+it(
+  "a recovered send outlives retention and stays with the account that made it",
+  async () => {
+    const first = await vault.createWallet(phrase, password);
+    const second = await vault.addAccount();
+    const mine = `0x${"11".repeat(32)}`;
+    const theirs = `0x${"22".repeat(32)}`;
+    const old = Date.now() - 30 * 86400000;
+
+    // Old enough that retention would drop a completed row of the same age.
+    await vault.notePending({ hash: mine, owner: second, step: 1, totalSteps: 1, createdAt: old });
+    await vault.notePending({ hash: theirs, owner: first, step: 1, totalSteps: 1, createdAt: old });
+    await vault.saveData({ ...vault.emptyData(), retention: 7 });
+
+    const onSecond = await vault.loadData();
+    expect(onSecond.history.map((row: any) => row.hash)).toEqual([mine]);
+
+    expect(await vault.selectAccount(0)).toBe(first);
+    const onFirst = await vault.loadData();
+    expect(onFirst.history.map((row: any) => row.hash)).toEqual([theirs]);
+  },
+  DERIVES_A_KEY,
+);
+
+it(
+  "a pending note more than a day old is dropped by the next send",
+  async () => {
+    const address = await vault.createWallet(phrase, password);
+    const stale = `0x${"33".repeat(32)}`;
+    const fresh = `0x${"44".repeat(32)}`;
+    const now = Date.now();
+    await vault.notePending({
+      hash: stale,
+      owner: address,
+      step: 1,
+      totalSteps: 1,
+      createdAt: now - 2 * 86400000,
+    });
+    await vault.notePending({ hash: fresh, owner: address, step: 1, totalSteps: 1, createdAt: now });
+    expect((await vault.loadData()).history.map((row: any) => row.hash)).toEqual([fresh]);
+  },
+  DERIVES_A_KEY,
+);
