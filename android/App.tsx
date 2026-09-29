@@ -38,6 +38,7 @@ import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
 import * as biz from "./src/business";
 import * as payLinks from "./src/paylinks";
+import * as notify from "./src/notify";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
 import { balances, client, execute, transactionStatus } from "./src/network";
@@ -658,8 +659,12 @@ function Wallet() {
     [flowStep, setFlowStep] = useState(0),
     [amountInvalid, setAmountInvalid] = useState(false),
     [settingsSection, setSettingsSection] = useState<
-      "root" | "security" | "privacy" | "sessions" | "device" | "accounts" | "contacts" | "limits"
+      "root" | "security" | "privacy" | "sessions" | "device" | "accounts" | "contacts" | "limits" | "alerts"
     >("root"),
+    // The transaction banner at the top of the screen, and the browser's
+    // permission for system notifications as last read.
+    [txAlert, setTxAlert] = useState<null | { title: string; body: string; hash: string }>(null),
+    [systemAlerts, setSystemAlerts] = useState(() => notify.systemPermission()),
     [limitFields, setLimitFields] = useState<Record<string, string>>({}),
     [limitError, setLimitError] = useState(""),
     // Every account on this wallet, derived on unlock and after each change.
@@ -868,6 +873,124 @@ function Wallet() {
       subscription.remove();
     };
   }, [owner]);
+  // Transaction notifications (core/notify.js). Two listeners feed one
+  // announcer: a request held open with Tera, answered the moment a token
+  // transfer to or from this wallet lands, and a once-a-minute read of the
+  // explorer that catches plain ETH moves and whatever arrived while the app
+  // was closed. `alertSeen` keeps one payment from being announced twice.
+  const ownerRef = useRef(owner);
+  ownerRef.current = owner;
+  const alertSeen = useRef(new Set<string>());
+  const alertAssets = useRef<Record<string, { symbol: string; decimals: number }>>({});
+  const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const alertsOn = !!owner && !data.alerts?.off;
+  function announce(items: notify.Heard[], since = 0) {
+    const own = new Set(
+      dataRef.current.history.map((h) => String(h.hash || "").toLowerCase()).filter(Boolean),
+    );
+    const list = notify.core.fresh(items, { seen: alertSeen.current, own, since }) as notify.Heard[];
+    for (const item of items) alertSeen.current.add(item.hash.toLowerCase());
+    const shown = notify.core.batch(list);
+    if (!shown) return;
+    const book = contactsCore.cleanBook(dataRef.current.contacts);
+    const who = (address: string) =>
+      (isAddress(address) && contactsCore.nameFor(book, address)) ||
+      (isAddress(address) ? contactsCore.short(address) : address);
+    let title: string, body: string;
+    if (shown.kind === "summary") {
+      title = t("While you were away", "离开期间");
+      body = t(
+        `${shown.received} received, ${shown.sent} sent. See Activity for each one.`,
+        `收到 ${shown.received} 笔，发出 ${shown.sent} 笔。在记录中查看详情。`,
+      );
+    } else {
+      const [first, ...rest] = shown.items as notify.Heard[];
+      title =
+        first.direction === "receive"
+          ? t(`Received ${first.amount} ${first.symbol}`, `收到 ${first.amount} ${first.symbol}`)
+          : t(`Sent ${first.amount} ${first.symbol}`, `已发送 ${first.amount} ${first.symbol}`);
+      body =
+        first.direction === "receive"
+          ? t(`From ${who(first.counterparty)}`, `来自 ${who(first.counterparty)}`)
+          : t(`To ${who(first.counterparty)}, from another device`, `发往 ${who(first.counterparty)}，来自另一台设备`);
+      if (rest.length) body += t(` · and ${rest.length} more`, ` · 另有 ${rest.length} 笔`);
+    }
+    const hash = shown.items[0].hash;
+    setTxAlert({ title, body, hash });
+    if (alertTimer.current) clearTimeout(alertTimer.current);
+    alertTimer.current = setTimeout(() => setTxAlert(null), 6000);
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    notify.showSystem(title, body, hash, () => setPage("activity"));
+    void refresh();
+  }
+  useEffect(() => {
+    if (!alertsOn) return;
+    let live = true;
+    let cursor: string | null = null;
+    let failures = 0;
+    const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+    const address = owner;
+    void (async () => {
+      while (live) {
+        // A phone's JS stops in the background anyway; the web keeps
+        // listening so a hidden tab can still raise a browser notification.
+        if (!notify.notifyAvailable() || (Platform.OS !== "web" && AppState.currentState !== "active")) {
+          await pause(5000);
+          continue;
+        }
+        try {
+          const heard = await notify.waitOnce(address, cursor);
+          if (!live || address !== ownerRef.current) return;
+          failures = 0;
+          if (cursor !== null && heard.events.length)
+            announce(notify.core.describe(heard.events, alertAssets.current) as notify.Heard[]);
+          if (heard.gap) void sweepAlerts();
+          cursor = heard.cursor;
+        } catch {
+          failures += 1;
+          await pause(Math.min(60_000, 2000 * 2 ** failures));
+        }
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [alertsOn, owner]);
+  const sweeping = useRef(false);
+  async function sweepAlerts() {
+    const address = ownerRef.current;
+    if (!address || sweeping.current) return;
+    sweeping.current = true;
+    try {
+      const entries = await fetchChainHistory(address as Address, t);
+      if (address !== ownerRef.current) return;
+      setChainHistory(entries);
+      const alerts = dataRef.current.alerts || {};
+      // The first read on a wallet that has never listened announces nothing:
+      // its whole history is not news.
+      const since = alerts.lastSeen === undefined ? Infinity : alerts.lastSeen + 1;
+      announce(
+        entries.filter((e) => e.status === "confirmed"),
+        since,
+      );
+      const newest = Math.max(alerts.lastSeen ?? Date.now(), ...entries.map((e) => e.timestamp || 0));
+      if (newest !== alerts.lastSeen)
+        await store({ ...dataRef.current, alerts: { ...alerts, lastSeen: newest } });
+    } catch {
+      // The explorer is a convenience; the next read tries again.
+    } finally {
+      sweeping.current = false;
+    }
+  }
+  useEffect(() => {
+    if (!alertsOn) return;
+    alertSeen.current = new Set();
+    void sweepAlerts();
+    const interval = setInterval(() => {
+      if (Platform.OS === "web" || AppState.currentState === "active") void sweepAlerts();
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, [alertsOn, owner]);
   useEffect(() => {
     if (page !== "activity" || !owner) return;
     let live = true;
@@ -1097,6 +1220,7 @@ function Wallet() {
     void biz.loadEmailConfig().then(setEmailOn);
     void biz.loadTeamsConfig();
     void payLinks.loadPayLinksConfig();
+    void notify.loadNotifyConfig();
     // A payment link opened on the web arrives as ?pay=…. It is taken off the
     // address bar at once and opened on the Spend screen after unlock.
     if (Platform.OS === "web" && typeof window !== "undefined") {
@@ -1501,6 +1625,12 @@ function Wallet() {
         a.symbol.localeCompare(b.symbol)
       );
     });
+    // What a transfer heard from Tera is named by: its token's contract.
+    alertAssets.current = Object.fromEntries(
+      supported
+        .filter((a) => a.address && a.address !== zeroAddress)
+        .map((a) => [a.address.toLowerCase(), { symbol: a.symbol, decimals: a.decimals }]),
+    );
     const [balanceResult, pricesResult, sparklinesResult, tagResult] = await Promise.allSettled([
       balances(address, supported),
       pricesPromise,
@@ -6680,6 +6810,19 @@ function Wallet() {
               }}
             />
             <ListRow
+              icon="bell"
+              label={t("Notifications", "通知")}
+              detail={
+                data.alerts?.off
+                  ? t("Off", "已关闭")
+                  : t("On — told when money moves in or out", "已开启 — 资金进出时提醒")
+              }
+              onPress={() => {
+                setSystemAlerts(notify.systemPermission());
+                setSettingsSection("alerts");
+              }}
+            />
+            <ListRow
               icon="shield-lock-outline"
               label={t("Security", "安全")}
               detail={t("Recovery phrase, biometrics and lock", "助记词、生物识别与锁定")}
@@ -6907,6 +7050,71 @@ function Wallet() {
               "限额保存在此应用和此钱包的数据中。它们拦截在此发起的付款，而不是锁定资金：持有助记词的人可用其他钱包转移资金。兑换和跨链不属于付款，不计入。",
             )}
           </Text>
+        </>
+      );
+    }
+    if (settingsSection === "alerts") {
+      const on = !data.alerts?.off;
+      return (
+        <>
+          <Header title={t("Notifications", "通知")} onBack={toSettings} backLabel={t("Settings", "设置")} />
+          <Group>
+            <ListRow
+              icon="bell"
+              label={t("Transaction notifications", "交易通知")}
+              detail={t("Payments in and out of this wallet", "此钱包的收款与付款")}
+              onPress={() =>
+                void run(() =>
+                  store({ ...dataRef.current, alerts: { ...dataRef.current.alerts, off: on } }),
+                )
+              }
+              right={<Toggle on={on} />}
+            />
+            {on && systemAlerts !== "unsupported" ? (
+              <ListRow
+                icon="lightning-bolt-outline"
+                label={t("Browser notifications", "浏览器通知")}
+                detail={
+                  systemAlerts === "granted"
+                    ? t("On — shown when this tab is in the background", "已开启 — 标签页在后台时显示")
+                    : systemAlerts === "denied"
+                      ? t("Blocked — allow them in your browser's site settings", "已被阻止 — 请在浏览器网站设置中允许")
+                      : t("Ask this browser to show them", "请求浏览器显示通知")
+                }
+                onPress={
+                  systemAlerts === "default"
+                    ? () => void notify.askSystem().then(setSystemAlerts)
+                    : undefined
+                }
+                right={<Toggle on={systemAlerts === "granted"} />}
+              />
+            ) : null}
+          </Group>
+          <View style={[s.panel, { gap: 8 }]}>
+            <Text style={s.small}>
+              {t(
+                "Token payments are announced the moment they land on chain. Plain ETH moves, and anything that arrived while Tera was closed, are announced within a minute of opening it.",
+                "代币收付款上链后立即提醒。普通 ETH 转账以及 Tera 关闭期间到账的款项，会在打开后一分钟内提醒。",
+              )}
+            </Text>
+            <Text style={s.small}>
+              {t(
+                "To hear about token payments this fast, the app tells Tera which wallet to watch while it is open. Tera keeps nothing: what it reads is dropped after ten minutes. Turning notifications off stops that.",
+                "为了即时提醒代币收付款，应用在打开期间会告知 Tera 需要关注的钱包。Tera 不保存任何内容：读取的数据十分钟后丢弃。关闭通知即停止。",
+              )}
+            </Text>
+            <Text style={s.small}>
+              {Platform.OS === "web"
+                ? t(
+                    "Notifications need Tera open in a tab. A closed tab is told nothing.",
+                    "通知需要 Tera 在标签页中保持打开。关闭的标签页不会收到通知。",
+                  )
+                : t(
+                    "On this phone they show while Tera is open. A closed app is told nothing until you open it.",
+                    "在此手机上，通知仅在 Tera 打开时显示。应用关闭时不会收到提醒，打开后会补充提醒。",
+                  )}
+            </Text>
+          </View>
         </>
       );
     }
@@ -9203,6 +9411,58 @@ function Wallet() {
           </SafeAreaView>
         </SafeAreaProvider>
       </Modal>
+      {txAlert ? (
+        <Pressable
+          accessibilityRole="alert"
+          accessibilityLabel={`${txAlert.title}. ${txAlert.body}`}
+          onPress={() => {
+            setTxAlert(null);
+            setSettingsSection("root");
+            setPage("activity");
+          }}
+          style={({ pressed }) => ({
+            position: "absolute",
+            top: 12,
+            left: 16,
+            right: 16,
+            alignSelf: "center",
+            maxWidth: 520,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 12,
+            padding: 14,
+            borderRadius: 18,
+            backgroundColor: pressed ? colors.raised : colors.sheet,
+            shadowColor: "#000",
+            shadowOpacity: 0.25,
+            shadowRadius: 16,
+            shadowOffset: { width: 0, height: 6 },
+            elevation: 8,
+          })}
+        >
+          <View
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 18,
+              backgroundColor: colors.green,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Icon name="bell" size={18} color={colors.paper} />
+          </View>
+          <View style={{ flex: 1, gap: 2 }}>
+            <Text style={s.label} numberOfLines={1}>
+              {txAlert.title}
+            </Text>
+            <Text style={s.small} numberOfLines={2}>
+              {txAlert.body}
+            </Text>
+          </View>
+          <Icon name="chevron-right" size={18} color={colors.muted} />
+        </Pressable>
+      ) : null}
       {bizSplash ? <biz.Splash onDone={() => setBizSplash(false)} /> : null}
     </SafeAreaView>
   );

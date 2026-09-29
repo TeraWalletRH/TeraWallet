@@ -72,6 +72,12 @@ export type LocalData = {
    * signed. Absent until the owner sets one.
    */
   limits?: { perPayment: string | null; daily: string | null; monthly: string | null };
+  /**
+   * Transaction notifications (core/notify.js). On unless `off`. `lastSeen` is
+   * the newest activity already announced, so what arrived while the app was
+   * closed is announced once when it opens, and nothing older.
+   */
+  alerts?: { off?: boolean; lastSeen?: number };
 };
 export const emptyData = (): LocalData => ({
   drafts: [],
