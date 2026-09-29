@@ -66,6 +66,12 @@ export type LocalData = {
    * doesn't already track.
    */
   customTokens: Asset[];
+  /**
+   * Spending limits, in USDG base units (dollars), or null for no cap. Checked
+   * by core/limits.js before a payment is reviewed and again before it is
+   * signed. Absent until the owner sets one.
+   */
+  limits?: { perPayment: string | null; daily: string | null; monthly: string | null };
 };
 export const emptyData = (): LocalData => ({
   drafts: [],
@@ -491,7 +497,10 @@ export async function saveSealed(name: string, value: unknown) {
   currentAccount();
   const key = dataKey(phrase!);
   try {
-    await store.writeFile(sealedFile(name), JSON.stringify(seal(key, JSON.stringify(value), random(12))));
+    await store.writeFile(
+      sealedFile(name),
+      JSON.stringify(seal(key, JSON.stringify(value), random(12))),
+    );
   } finally {
     key.fill(0);
   }

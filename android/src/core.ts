@@ -68,3 +68,6 @@ export * as nft from "../../public/tera/core/nft.js";
 
 // Paying a dollar amount in USDG, and topping up from ETH when the dollars are short.
 export * as spend from "../../public/tera/core/spend.js";
+
+// Caps on what the wallet pays out through Tera, per payment, per day and per month.
+export * as limits from "../../public/tera/core/limits.js";

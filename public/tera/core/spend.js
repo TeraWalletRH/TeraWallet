@@ -102,16 +102,30 @@ function parseAmount(text) {
   return BigInt(whole) * UNIT + BigInt(fraction.slice(0, DECIMALS).padEnd(DECIMALS, "0"));
 }
 
-/**
- * Dollars paid out this calendar month, from activity rows: the device's own
- * sends (`activityAmount` like "12.5 USDG") and on-chain rows (`direction`
- * "send", `symbol` USDG). Failed transactions paid nothing and are left out.
- * It is a count of this wallet's history, not a statement — history from
- * another device appears only once it is on chain.
- */
-export function spentThisMonth(rows, now = Date.now()) {
+/** Midnight at the start of `now`'s day, local time. */
+export const startOfDay = (now = Date.now()) => {
   const date = new Date(now);
-  const start = new Date(date.getFullYear(), date.getMonth(), 1).getTime();
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
+};
+/** The first moment of `now`'s calendar month, local time. */
+export const startOfMonth = (now = Date.now()) => {
+  const date = new Date(now);
+  return new Date(date.getFullYear(), date.getMonth(), 1).getTime();
+};
+
+/**
+ * Dollars paid out from `start` to `now`, from activity rows:
+ *
+ *   - a send this device recorded with `spendUsd` — its dollar value when it
+ *     was signed, whatever the asset;
+ *   - otherwise a USDG send, this device's (`activityAmount` like "12.5 USDG")
+ *     or one read from the chain (`direction` "send", `symbol` USDG).
+ *
+ * Failed transactions paid nothing and are left out. Swaps and bridges are not
+ * payments and are not counted. It is a count of this wallet's history, not a
+ * statement — a non-USDG send made on another device is not in it.
+ */
+export function spentBetween(rows, start, now = Date.now()) {
   let units = 0n;
   let count = 0;
   for (const row of rows || []) {
@@ -119,7 +133,9 @@ export function spentThisMonth(rows, now = Date.now()) {
     if (!(at >= start && at <= now)) continue;
     if (row.status === "failed" || row.status === "reverted") continue;
     let amount = 0n;
-    if (row.activityType === "send" && /\bUSDG$/.test(String(row.activityAmount || "").trim()))
+    if (row.activityType === "send" && /^\d+$/.test(String(row.spendUsd ?? "")))
+      amount = BigInt(row.spendUsd);
+    else if (row.activityType === "send" && /\bUSDG$/.test(String(row.activityAmount || "").trim()))
       amount = parseAmount(row.activityAmount);
     else if (row.direction === "send" && String(row.symbol).toUpperCase() === STABLE)
       amount = parseAmount(row.amount);
@@ -130,3 +146,7 @@ export function spentThisMonth(rows, now = Date.now()) {
   }
   return { units, count };
 }
+
+/** Dollars paid out this calendar month. See `spentBetween`. */
+export const spentThisMonth = (rows, now = Date.now()) =>
+  spentBetween(rows, startOfMonth(now), now);
