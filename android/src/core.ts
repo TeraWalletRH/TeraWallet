@@ -74,3 +74,6 @@ export * as limits from "../../public/tera/core/limits.js";
 
 // Searching and filtering the activity list by address, name, hash, asset, type, status and date.
 export * as activitySearch from "../../public/tera/core/activity-search.js";
+
+// How fast the network is right now, and how long a transaction took to confirm.
+export * as networkSpeed from "../../public/tera/core/network-speed.js";
