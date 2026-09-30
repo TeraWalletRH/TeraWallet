@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <title>Tera Wallet</title>
+    <meta
+      name="description"
+      content="Tera Wallet on the web. Create or import a wallet, sign on this device, and install it like an app."
+    />
+    <meta name="theme-color" content="#171e19" />
+    <meta name="color-scheme" content="dark light" />
+    <link rel="manifest" href="/app/manifest.webmanifest" />
+    <link rel="icon" href="/app/icon-192.png" />
+    <link rel="apple-touch-icon" href="/app/apple-touch-icon.png" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Tera" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <style>
+      /* Tokens from android/src/ui.tsx, so the page around the app is the app's own. */
+      :root {
+        --bg: #171e19;
+      }
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: var(--bg);
+        overscroll-behavior: none;
+      }
+      body {
+        overflow: hidden;
+        -webkit-tap-highlight-color: transparent;
+      }
+      /* The app owns the whole window, on a phone and on a desktop alike. */
+      #frame {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        background: var(--bg);
+      }
+      #root {
+        display: flex;
+        flex: 1;
+        min-width: 0;
+      }
+
+      /*
+        react-native-web focuses the first focusable thing in a modal when it
+        opens, and in a sheet that is the full-window backdrop: the browser then
+        ringed the whole window. Backdrops and sheet bodies are role-less
+        touch targets, not controls, so only they lose the ring; buttons keep it.
+      */
+      [aria-modal="true"] [tabindex="0"]:not([role]):focus {
+        outline: none;
+      }
+      noscript {
+        color: #f5ecd7;
+        font: 15px/1.5 system-ui, sans-serif;
+        padding: 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <noscript>Tera Wallet needs JavaScript to run.</noscript>
+    <div id="frame"><div id="root"></div></div>
+    <script>
+      if ("serviceWorker" in navigator)
+        addEventListener("load", function () {
+          navigator.serviceWorker.register("/app/sw.js", { scope: "/app/" }).catch(function () {});
+        });
+    </script>
+    <script src="/app/_expo/static/js/web/index-6e4661cd687a0a9965952c2fb365b2a3.js" defer></script>
+  </body>
+</html>

@@ -65,3 +65,21 @@ export {
 } from "../../public/tera/core/registry.js";
 
 export * as nft from "../../public/tera/core/nft.js";
+
+// Paying a dollar amount in USDG, and topping up from ETH when the dollars are short.
+export * as spend from "../../public/tera/core/spend.js";
+
+// Caps on what the wallet pays out through Tera, per payment, per day and per month.
+export * as limits from "../../public/tera/core/limits.js";
+
+// Searching and filtering the activity list by address, name, hash, asset, type, status and date.
+export * as activitySearch from "../../public/tera/core/activity-search.js";
+
+// How fast the network is right now, and how long a transaction took to confirm.
+export * as networkSpeed from "../../public/tera/core/network-speed.js";
+
+// Private notes on transactions, by hash.
+export * as notes from "../../public/tera/core/notes.js";
+
+// What the screen shows and what it holds back: small balances, privacy mode.
+export * as discretion from "../../public/tera/core/discretion.js";

@@ -20,6 +20,12 @@ import { formatUnits, type Address } from "viem";
 export type ChainHistoryEntry = {
   hash: string;
   title: string;
+  direction: "send" | "receive";
+  amount: string;
+  symbol: string;
+  counterparty: string;
+  /** The counterparty's full address, so activity search can find it. */
+  counterpartyAddress: string;
   status: "confirmed" | "failed";
   timestamp: number;
 };
@@ -71,9 +77,15 @@ export async function fetchChainHistory(
       Number(item.token?.decimals ?? 18),
     );
     const symbol = item.token?.symbol || "?";
-    const counterparty = short((out ? item.to?.hash : item.from?.hash) || "");
+    const counterpartyAddress: string = (out ? item.to?.hash : item.from?.hash) || "";
+    const counterparty = short(counterpartyAddress);
     entries.set(hash, {
       hash,
+      direction: out ? "send" : "receive",
+      amount,
+      symbol,
+      counterparty,
+      counterpartyAddress,
       status: "confirmed",
       timestamp: new Date(item.timestamp).getTime(),
       title: out
@@ -94,9 +106,15 @@ export async function fetchChainHistory(
     if (!hash || entries.has(hash) || !item.value || item.value === "0") continue;
     const out = item.from?.hash?.toLowerCase() === lower;
     const amount = formatUnits(BigInt(item.value), 18);
-    const counterparty = short((out ? item.to?.hash : item.from?.hash) || "");
+    const counterpartyAddress: string = (out ? item.to?.hash : item.from?.hash) || "";
+    const counterparty = short(counterpartyAddress);
     entries.set(hash, {
       hash,
+      direction: out ? "send" : "receive",
+      amount,
+      symbol: "ETH",
+      counterparty,
+      counterpartyAddress,
       status: item.status === "ok" ? "confirmed" : "failed",
       timestamp: new Date(item.timestamp).getTime(),
       title: out

@@ -51,6 +51,7 @@ export const DEFAULT_ALLOWED_PATHS = [
   "/api/agent/chat",
   "/api/agent/propose",
   "/api/tags/resolve",
+  "/api/business/email/resolve",
 ] as const;
 
 const MAX_CAPSULE_BYTES = 64 * 1024;
