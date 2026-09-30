@@ -16,7 +16,7 @@ export const env = {
   // Hardcoded at the owner's explicit request, after being told this repo
   // is public and the key will be readable by anyone — COINGECKO_API_KEY
   // still overrides it if set, so rotating it later doesn't need a deploy.
-  coingeckoApiKey: process.env.COINGECKO_API_KEY ?? "CG-SqjCZZtzd2eZXT1u6S8gdga8",
+  coingeckoApiKey: process.env.COINGECKO_API_KEY ?? "EXAMPLE_REDACTED_FIXTURE",
   groqModel: process.env.GROQ_MODEL ?? "qwen/qwen3.8-27b",
   policySignerPrivateKey: process.env.POLICY_SIGNER_PRIVATE_KEY ?? "",
   policySignerAddress: process.env.POLICY_SIGNER_ADDRESS ?? "",
@@ -50,6 +50,26 @@ export const env = {
   // that switched itself on would answer "this name is free" in an
   // environment where nothing is actually stored.
   tagsEnabled: process.env.TAGS_ENABLED === "true",
+  // Business emails. Off unless switched on, for the same reason as tags, and
+  // unusable without a mail provider: a code that is never delivered is a
+  // form that cannot be finished. Resend is called over plain HTTPS.
+  businessEmailEnabled: process.env.BUSINESS_EMAIL_ENABLED === "true",
+  resendApiKey: process.env.RESEND_API_KEY ?? "",
+  emailFrom: process.env.EMAIL_FROM ?? "Tera Business <business@terawallet.app>",
+  // Keys the stored hash of each code. Without it a restart would still work,
+  // because codes are short-lived, but a stable secret keeps them checkable
+  // across instances.
+  emailCodeSecret: process.env.EMAIL_CODE_SECRET ?? "",
+  // Team treasuries. The Safe holds the money and the rules; this only keeps
+  // the member list and the approval queue, and like tags it is off until
+  // switched on.
+  teamsEnabled: process.env.TEAMS_ENABLED === "true",
+  // Merchant payment links. Off until switched on, like tags: a link that is
+  // never stored would be a request nobody can pay.
+  payLinksEnabled: process.env.PAY_LINKS_ENABLED === "true",
+  // Transaction notifications. Needs no database, only the chain; off until
+  // switched on, because it reads the chain for as long as anyone listens.
+  notifyEnabled: process.env.NOTIFY_ENABLED === "true",
   get privateSendVaultPrivateKey(): string {
     return (
       process.env.PRIVATE_SEND_VAULT_PRIVATE_KEY ||
