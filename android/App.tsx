@@ -119,6 +119,8 @@ type Review = {
   historical?: boolean;
   historyNote?: string;
   activityType?: "send" | "swap" | "bridge";
+  /** The owner's private note, saved under the transaction's hash once it is signed. */
+  note?: string;
 };
 type ReviewSnapshot = Pick<Review, "rows" | "steps">;
 const tokenImages: Record<string, any> = {
@@ -710,6 +712,8 @@ function Wallet() {
     [bizNotes, setBizNotes] = useState<Record<string, string>>({}),
     // The note being written on the open Activity row, or null when not editing.
     [noteDraft, setNoteDraft] = useState<string | null>(null),
+    // The note written on the Send or Pay screen, for the payment about to be reviewed.
+    [payNote, setPayNote] = useState(""),
     // The latest reading of the network, for the speed label. null until the first one.
     [netReading, setNetReading] = useState<ReturnType<typeof networkSpeed.reading> | null>(null),
     // Where and when the open Activity row landed, read from its receipt.
@@ -2268,7 +2272,7 @@ function Wallet() {
     const proposal = { ...result, intent: checked, createdAt: Date.now() };
     await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, proposal] });
     guard();
-    showProposal(proposal);
+    showProposal(proposal, { note: notesCore.cleanNote(payNote) || undefined });
   }
   /**
    * Claim a name for this wallet.
@@ -2431,10 +2435,10 @@ function Wallet() {
     const proposal = { ...result, intent: checked, createdAt: Date.now() };
     await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, proposal] });
     guard();
-    showProposal(
-      proposal,
-      link ? { afterSubmitted: (hash) => settleLink(link.id, hash) } : {},
-    );
+    showProposal(proposal, {
+      note: notesCore.cleanNote(payNote) || undefined,
+      ...(link ? { afterSubmitted: (hash: string) => settleLink(link.id, hash) } : {}),
+    });
   }
   /**
    * Tell Tera which transaction paid a link, once it is on chain — Tera reads
@@ -2467,6 +2471,7 @@ function Wallet() {
         if (version !== vault.sessionVersion()) return;
         setError("");
         setSpendLink(link);
+        setPayNote(notesCore.cleanNote(link.note));
         setSpendAmount(spendCore.unitsToAmount(BigInt(link.amount)));
         setSpendTo(link.merchant);
         setPage("spend");
@@ -2515,6 +2520,7 @@ function Wallet() {
   }
   function openSpend() {
     setError("");
+    setPayNote("");
     setSpendLink(null);
     setSpendAmount("");
     setSpendTo("");
@@ -2563,6 +2569,7 @@ function Wallet() {
     guard();
     const tx = created.preparedDeposit;
     await presentReview({
+      note: notesCore.cleanNote(payNote) || undefined,
       title: t("Review private route", "审核私密路由"),
       rows: [
         [t("Asset", "资产"), asset],
@@ -2840,13 +2847,21 @@ function Wallet() {
             payee: record.step === record.totalSteps ? r.payee : undefined,
             spendUsd: record.step === record.totalSteps ? (r.spendUsd ?? undefined) : undefined,
           };
+          // The note rides in the same write as the row, so neither can undo the other.
+          const withNote =
+            r.note && !sharedNotes && record.step === record.totalSteps
+              ? notesCore.setNote(dataRef.current.notes, record.hash, r.note)
+              : dataRef.current.notes;
           await store({
             ...dataRef.current,
+            notes: withNote,
             history: [row, ...dataRef.current.history.filter((h) => h.hash !== row.hash)],
             drafts: dataRef.current.drafts.filter((d) => !r.draftId || d.createdAt !== r.draftId),
           });
         },
       );
+      // Business notes live in the Reports book, a separate file, so they are written here.
+      if (r.note && sharedNotes && submittedHash) await saveTxNote(submittedHash, r.note).catch(() => {});
       if (r.afterSubmitted && submittedHash) await r.afterSubmitted(submittedHash);
       setPage(r.returnTo ?? "activity");
       await refresh();
@@ -3720,6 +3735,7 @@ function Wallet() {
   // shortcuts, and the action sheet behind the centre tab.
   function openFlow(p: string, mode: "public" | "private" = "public") {
     setError("");
+    setPayNote("");
     if (p === "swap") setSwapReturnPage(page);
     if (p === "bridge") setBridgeReturnPage(page);
     setAssetSymbol(p === "swap" ? "ETH" : "USDG");
@@ -5383,6 +5399,18 @@ function Wallet() {
               )}
             </View>
           )}
+          <Field
+            label={t("Note (optional, only you see it)", "备注（可选，仅你可见）")}
+            value={payNote}
+            onChangeText={setPayNote}
+            maxLength={notesCore.LIMITS.maxLength}
+            autoCapitalize="sentences"
+            placeholder={
+              business
+                ? t("Invoice number, client, purpose…", "发票号、客户、用途…")
+                : t("What's this for?", "这笔付款是做什么的？")
+            }
+          />
           <Button
             primary
             disabled={!ready}
@@ -5697,6 +5725,20 @@ function Wallet() {
                 </>
               )}
             </View>
+          )}
+          {flowStep === 4 && (
+            <Field
+              label={t("Note (optional, only you see it)", "备注（可选，仅你可见）")}
+              value={payNote}
+              onChangeText={setPayNote}
+              maxLength={notesCore.LIMITS.maxLength}
+              autoCapitalize="sentences"
+              placeholder={
+                business
+                  ? t("Invoice number, client, purpose…", "发票号、客户、用途…")
+                  : t("What's this for?", "这笔付款是做什么的？")
+              }
+            />
           )}
           {flowStep < 4 ? (
             <Button primary onPress={continueSend}>
@@ -9508,6 +9550,9 @@ function Wallet() {
               {review?.rows.map(([label, value], i) => (
                 <Row key={i} label={label} value={value} />
               ))}
+              {review?.note && !review.historical ? (
+                <Row label={t("Your note", "你的备注")} value={review.note} />
+              ) : null}
               {!!review?.steps.length && <Pressable
                 accessibilityRole="button"
                 accessibilityState={{ expanded: reviewDetailsOpen }}
