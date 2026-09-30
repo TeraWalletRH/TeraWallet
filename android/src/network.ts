@@ -11,6 +11,7 @@ import {
 import { chain, RPC, RPCS, sources, type Tx } from "./config";
 import { currentAccount, notePending, sessionVersion } from "./storage";
 import { txCheck } from "./validation";
+import { networkSpeed as speedCore } from "./core";
 // retryCount: 0 stays on the wallet transport used for sending a
 // transaction (below) — retrying a broadcast is a real idempotency risk.
 // Reading a balance has no such risk, and no retries here means a single
@@ -215,5 +216,44 @@ export async function transactionStatus(hash: Hash) {
       : "reverted";
   } catch {
     return "pending";
+  }
+}
+
+/**
+ * One reading of the network for the speed label: the newest block, timed,
+ * one SAMPLE_BLOCKS older for the average block time, and the gas price.
+ * A failure reads as offline rather than throwing.
+ */
+export async function probeNetwork() {
+  try {
+    const started = Date.now();
+    const newest = await client.getBlock({ blockTag: "latest" });
+    const latencyMs = Date.now() - started;
+    const back = BigInt(speedCore.SAMPLE_BLOCKS);
+    const [older, gasPriceWei] = await Promise.all([
+      client
+        .getBlock({ blockNumber: newest.number > back ? newest.number - back : 0n })
+        .catch(() => null),
+      client.getGasPrice().catch(() => null),
+    ]);
+    return speedCore.reading({ newest, older, latencyMs, gasPriceWei });
+  } catch {
+    return speedCore.offline();
+  }
+}
+
+/** Where and when a transaction landed, and what it paid, or null while it has not. */
+export async function confirmation(hash: Hash) {
+  try {
+    const receipt = await client.getTransactionReceipt({ hash });
+    const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+    return {
+      block: Number(receipt.blockNumber),
+      timestamp: Number(block.timestamp),
+      feeWei: receipt.gasUsed * (receipt.effectiveGasPrice ?? 0n),
+      ok: receipt.status === "success",
+    };
+  } catch {
+    return null;
   }
 }

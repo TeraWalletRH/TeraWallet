@@ -41,13 +41,14 @@ import * as payLinks from "./src/paylinks";
 import * as notify from "./src/notify";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
-import { balances, client, execute, transactionStatus } from "./src/network";
+import { balances, client, confirmation, execute, probeNetwork, transactionStatus } from "./src/network";
 import { fetchChainHistory, type ChainHistoryEntry } from "./src/explorer";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
 import {
   activitySearch,
+  networkSpeed,
   contacts as contactsCore,
   limits as limitsCore,
   spend as spendCore,
@@ -704,6 +705,14 @@ function Wallet() {
     [activityQuery, setActivityQuery] = useState(""),
     [activityFilters, setActivityFilters] = useState({ ...NO_ACTIVITY_FILTERS }),
     [activityFiltersOpen, setActivityFiltersOpen] = useState(false),
+    // The latest reading of the network, for the speed label. null until the first one.
+    [netReading, setNetReading] = useState<ReturnType<typeof networkSpeed.reading> | null>(null),
+    // Where and when the open Activity row landed, read from its receipt.
+    [detailSpeed, setDetailSpeed] = useState<
+      | null
+      | { hash: string; missing: true }
+      | { hash: string; missing?: false; block: number; timestamp: number; feeWei: bigint; ok: boolean }
+    >(null),
     // Confirmed activity read back from the chain, to fill in what a
     // second device (or a reinstall) of this same wallet has no local
     // record of. null until the first fetch resolves.
@@ -1016,6 +1025,42 @@ function Wallet() {
     }, 60_000);
     return () => clearInterval(interval);
   }, [alertsOn, owner]);
+  // The network label: read the chain every PROBE_MS while the app is in view.
+  const inView = () =>
+    Platform.OS === "web"
+      ? typeof document === "undefined" || document.visibilityState !== "hidden"
+      : AppState.currentState === "active";
+  const probing = useRef(false);
+  const probeNow = async () => {
+    if (probing.current) return;
+    probing.current = true;
+    try {
+      setNetReading(await probeNetwork());
+    } finally {
+      probing.current = false;
+    }
+  };
+  useEffect(() => {
+    if (!owner) return;
+    void probeNow();
+    const interval = setInterval(() => {
+      if (inView()) void probeNow();
+    }, networkSpeed.PROBE_MS);
+    return () => clearInterval(interval);
+  }, [owner]);
+  // The open Activity row's block, time and fee, read when it opens.
+  useEffect(() => {
+    setDetailSpeed(null);
+    if (page !== "activity-detail" || !activityDetail) return;
+    let live = true;
+    const hash = activityDetail;
+    void confirmation(hash as `0x${string}`).then((found) => {
+      if (live) setDetailSpeed(found ? { hash, ...found } : { hash, missing: true });
+    });
+    return () => {
+      live = false;
+    };
+  }, [page, activityDetail]);
   // Opening the notifications page marks everything read. The dots on this
   // visit still show what was new as of when it was opened.
   const notificationsReadAt = useRef(0);
@@ -1802,6 +1847,7 @@ function Wallet() {
         symbol: c.symbol,
         counterparty: c.counterparty,
         counterpartyAddress: c.counterpartyAddress,
+        fromChain: true,
         step: 1,
         totalSteps: 1,
         status: c.status,
@@ -2935,6 +2981,65 @@ function Wallet() {
   const unreadAlerts = (data.alerts?.items || []).filter(
     (item) => item.at > (data.alerts?.readAt ?? 0),
   ).length;
+  const netLevel = netReading?.level ?? null;
+  const netColor =
+    netLevel === "fast"
+      ? colors.green
+      : netLevel === "normal"
+        ? colors.yellow
+        : netLevel === "slow"
+          ? colors.copper
+          : netLevel === "down"
+            ? colors.danger
+            : colors.faint;
+  const netWord =
+    netLevel === "fast"
+      ? t("Fast", "快速")
+      : netLevel === "normal"
+        ? t("Normal", "正常")
+        : netLevel === "slow"
+          ? t("Slow", "缓慢")
+          : netLevel === "down"
+            ? t("Offline", "离线")
+            : t("Checking", "检测中");
+  const netLatency = networkSpeed.formatLatency(netReading?.latencyMs);
+  const duration = (ms: number | null | undefined) => {
+    const text = networkSpeed.formatDuration(ms);
+    return text === "under 1s" ? t("under 1s", "不到 1 秒") : text;
+  };
+  const networkControl = (compact: boolean) => (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={t(
+        `Network: ${netWord}${netLatency ? `, ${netLatency}` : ""}`,
+        `网络：${netWord}${netLatency ? `，${netLatency}` : ""}`,
+      )}
+      onPress={() => setPage("network")}
+      hitSlop={6}
+      style={({ pressed }) => ({
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 6,
+        height: 34,
+        paddingHorizontal: 11,
+        borderRadius: 17,
+        borderWidth: 1,
+        borderColor: colors.line,
+        opacity: pressed ? 0.7 : 1,
+      })}
+    >
+      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: netColor }} />
+      <Text style={s.mono} numberOfLines={1}>
+        {compact
+          ? netLevel === "down" || !netLatency
+            ? netWord
+            : netLatency
+          : netLatency && netLevel !== "down"
+            ? `${netWord} · ${netLatency}`
+            : netWord}
+      </Text>
+    </Pressable>
+  );
   const bellControl = (
     <Pressable
       accessibilityRole="button"
@@ -6569,6 +6674,100 @@ function Wallet() {
         </>
       );
     }
+    if (page === "network") {
+      const r = netReading;
+      const feeWei = networkSpeed.transferFeeWei(r?.gasPriceWei ?? null);
+      const feeEth = feeWei == null ? null : Number(formatUnits(feeWei, 18));
+      const feeUsd = feeEth != null && prices.ETH ? feeEth * prices.ETH : null;
+      return (
+        <>
+          <Header title={t("Network", "网络")} onBack={() => setPage("home")} backLabel={t("Home", "首页")} />
+          <View style={[s.panel, { alignItems: "center", gap: 8, paddingVertical: 26 }]}>
+            <View
+              style={{
+                width: 56,
+                height: 56,
+                borderRadius: 28,
+                alignItems: "center",
+                justifyContent: "center",
+                backgroundColor: colors.raised,
+              }}
+            >
+              <View style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: netColor }} />
+            </View>
+            <Text style={[s.label, { fontSize: 20 }]}>{netWord}</Text>
+            <Text style={s.small}>Robinhood Chain</Text>
+            {r?.estimateMs != null ? (
+              <Text style={[s.small, { textAlign: "center" }]}>
+                {t(
+                  `A payment sent now should confirm in about ${duration(r.estimateMs)}.`,
+                  `现在发送的付款预计约 ${duration(r.estimateMs)} 内确认。`,
+                )}
+              </Text>
+            ) : r ? (
+              <Text style={[s.small, { textAlign: "center", color: colors.danger }]}>
+                {t(
+                  "Tera can't reach the network right now. Payments can't be sent until it's back.",
+                  "Tera 暂时无法连接网络。恢复前无法发送付款。",
+                )}
+              </Text>
+            ) : null}
+          </View>
+          <Group title={t("Right now", "当前")}>
+            <Row
+              label={t("Response time", "响应时间")}
+              value={r?.latencyMs != null ? networkSpeed.formatLatency(r.latencyMs) : "—"}
+            />
+            <Row
+              label={t("Block time", "出块时间")}
+              value={
+                r?.blockTimeMs != null
+                  ? t(`${(r.blockTimeMs / 1000).toFixed(2)}s average`, `平均 ${(r.blockTimeMs / 1000).toFixed(2)} 秒`)
+                  : "—"
+              }
+            />
+            <Row
+              label={t("Latest block", "最新区块")}
+              value={
+                r?.block != null
+                  ? `#${r.block.toLocaleString()}${r.blockAgeMs != null ? ` · ${t(`${duration(r.blockAgeMs)} ago`, `${duration(r.blockAgeMs)}前`)}` : ""}`
+                  : "—"
+              }
+            />
+            <Row
+              label={t("Est. confirmation", "预计确认")}
+              value={r?.estimateMs != null ? duration(r.estimateMs) : "—"}
+            />
+            <Row
+              label={t("Gas price", "Gas 价格")}
+              value={r?.gasPriceWei != null ? `${networkSpeed.formatGwei(r.gasPriceWei)} gwei` : "—"}
+            />
+            <Row
+              label={t("Token transfer fee", "代币转账费用")}
+              value={
+                feeEth != null
+                  ? `~${feeEth.toPrecision(2)} ETH${feeUsd != null ? ` (${feeUsd < 0.01 ? "<$0.01" : `$${feeUsd.toFixed(2)}`})` : ""}`
+                  : "—"
+              }
+            />
+          </Group>
+          <View style={[s.panel, { gap: 6 }]}>
+            <Text style={s.small}>
+              {t(
+                "Response time is how long the network takes to answer this device — your own connection is part of it. Block time is how often Robinhood Chain confirms a batch of transactions. Tera checks every 15 seconds while the app is open.",
+                "响应时间是网络回应本设备所需的时间，其中包括你自己的网络连接。出块时间是 Robinhood Chain 确认一批交易的频率。应用打开时，Tera 每 15 秒检测一次。",
+              )}
+            </Text>
+            {r ? (
+              <Text style={s.small}>
+                {t(`Checked ${new Date(r.at).toLocaleTimeString()}`, `检测于 ${new Date(r.at).toLocaleTimeString()}`)}
+              </Text>
+            ) : null}
+          </View>
+          <Button onPress={() => void probeNow()}>{t("Check now", "立即检测")}</Button>
+        </>
+      );
+    }
     if (page === "notifications") {
       const items = data.alerts?.items || [];
       const readAt = notificationsReadAt.current;
@@ -7004,6 +7203,33 @@ function Wallet() {
               />
             </Group>
           ) : null}
+          <Group title={t("Speed", "速度")}>
+            {!detailSpeed || detailSpeed.hash !== r.hash ? (
+              <Row label={t("Status", "状态")} value={t("Checking…", "检测中…")} />
+            ) : detailSpeed.missing ? (
+              <Row label={t("Status", "状态")} value={t("Not in a block yet", "尚未打包进区块")} />
+            ) : (
+              <>
+                {!r.fromChain && r.createdAt
+                  ? (() => {
+                      const took = networkSpeed.confirmMs(r.createdAt, detailSpeed.timestamp);
+                      return took != null ? (
+                        <Row label={t("Confirmed in", "确认用时")} value={duration(took)} />
+                      ) : null;
+                    })()
+                  : null}
+                <Row label={t("Block", "区块")} value={`#${detailSpeed.block.toLocaleString()}`} />
+                <Row
+                  label={t("Included", "打包时间")}
+                  value={new Date(detailSpeed.timestamp * 1000).toLocaleString()}
+                />
+                <Row
+                  label={t("Network fee", "网络手续费")}
+                  value={`${Number(formatUnits(detailSpeed.feeWei, 18)).toPrecision(3)} ETH`}
+                />
+              </>
+            )}
+          </Group>
           <Group title={t("Actions", "操作")}>
             <ListRow
               icon="refresh"
@@ -8222,6 +8448,7 @@ function Wallet() {
               </Text>
             </Pressable>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+              {networkControl(false)}
               {bellControl}
               <View
                 style={{
@@ -8275,7 +8502,8 @@ function Wallet() {
               </Text>
             </View>
           </Pressable>
-          <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+            {networkControl(true)}
             {bellControl}
             <View
               style={{
