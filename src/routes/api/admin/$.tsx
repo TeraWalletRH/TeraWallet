@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 const upstream =
-  process.env.VITE_BACKEND_URL ||
-  process.env.VITE_API_URL ||
+  process.env["VITE_BACKEND_URL"] ||
+  process.env["VITE_API_URL"] ||
   "http://127.0.0.1:3001";
 
 async function proxy({ request, params }: { request: Request; params: { _splat?: string } }) {
@@ -22,11 +22,18 @@ async function proxy({ request, params }: { request: Request; params: { _splat?:
   const targetUrl = `${upstream}/api/admin${path}${url.search}`;
 
   try {
-    const response = await fetch(targetUrl, {
+    const isGetOrHead = ["GET", "HEAD"].includes(request.method);
+    const bodyData = isGetOrHead ? null : await request.arrayBuffer();
+
+    const fetchOptions: RequestInit = {
       method: request.method,
       headers,
-      body: ["GET", "HEAD"].includes(request.method) ? undefined : await request.arrayBuffer(),
-    });
+    };
+    if (bodyData !== null) {
+      fetchOptions.body = bodyData;
+    }
+
+    const response = await fetch(targetUrl, fetchOptions);
 
     const outHeaders = new Headers();
     const respContentType = response.headers.get("content-type");
