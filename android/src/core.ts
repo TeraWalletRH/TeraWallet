@@ -80,3 +80,6 @@ export * as networkSpeed from "../../public/tera/core/network-speed.js";
 
 // Private notes on transactions, by hash.
 export * as notes from "../../public/tera/core/notes.js";
+
+// What the screen shows and what it holds back: small balances, privacy mode.
+export * as discretion from "../../public/tera/core/discretion.js";

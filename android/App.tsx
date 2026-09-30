@@ -48,6 +48,7 @@ import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
 import {
   activitySearch,
+  discretion,
   networkSpeed,
   notes as notesCore,
   contacts as contactsCore,
@@ -1845,7 +1846,7 @@ function Wallet() {
     prices,
   );
   // The holdings with something in them, for the home list. Same figures the total is built from.
-  const held = balance
+  const allHeld = balance
     ? assets
         .map((asset) => ({
           asset,
@@ -1853,6 +1854,24 @@ function Wallet() {
         }))
         .filter(({ amount }) => Number(amount) > 0)
     : [];
+  // Hiding small balances changes the list, never the total: what is held back
+  // is still owned, still counted, and still stated as a count underneath. A
+  // holding nobody could price is never treated as small — core/discretion.js
+  // has the reasoning.
+  const privacyOn = !!data.privacy;
+  const smallHidden = discretion.partitionSmall(
+    allHeld.map((row) => ({
+      ...row,
+      symbol: row.asset.symbol,
+      value: valueCore.valueOf(row.amount, prices[row.asset.symbol]),
+    })),
+    { on: !!data.hideSmall, threshold: data.hideSmallThreshold },
+  );
+  const [showHidden, setShowHidden] = useState(false);
+  const held = showHidden ? allHeld : smallHidden.shown;
+  /** A figure as the owner has asked to see it. Never used where they sign. */
+  const shownValue = (text: string, context = "") =>
+    discretion.conceal(text, { on: privacyOn, context });
   // Local history first (it has the richer detail — payee, bridge/relay
   // reference, delivery status — none of which exists on chain), then
   // whatever confirmed on-chain activity isn't already in it. That gap is
@@ -4362,15 +4381,60 @@ function Wallet() {
         <View style={{ flex: 1 }}>
           <Text style={s.label}>{asset.symbol}</Text>
           <Text style={s.small} numberOfLines={1}>
-            {shortAmount(amount)}
+            {shownValue(shortAmount(amount))}
           </Text>
         </View>
         <View style={{ alignItems: "flex-end", gap: 2 }}>
           <Text style={s.label}>
-            {valueCore.format(valueCore.valueOf(amount, prices[asset.symbol]))}
+            {shownValue(valueCore.format(valueCore.valueOf(amount, prices[asset.symbol])))}
           </Text>
           {trendTag(asset.symbol)}
         </View>
+      </Pressable>
+    );
+  }
+  /**
+   * What the list is not showing.
+   *
+   * A wallet that quietly stops mentioning something its owner holds is wrong
+   * about what they hold, so hiding small balances always says how many and
+   * what they come to, and the row is the control that shows them again.
+   * Renders nothing when nothing is hidden.
+   */
+  function hiddenBalancesRow() {
+    if (!smallHidden.hidden.length) return null;
+    const worth = shownValue(valueCore.format(smallHidden.hiddenValue));
+    return (
+      <Pressable
+        key="hidden-balances"
+        accessibilityRole="button"
+        accessibilityLabel={
+          showHidden
+            ? t("Hide small balances again", "重新隐藏小额余额")
+            : t("Show hidden small balances", "显示隐藏的小额余额")
+        }
+        onPress={() => setShowHidden((on) => !on)}
+        style={({ pressed }) => ({
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
+          paddingVertical: 12,
+          borderTopWidth: StyleSheet.hairlineWidth,
+          borderColor: colors.line + "4d",
+          opacity: pressed ? 0.7 : 1,
+        })}
+      >
+        <Text style={[s.small, { flex: 1 }]}>
+          {smallHidden.hidden.length === 1
+            ? t(`1 small balance hidden · ${worth}`, `已隐藏 1 项小额余额 · ${worth}`)
+            : t(
+                `${smallHidden.hidden.length} small balances hidden · ${worth}`,
+                `已隐藏 ${smallHidden.hidden.length} 项小额余额 · ${worth}`,
+              )}
+        </Text>
+        <Text style={[s.small, { color: colors.green }]}>
+          {showHidden ? t("Hide", "隐藏") : t("Show", "显示")}
+        </Text>
       </Pressable>
     );
   }
@@ -4527,6 +4591,7 @@ function Wallet() {
             {held.length ? (
               <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
                 {held.map(({ asset, amount }, i) => assetRow(asset, amount, i === 0))}
+                {hiddenBalancesRow()}
               </View>
             ) : (
               <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
@@ -4844,7 +4909,7 @@ function Wallet() {
                           letterSpacing: -1,
                         }}
                       >
-                        {valueCore.format(valuation.total)}
+                        {shownValue(valueCore.format(valuation.total))}
                       </Text>
                     )}
                     {valuation.coverage !== valueCore.COMPLETE ? (
@@ -4925,6 +4990,7 @@ function Wallet() {
                 ) : held.length ? (
                   <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
                     {held.map(({ asset, amount }, i) => assetRow(asset, amount, i === 0))}
+                    {hiddenBalancesRow()}
                   </View>
                 ) : (
                   <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
@@ -8184,7 +8250,58 @@ function Wallet() {
             onBack={toSettings}
             backLabel={t("Settings", "设置")}
           />
-          <View style={[s.panel, { gap: 14 }]}>
+          <Group>
+            <ListRow
+              icon="eye"
+              label={t("Privacy mode", "隐私模式")}
+              detail={t(
+                "Cover balances on screen. Amounts you are signing stay visible.",
+                "在屏幕上遮盖余额。待签名的金额仍会显示。",
+              )}
+              onPress={() =>
+                void run(() => store({ ...dataRef.current, privacy: !dataRef.current.privacy }))
+              }
+              right={<Toggle on={!!data.privacy} />}
+            />
+            <ListRow
+              icon="filter"
+              label={t("Hide small balances", "隐藏小额余额")}
+              detail={t(
+                `Under ${valueCore.format(data.hideSmallThreshold ?? discretion.DEFAULT_THRESHOLD)}. Still counted in your total.`,
+                `低于 ${valueCore.format(data.hideSmallThreshold ?? discretion.DEFAULT_THRESHOLD)}。仍计入总额。`,
+              )}
+              onPress={() =>
+                void run(() => store({ ...dataRef.current, hideSmall: !dataRef.current.hideSmall }))
+              }
+              right={<Toggle on={!!data.hideSmall} />}
+            />
+          </Group>
+          {data.hideSmall ? (
+            <View style={[s.panel, { gap: 14, marginTop: 16 }]}>
+              <Text style={[s.text, { fontWeight: "700" }]}>
+                {t("Hide anything under", "隐藏低于")}
+              </Text>
+              <Choices
+                options={[1, 5, 10, 25].map((n) => valueCore.format(n))}
+                value={valueCore.format(data.hideSmallThreshold ?? discretion.DEFAULT_THRESHOLD)}
+                select={(v) =>
+                  void run(() =>
+                    store({
+                      ...dataRef.current,
+                      hideSmallThreshold: Number(v.replace(/[^0-9.]/g, "")) || discretion.DEFAULT_THRESHOLD,
+                    }),
+                  )
+                }
+              />
+              <Text style={s.small}>
+                {t(
+                  "A holding nobody has priced is never hidden. Not knowing what something is worth is not a reason to treat it as worth nothing.",
+                  "没有价格的资产永远不会被隐藏。无法得知其价值，并不等于它没有价值。",
+                )}
+              </Text>
+            </View>
+          ) : null}
+          <View style={[s.panel, { gap: 14, marginTop: 16 }]}>
             <Text style={[s.text, { fontWeight: "700" }]}>
               {t("Keep local history for", "本地记录保留")}
             </Text>
