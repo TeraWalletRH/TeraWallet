@@ -35,7 +35,7 @@ function PaymentLinksModule() {
         page,
         limit: 15,
         search,
-        status: status === "all" ? undefined : status,
+        status: status === "all" ? "" : status,
       });
       if (res.success) {
         setItems(res.items || []);

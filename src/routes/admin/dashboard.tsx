@@ -264,7 +264,7 @@ function AdminDashboardOverview() {
               <Clock className="h-4 w-4 text-emerald-400" />
               <h3 className="text-sm font-bold text-white">Recent Audit Logs</h3>
             </div>
-            <Link to="/admin/audit-logs" className="text-xs text-emerald-400 hover:underline">
+            <Link to={"/admin/audit-logs" as any} className="text-xs text-emerald-400 hover:underline">
               View all
             </Link>
           </div>
