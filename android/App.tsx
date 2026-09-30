@@ -47,6 +47,7 @@ import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
 import {
+  activitySearch,
   contacts as contactsCore,
   limits as limitsCore,
   spend as spendCore,
@@ -59,6 +60,7 @@ import { screenOrigin } from "./src/viewport";
 import { normalizePhrase, walletFromPhrase, walletFromPrivateKey } from "./src/crypto";
 import {
   Button,
+  Chips,
   Choices,
   colors,
   Field,
@@ -161,6 +163,8 @@ const popularTokens = [
 ] as const;
 const popularSymbols = new Set<string>(popularTokens.map(({ symbol }) => symbol));
 const HOLD_TO_SIGN_MS = 700;
+// The Activity list with nothing narrowing it.
+const NO_ACTIVITY_FILTERS = { kind: "all", asset: "all", status: "all", period: "any", from: "", to: "" };
 // Fallback for a token shown before its real logo has been sourced. Empty
 // now that every token in popularTokens has a real image in tokenImages —
 // kept as the landing place for the next one that doesn't yet.
@@ -695,6 +699,11 @@ function Wallet() {
     [importError, setImportError] = useState(""),
     // The tx hash of whichever Activity row is open on the detail screen.
     [activityDetail, setActivityDetail] = useState<string | null>(null),
+    // What the Activity list is searched and filtered by. Kept while the
+    // owner opens a row and comes back.
+    [activityQuery, setActivityQuery] = useState(""),
+    [activityFilters, setActivityFilters] = useState({ ...NO_ACTIVITY_FILTERS }),
+    [activityFiltersOpen, setActivityFiltersOpen] = useState(false),
     // Confirmed activity read back from the chain, to fill in what a
     // second device (or a reinstall) of this same wallet has no local
     // record of. null until the first fetch resolves.
@@ -1792,6 +1801,7 @@ function Wallet() {
         amount: c.amount,
         symbol: c.symbol,
         counterparty: c.counterparty,
+        counterpartyAddress: c.counterpartyAddress,
         step: 1,
         totalSteps: 1,
         status: c.status,
@@ -6673,10 +6683,225 @@ function Wallet() {
         </>
       );
     }
-    if (page === "activity")
+    if (page === "activity") {
+      const shown = activitySearch.filter(
+        combinedHistory,
+        { query: activityQuery, ...activityFilters },
+        {
+          kindOf: activityKind,
+          owner,
+          nameFor: (address: string) => contactsCore.nameFor(book, address),
+        },
+      );
+      const narrowing = activitySearch.activeCount(activityFilters);
+      const searching = Boolean(activityQuery.trim()) || narrowing > 0;
+      const setFilter = (key: keyof typeof activityFilters) => (value: string) =>
+        setActivityFilters((f) => ({ ...f, [key]: value }));
+      const customBad =
+        activityFilters.period === "custom" &&
+        [activityFilters.from, activityFilters.to].some(
+          (d) => d.trim() && activitySearch.parseDay(d) == null,
+        );
       return (
         <>
           <Header title={t("Activity", "记录")} />
+          {combinedHistory.length ? (
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+              <View
+                style={{
+                  flex: 1,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 8,
+                  minHeight: 46,
+                  paddingHorizontal: 14,
+                  borderRadius: 999,
+                  borderWidth: 1,
+                  borderColor: colors.line,
+                  backgroundColor: colors.wash,
+                }}
+              >
+                <Icon name="search" size={17} color={colors.muted} />
+                <TextInput
+                  accessibilityLabel={t("Search activity", "搜索记录")}
+                  value={activityQuery}
+                  onChangeText={setActivityQuery}
+                  placeholder={t("Address, name, hash or asset", "地址、名称、哈希或资产")}
+                  placeholderTextColor={colors.faint}
+                  selectionColor={colors.green}
+                  autoCorrect={false}
+                  autoCapitalize="none"
+                  style={[s.text, { flex: 1, paddingVertical: 10 }, Platform.OS === "web" ? ({ outlineStyle: "none" } as any) : null]}
+                />
+                {activityQuery ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t("Clear search", "清除搜索")}
+                    hitSlop={8}
+                    onPress={() => setActivityQuery("")}
+                  >
+                    <Icon name="x" size={17} color={colors.muted} />
+                  </Pressable>
+                ) : null}
+              </View>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={
+                  narrowing
+                    ? t(`Filters, ${narrowing} on`, `筛选，已启用 ${narrowing} 项`)
+                    : t("Filters", "筛选")
+                }
+                accessibilityState={{ expanded: activityFiltersOpen }}
+                onPress={() => setActivityFiltersOpen((open) => !open)}
+                style={({ pressed }) => ({
+                  width: 46,
+                  height: 46,
+                  borderRadius: 23,
+                  borderWidth: 1,
+                  borderColor: activityFiltersOpen || narrowing ? colors.green : colors.line,
+                  backgroundColor: activityFiltersOpen ? colors.tint : colors.wash,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  opacity: pressed ? 0.7 : 1,
+                })}
+              >
+                <Icon name="funnel" size={18} color={narrowing ? colors.green : colors.ink} />
+                {narrowing ? (
+                  <View
+                    style={{
+                      position: "absolute",
+                      top: -3,
+                      right: -3,
+                      minWidth: 18,
+                      height: 18,
+                      borderRadius: 9,
+                      backgroundColor: colors.green,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Text style={{ color: colors.paper, fontSize: 10, fontWeight: "800" }}>{narrowing}</Text>
+                  </View>
+                ) : null}
+              </Pressable>
+            </View>
+          ) : null}
+          {combinedHistory.length && activityFiltersOpen ? (
+            <View style={[s.panel, { gap: 16 }]}>
+              <Chips
+                label={t("Type", "类型")}
+                value={activityFilters.kind}
+                select={setFilter("kind")}
+                options={[
+                  { value: "all", label: t("All", "全部") },
+                  { value: "send", label: t("Sent", "发送") },
+                  { value: "receive", label: t("Received", "收到") },
+                  { value: "swap", label: t("Swaps", "兑换") },
+                  { value: "bridge", label: t("Bridges", "跨链") },
+                ]}
+              />
+              <Chips
+                label={t("Asset", "资产")}
+                value={activityFilters.asset}
+                select={setFilter("asset")}
+                options={[
+                  { value: "all", label: t("All", "全部") },
+                  ...activitySearch
+                    .assetsIn(combinedHistory)
+                    .map((symbol: string) => ({ value: symbol, label: symbol })),
+                ]}
+              />
+              <Chips
+                label={t("Status", "状态")}
+                value={activityFilters.status}
+                select={setFilter("status")}
+                options={[
+                  { value: "all", label: t("All", "全部") },
+                  { value: "completed", label: t("Completed", "已完成") },
+                  { value: "pending", label: t("Pending", "待确认") },
+                  { value: "failed", label: t("Failed", "失败") },
+                ]}
+              />
+              <Chips
+                label={t("Date", "日期")}
+                value={activityFilters.period}
+                select={setFilter("period")}
+                options={[
+                  { value: "any", label: t("Any time", "全部时间") },
+                  { value: "today", label: t("Today", "今天") },
+                  { value: "7d", label: t("7 days", "7 天") },
+                  { value: "30d", label: t("30 days", "30 天") },
+                  { value: "90d", label: t("90 days", "90 天") },
+                  { value: "custom", label: t("Custom", "自定义") },
+                ]}
+              />
+              {activityFilters.period === "custom" ? (
+                <View style={{ flexDirection: "row", gap: 10 }}>
+                  <View style={{ flex: 1 }}>
+                    <Field
+                      label={t("From", "从")}
+                      value={activityFilters.from}
+                      onChangeText={setFilter("from")}
+                      placeholder="2026-09-01"
+                      maxLength={10}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Field
+                      label={t("To", "至")}
+                      value={activityFilters.to}
+                      onChangeText={setFilter("to")}
+                      placeholder="2026-09-30"
+                      maxLength={10}
+                    />
+                  </View>
+                </View>
+              ) : null}
+              {customBad ? (
+                <Text style={[s.small, { color: colors.danger }]}>
+                  {t(
+                    "Write dates as YYYY-MM-DD, e.g. 2026-09-01.",
+                    "请按 YYYY-MM-DD 格式填写，例如 2026-09-01。",
+                  )}
+                </Text>
+              ) : null}
+            </View>
+          ) : null}
+          {searching ? (
+            <View
+              style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10 }}
+            >
+              <Text style={s.small}>
+                {t(
+                  `${shown.length} of ${combinedHistory.length} transactions`,
+                  `${combinedHistory.length} 笔交易中的 ${shown.length} 笔`,
+                )}
+              </Text>
+              <Pressable
+                accessibilityRole="button"
+                hitSlop={8}
+                onPress={() => {
+                  setActivityQuery("");
+                  setActivityFilters({ ...NO_ACTIVITY_FILTERS });
+                }}
+              >
+                <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                  {t("Clear all", "全部清除")}
+                </Text>
+              </Pressable>
+            </View>
+          ) : null}
+          {combinedHistory.length && !shown.length ? (
+            <View style={[s.panel, { alignItems: "center", paddingVertical: 28, gap: 8 }]}>
+              <Icon name="search" size={32} color={colors.faint} />
+              <Text style={[s.small, { textAlign: "center" }]}>
+                {t(
+                  "No transactions match. Try another search or clear the filters.",
+                  "没有匹配的交易。换个关键词或清除筛选。",
+                )}
+              </Text>
+            </View>
+          ) : null}
           {!combinedHistory.length && (
             <View style={[s.panel, { alignItems: "center", paddingVertical: 28, gap: 8 }]}>
               <Icon name="history" size={32} color={colors.faint} />
@@ -6685,7 +6910,7 @@ function Wallet() {
               </Text>
             </View>
           )}
-          {combinedHistory.map((r) => {
+          {shown.map((r: any) => {
             const kind = activityKind(r);
             return (
               <View
@@ -6726,6 +6951,7 @@ function Wallet() {
           })}
         </>
       );
+    }
     if (page === "activity-detail") {
       const r = combinedHistory.find((h) => h.hash === activityDetail);
       if (!r) return null;
