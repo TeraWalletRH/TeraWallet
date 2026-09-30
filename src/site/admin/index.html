@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TERA Admin Console</title>
+    <style>
+      :root {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #020617;
+        color: #f8fafc;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; padding: 24px; }
+      .nav { display: flex; align-items: center; justify-content: space-between; border-b: 1px solid #1e293b; padding-bottom: 16px; margin-bottom: 24px; }
+      .brand { font-size: 18px; font-weight: 800; color: #10b981; text-decoration: none; display: flex; align-items: center; gap: 8px; }
+      .nav-links { display: flex; gap: 12px; }
+      .nav-links a { color: #94a3b8; text-decoration: none; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 8px; transition: background 0.2s; }
+      .nav-links a:hover, .nav-links a.active { background: #1e293b; color: #34d399; }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 32px; }
+      .card { background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; padding: 20px; }
+      .card-title { font-size: 12px; font-weight: 600; color: #94a3b8; margin-bottom: 8px; uppercase; }
+      .card-val { font-size: 28px; font-weight: 800; color: #f8fafc; }
+      .section { background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; padding: 24px; margin-bottom: 24px; }
+      h2 { font-size: 16px; font-weight: 700; margin-top: 0; color: #f8fafc; }
+      table { width: 100%; text-align: left; border-collapse: collapse; font-size: 12px; }
+      th { padding: 12px; background: #020617; border-bottom: 1px solid #1e293b; color: #94a3b8; text-transform: uppercase; }
+      td { padding: 12px; border-bottom: 1px solid #1e293b; font-family: monospace; }
+      .btn { padding: 8px 12px; background: #10b981; border: 0; border-radius: 8px; color: #020617; font-weight: 700; font-size: 12px; cursor: pointer; }
+      .btn-danger { background: rgba(244, 63, 94, 0.15); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.3); }
+      .btn-danger:hover { background: rgba(244, 63, 94, 0.3); }
+      .badge { padding: 4px 8px; border-radius: 9999px; font-size: 10px; font-weight: 700; text-transform: uppercase; background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+    </style>
+  </head>
+  <body>
+    <header class="nav">
+      <a href="/admin/dashboard" class="brand">🛡️ TERA ADMIN</a>
+      <div class="nav-links">
+        <a href="/admin/dashboard" class="active">Overview</a>
+        <a href="/admin/accounts">Accounts</a>
+        <a href="/admin/tags">Tags (@tags)</a>
+        <a href="/admin/business-emails">Emails</a>
+        <a href="/admin/teams">Teams</a>
+        <a href="/admin/payment-links">Payment Links</a>
+        <a href="/admin/private-jobs">Private Jobs</a>
+        <a href="/admin/staking">Staking</a>
+        <a href="/admin/audit-logs">Audit Logs</a>
+        <a href="#" id="signOutBtn" style="color: #f43f5e;">Sign Out</a>
+      </div>
+    </header>
+
+    <main id="app">
+      <div class="grid" id="statsGrid">
+        <div class="card"><div class="card-title">Total Accounts</div><div class="card-val" id="stAccounts">—</div></div>
+        <div class="card"><div class="card-title">Active Sessions</div><div class="card-val" id="stSessions">—</div></div>
+        <div class="card"><div class="card-title">Registered Tags</div><div class="card-val" id="stTags">—</div></div>
+        <div class="card"><div class="card-title">Business Emails</div><div class="card-val" id="stEmails">—</div></div>
+      </div>
+
+      <div class="section">
+        <h2>Recent Admin Audit Activity</h2>
+        <table>
+          <thead>
+            <tr><th>Action</th><th>Target Entity</th><th>Target ID</th><th>Timestamp</th></tr>
+          </thead>
+          <tbody id="activityBody">
+            <tr><td colspan="4" style="color: #64748b; text-align: center;">Loading activity telemetry...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </main>
+
+    <script>
+      const token = localStorage.getItem('tera_admin_token');
+      if (!token && !location.pathname.includes('/login')) {
+        window.location.href = '/admin/login';
+      }
+
+      async function apiFetch(path) {
+        const res = await fetch('/api/admin' + path, {
+          headers: {
+            'Authorization': 'Bearer ' + token,
+            'x-admin-token': token || ''
+          }
+        });
+        if (res.status === 401) {
+          localStorage.removeItem('tera_admin_token');
+          window.location.href = '/admin/login';
+          throw Error('Unauthorized');
+        }
+        return res.json();
+      }
+
+      async function loadStats() {
+        try {
+          const data = await apiFetch('/stats');
+          if (data.success && data.stats) {
+            document.getElementById('stAccounts').textContent = data.stats.totalAccounts || 0;
+            document.getElementById('stSessions').textContent = data.stats.totalActiveSessions || 0;
+            document.getElementById('stTags').textContent = data.stats.totalTags || 0;
+            document.getElementById('stEmails').textContent = data.stats.totalBusinessEmails || 0;
+
+            const tbody = document.getElementById('activityBody');
+            if (data.recentActivity && data.recentActivity.length > 0) {
+              tbody.innerHTML = data.recentActivity.map(act => `
+                <tr>
+                  <td style="color: #34d399; font-weight: bold;">${act.action}</td>
+                  <td>${act.target_entity}</td>
+                  <td>${act.target_id}</td>
+                  <td style="color: #64748b;">${new Date(act.created_at).toLocaleString()}</td>
+                </tr>
+              `).join('');
+            } else {
+              tbody.innerHTML = '<tr><td colspan="4" style="color: #64748b; text-align: center;">No audit logs yet.</td></tr>';
+            }
+          }
+        } catch (e) { console.error(e); }
+      }
+
+      document.getElementById('signOutBtn').onclick = (e) => {
+        e.preventDefault();
+        localStorage.removeItem('tera_admin_token');
+        window.location.href = '/admin/login';
+      };
+
+      loadStats();
+    </script>
+  </body>
+</html>

@@ -10,18 +10,24 @@ async function proxy({ request, params }: { request: Request; params: { _splat?:
   const cookie = request.headers.get("cookie");
   if (type) headers.set("content-type", type);
   if (cookie) headers.set("cookie", cookie);
-  const response = await fetch(`${upstream}/api/admin/staking${path}${url.search}`, {
+
+  const isGetOrHead = ["GET", "HEAD"].includes(request.method);
+  const bodyData = isGetOrHead ? null : await request.arrayBuffer();
+
+  const fetchOptions: RequestInit = {
     method: request.method,
     headers,
-    body: ["GET", "HEAD"].includes(request.method) ? undefined : await request.arrayBuffer(),
-  });
+  };
+  if (bodyData !== null) {
+    fetchOptions.body = bodyData;
+  }
+
+  const response = await fetch(`${upstream}/api/admin/staking${path}${url.search}`, fetchOptions);
   const out = new Headers();
   const contentType = response.headers.get("content-type");
   const setCookie = response.headers.get("set-cookie");
   if (contentType) out.set("content-type", contentType);
-  // The browser receives this cookie from the Tera site, rather than directly
-  // from api.terawallet.app. Scope it to this proxy path so later admin calls
-  // send it back here and the proxy can forward it upstream.
+
   if (setCookie) {
     out.set("set-cookie", setCookie.replace(/Path=\/api\/admin\/staking/gi, "Path=/api/staking-admin"));
   }
