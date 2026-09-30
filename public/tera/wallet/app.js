@@ -53,6 +53,7 @@ import {
 import { bridgeView, bridgeFormInput, checkBridgeQuote, sendBridge } from "./bridge.js";
 import { galleryView } from "./gallery.js";
 import * as nft from "../core/nft.js";
+import * as discretion from "../core/discretion.js";
 import {
   LOCAL_ONLY,
   REQUESTS,
@@ -428,6 +429,25 @@ const chip = (label, fail = false) =>
 const empty = (text) => `<div class="empty">${esc(text)}</div>`;
 const pair = (label, value) =>
   `<div class="pair"><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
+/**
+ * What this browser remembers about how the owner wants figures shown.
+ *
+ * Kept here rather than in the vault because it is a display preference, not
+ * wallet data: somebody who hid their balances because of where they are
+ * sitting has not stopped sitting there when the page reloads, and reading it
+ * back must never be able to throw — a browser with storage blocked shows the
+ * balances rather than failing to draw the wallet.
+ */
+const PRIVACY_KEY = "tera-hide-balances";
+const HIDE_SMALL_KEY = "tera-hide-small";
+const remember = (key, on) => {
+  try {
+    localStorage.setItem(key, on ? "1" : "0");
+  } catch {
+    // A preference that cannot be saved is still honoured for this visit.
+  }
+};
+
 const state = {
   owner: "",
   // Whether this deployment keeps a tag register. Assumed off until the
@@ -520,7 +540,23 @@ const state = {
   loading: false,
   query: "",
   category: "all",
-  hide: false,
+  hide: (() => {
+    try {
+      return localStorage.getItem(PRIVACY_KEY) === "1";
+    } catch {
+      return false;
+    }
+  })(),
+  hideSmall: (() => {
+    try {
+      return localStorage.getItem(HIDE_SMALL_KEY) === "1";
+    } catch {
+      return false;
+    }
+  })(),
+  // Revealing the small balances is for the look you are taking now, not a
+  // change of setting, so it is not remembered.
+  showSmallOnce: false,
   notice: "",
 };
 let generation = 0;
@@ -958,24 +994,48 @@ function holdingsValue() {
  * rows are hidden under 750px. So this is the figure a phone shows, which is another
  * reason it must never be a total that quietly left a holding out.
  */
+/**
+ * The control that hides the balance, drawn on the balance.
+ *
+ * Line art at one pixel, in currentColor, because this page is built from
+ * one-pixel borders and space and has no icon set of its own. The label is on
+ * the button rather than beside it, so a screen reader announces what the
+ * control does instead of reading a decoration.
+ */
+function eyeToggle() {
+  const open = `<path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/><circle cx="8" cy="8" r="2.2"/>`;
+  const shut = `<path d="M1 8s2.5-5 7-5c1.2 0 2.3.35 3.2.86M15 8s-2.5 5-7 5c-1.2 0-2.3-.35-3.2-.86"/><path d="M2 2l12 12"/>`;
+  return `<button class="btn btn-icon" data-action="privacy" aria-pressed="${state.hide ? "true" : "false"}" aria-label="${state.hide ? "Show balances" : "Hide balances"}" title="${state.hide ? "Show balances" : "Hide balances"}"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">${state.hide ? shut : open}</svg></button>`;
+}
+
 function valueBlock() {
   if (state.hide)
-    return `<div class="metric"><strong>••••</strong><small>Balances are hidden. The total is hidden with them.</small></div>`;
+    return `<div class="metric"><strong>••••${eyeToggle()}</strong><small>Balances are hidden. The total is hidden with them.</small></div>`;
   const result = holdingsValue();
   const when = state.pricesAt ? new Date(state.pricesAt).toLocaleTimeString() : "";
   if (result.coverage === VALUE_NONE)
-    return `<div class="metric"><strong>${esc(formatValue(null))}</strong><small>${esc(
+    return `<div class="metric"><strong>${esc(formatValue(null))}${eyeToggle()}</strong><small>${esc(
       state.pricesError
         ? `No prices could be read: ${state.pricesError} Your balances above come from the chain and are unaffected.`
         : summariseValue(result),
     )}</small></div>`;
-  return `<div class="metric"><strong>${esc(formatValue(result.total))}</strong>${
+  return `<div class="metric"><strong>${esc(formatValue(result.total))}${eyeToggle()}</strong>${
     result.coverage === VALUE_PARTIAL ? chip("Subtotal", true) : ""
   }<small>${esc(summariseValue(result, { asOf: when }))}</small></div>`;
 }
 
 function overview() {
-  const balanceRows = heldAssets()
+  // Same rules as the phone, from public/tera/core/discretion.js: a holding
+  // nobody has priced is never treated as small, what is held back is still in
+  // the total, and the line underneath says how much is missing.
+  const priced = heldAssets().map((a) => ({
+    asset: a,
+    symbol: a.symbol,
+    value: valueOf(state.balances[a.address], state.prices[a.symbol]),
+  }));
+  const split = discretion.partitionSmall(priced, { on: state.hideSmall });
+  const visible = (state.showSmallOnce ? priced : split.shown).map((row) => row.asset);
+  const balanceRows = visible
     .map((a) => {
       // Per row as well as in the total, because this is where an unpriced holding stops
       // being invisible. A holding that contributes nothing to the total shows a dash
@@ -984,7 +1044,13 @@ function overview() {
       return `<div class="asset-mini"><span class="asset-symbol">${esc(a.symbol.slice(0, 2))}</span><div><b>${esc(a.symbol)}</b><small>${esc(a.category)}</small></div><div class="val">${state.hide ? "••••" : esc(state.balances[a.address])}${state.hide ? "" : `<small>${esc(formatValue(value))}</small>`}</div></div>`;
     })
     .join("");
-  return `${!state.owner ? accountPrompt() : ""}<div class="workspace"><aside class="column"><div class="section-label"><span>Your holdings</span>${button(state.hide ? "Show" : "Hide", "privacy")}</div>${state.owner ? valueBlock() : ""}${balanceRows || empty(state.owner ? "Balances load on the selected network." : "Connect to view your holdings.")}${state.errors.balances ? `<p class="micro">${esc(state.errors.balances)}</p>` : ""}<details class="gate-detail"><summary><span class="gate-name">How this is valued</span></summary><div class="gate-body"><ul class="micro">${PRICE_SOURCES.map((source) => `<li><b>${esc(source.label)}</b> — ${esc(source.detail)}</li>`).join("")}</ul><p class="micro">What a valuation does not establish:</p><ul class="micro">${VALUE_LIMITS.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div></details><img class="portfolio-art" src="/tera/art/02-case-stairway.jpg" alt="Architectural stairway collage"></aside><section class="column"><div class="section-label"><span>Action inbox</span>${button("+ New proposal", "create")}</div>${state.drafts.length ? state.drafts.map(proposalCard).join("") : empty("No proposals in this session. Prepare an action to review it here.")}</section><aside class="column">${chat()}</aside></div><div class="lower-row"><section><div class="section-label"><span>Account activity</span><a href="${href("receipts")}">View history ↗</a></div>${state.errors.account ? empty(state.errors.account) : pair("Confirmed intents reported by Tera", state.account?.stats?.intents?.confirmed_intents ?? "—")}${pair("Transactions tracked on this device", state.records.length)}</section><section><div class="section-label">Your control surface</div><div class="quick-grid"><a href="${href("approvals")}">Approvals ↗</a><a href="${href("sessions")}">Agent sessions ↗</a><a href="${href("policy")}">Private policy ↗</a><a href="/dashboard/private-send/">Private routing ↗</a><a href="${href("assets")}">Asset registry ↗</a></div></section></div>`;
+  return `${!state.owner ? accountPrompt() : ""}<div class="workspace"><aside class="column"><div class="section-label"><span>Your holdings</span>${button(state.hideSmall ? "Show small" : "Hide small", "hide-small")}</div>${state.owner ? valueBlock() : ""}${balanceRows || empty(state.owner ? "Balances load on the selected network." : "Connect to view your holdings.")}${
+    split.hidden.length
+      ? `<button class="btn btn-quiet" data-action="show-small">${esc(
+          discretion.hiddenNote(split.hidden, { formatted: formatValue(split.hiddenValue) }),
+        )} · ${state.showSmallOnce ? "Hide" : "Show"}</button>`
+      : ""
+  }${state.errors.balances ? `<p class="micro">${esc(state.errors.balances)}</p>` : ""}<details class="gate-detail"><summary><span class="gate-name">How this is valued</span></summary><div class="gate-body"><ul class="micro">${PRICE_SOURCES.map((source) => `<li><b>${esc(source.label)}</b> — ${esc(source.detail)}</li>`).join("")}</ul><p class="micro">What a valuation does not establish:</p><ul class="micro">${VALUE_LIMITS.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div></details><img class="portfolio-art" src="/tera/art/02-case-stairway.jpg" alt="Architectural stairway collage"></aside><section class="column"><div class="section-label"><span>Action inbox</span>${button("+ New proposal", "create")}</div>${state.drafts.length ? state.drafts.map(proposalCard).join("") : empty("No proposals in this session. Prepare an action to review it here.")}</section><aside class="column">${chat()}</aside></div><div class="lower-row"><section><div class="section-label"><span>Account activity</span><a href="${href("receipts")}">View history ↗</a></div>${state.errors.account ? empty(state.errors.account) : pair("Confirmed intents reported by Tera", state.account?.stats?.intents?.confirmed_intents ?? "—")}${pair("Transactions tracked on this device", state.records.length)}</section><section><div class="section-label">Your control surface</div><div class="quick-grid"><a href="${href("approvals")}">Approvals ↗</a><a href="${href("sessions")}">Agent sessions ↗</a><a href="${href("policy")}">Private policy ↗</a><a href="/dashboard/private-send/">Private routing ↗</a><a href="${href("assets")}">Asset registry ↗</a></div></section></div>`;
 }
 function registry() {
   if (state.assetError)
@@ -3996,6 +4062,16 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "privacy") {
       state.hide = !state.hide;
+      remember(PRIVACY_KEY, state.hide);
+      render();
+    }
+    if (action === "hide-small") {
+      state.hideSmall = !state.hideSmall;
+      remember(HIDE_SMALL_KEY, state.hideSmall);
+      render();
+    }
+    if (action === "show-small") {
+      state.showSmallOnce = !state.showSmallOnce;
       render();
     }
     if (action === "refresh") {
