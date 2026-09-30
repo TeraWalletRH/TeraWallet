@@ -15,6 +15,7 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { Animated, Easing, Image, Pressable, View } from "react-native";
 import { getAddress, isAddress, type Address } from "viem";
 import type { Asset } from "./config";
+import * as discretion from "../../public/tera/core/discretion.js";
 // Named in full: this file only runs on the web, and it needs the web vault's
 // switch. Metro resolves both spellings to the same module there.
 import * as store from "./keystore.web";
@@ -199,6 +200,16 @@ export type ScreensProps = {
   onAdopt: (address: Address) => Promise<unknown>;
   onAccountsChanged: () => void;
   notify: (notice: Notice) => void;
+  /**
+   * The wallet's own display settings, passed in rather than read here, so
+   * Business and the wallet are one setting seen from two places. A business
+   * that hid its figures and then found them showing again on the next screen
+   * would have been told something untrue about what is covered.
+   */
+  privacy: boolean;
+  hideSmall: boolean;
+  hideSmallThreshold?: number;
+  onTogglePrivacy: () => void;
 };
 
 export function Screens(props: ScreensProps) {
@@ -285,9 +296,16 @@ function Dashboard({
   onFlow,
   onSwitch,
   notify,
+  privacy,
+  hideSmall,
+  hideSmallThreshold,
+  onTogglePrivacy,
 }: ScreensProps) {
   const [book, updateBook] = useBook();
   const [holdings, setHoldings] = useState<Holding[] | null>(null);
+  // Revealing the small ones is for the look being taken now, so it is not
+  // stored the way the setting itself is.
+  const [showSmall, setShowSmall] = useState(false);
   const [moves, setMoves] = useState<Movement[] | null>(null);
   const [group, setGroup] = useState("");
   const [email, setEmail] = useState<{ email: string; name: string } | null>(null);
@@ -381,10 +399,28 @@ function Dashboard({
       entry.value += amount * priceNow(symbol, prices);
       byToken.set(symbol, entry);
     }
-  const tokens = [...byToken.entries()].sort((a, b) => b[1].value - a[1].value);
-  const top = tokens[0];
+  /** A figure as the owner asked to see it. Never used where they sign. */
+  const cover = (text: string) => discretion.conceal(text, { on: privacy });
+  const allTokens = [...byToken.entries()].sort((a, b) => b[1].value - a[1].value);
+  // Same rules as the wallet, from core/discretion.js. The total above is
+  // deliberately built from every holding, hidden or not: a treasury figure
+  // that quietly left positions out would be wrong, not tidy.
+  const smallSplit = discretion.partitionSmall(
+    allTokens.map(([symbol, entry]) => ({
+      symbol,
+      entry,
+      value: priceNow(symbol, prices) ? entry.value : null,
+    })),
+    { on: hideSmall, threshold: hideSmallThreshold },
+  );
+  const tokens: [string, { amount: number; value: number }][] = (
+    showSmall ? allTokens.map(([symbol, entry]) => ({ symbol, entry })) : smallSplit.shown
+  ).map((row) => [row.symbol, row.entry]);
+  const top = allTokens[0];
   const concentrated = top && total > 0 && top[1].value / total > 0.6 ? top : null;
-  const unpriced = tokens.filter(([symbol]) => !priceNow(symbol, prices)).map(([symbol]) => symbol);
+  const unpriced = allTokens
+    .filter(([symbol]) => !priceNow(symbol, prices))
+    .map(([symbol]) => symbol);
 
   const ownSet = new Set(accounts.map((a) => a.address.toLowerCase()));
   const external = (moves || []).filter(
@@ -429,7 +465,27 @@ function Dashboard({
         </Pressable>
       </View>
       <View style={{ gap: 4 }}>
-        <Text style={s.small}>{t("Total holdings", "总持仓")}</Text>
+        {/* The eye sits on the figure it covers, for the same reason it does
+            on the wallet: this is reached because somebody has walked up, and
+            a control in a settings screen has already lost that moment. */}
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={
+            privacy ? t("Show figures", "显示金额") : t("Hide figures", "隐藏金额")
+          }
+          onPress={onTogglePrivacy}
+          hitSlop={10}
+          style={({ pressed }) => ({
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 6,
+            alignSelf: "flex-start",
+            opacity: pressed ? 0.6 : 1,
+          })}
+        >
+          <Text style={s.small}>{t("Total holdings", "总持仓")}</Text>
+          <Icon name={privacy ? "eye-off" : "eye"} size={14} color={colors.muted} />
+        </Pressable>
         {holdings ? (
           <Text
             style={{
@@ -440,7 +496,7 @@ function Dashboard({
               letterSpacing: -1,
             }}
           >
-            {usd(total)}
+            {cover(usd(total))}
           </Text>
         ) : (
           <Skeleton width={200} height={44} borderRadius={10} />
@@ -537,16 +593,41 @@ function Dashboard({
               />
               <Text style={[s.label, { flex: 1 }]}>{symbol}</Text>
               <Text style={[s.small, { minWidth: 90, textAlign: "right" }]}>
-                {amountText(entry.amount)}
+                {cover(amountText(entry.amount))}
               </Text>
               <Text style={[s.text, { minWidth: 96, textAlign: "right", fontWeight: "600" }]}>
-                {priceNow(symbol, prices) ? usd(entry.value) : "—"}
+                {priceNow(symbol, prices) ? cover(usd(entry.value)) : "—"}
               </Text>
               <Text style={[s.small, { width: 44, textAlign: "right" }]}>
                 {total > 0 ? `${Math.round((entry.value / total) * 100)}%` : "—"}
               </Text>
             </View>
           ))}
+          {smallSplit.hidden.length ? (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setShowSmall((on) => !on)}
+              style={({ pressed }) => ({
+                flexDirection: "row",
+                alignItems: "center",
+                gap: 8,
+                paddingTop: 4,
+                opacity: pressed ? 0.6 : 1,
+              })}
+            >
+              <Text style={[s.small, { flex: 1 }]}>
+                {t(
+                  discretion.hiddenNote(smallSplit.hidden, {
+                    formatted: cover(usd(smallSplit.hiddenValue ?? 0)),
+                  }),
+                  `已隐藏 ${smallSplit.hidden.length} 项小额余额`,
+                )}
+              </Text>
+              <Text style={[s.small, { color: colors.green }]}>
+                {showSmall ? t("Hide", "隐藏") : t("Show", "显示")}
+              </Text>
+            </Pressable>
+          ) : null}
           {concentrated ? (
             <View
               style={{

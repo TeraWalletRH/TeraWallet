@@ -4547,6 +4547,12 @@ function Wallet() {
           onAdopt={adopt}
           onAccountsChanged={syncAccounts}
           notify={setNotice}
+          privacy={privacyOn}
+          hideSmall={!!data.hideSmall}
+          hideSmallThreshold={data.hideSmallThreshold}
+          onTogglePrivacy={() =>
+            void run(() => store({ ...dataRef.current, privacy: !dataRef.current.privacy }))
+          }
         />
       );
     if (page === "tokens")
