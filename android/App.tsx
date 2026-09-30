@@ -49,6 +49,7 @@ import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } f
 import {
   activitySearch,
   networkSpeed,
+  notes as notesCore,
   contacts as contactsCore,
   limits as limitsCore,
   spend as spendCore,
@@ -705,6 +706,10 @@ function Wallet() {
     [activityQuery, setActivityQuery] = useState(""),
     [activityFilters, setActivityFilters] = useState({ ...NO_ACTIVITY_FILTERS }),
     [activityFiltersOpen, setActivityFiltersOpen] = useState(false),
+    // Business notes, read from the Reports book; personal notes are in `data`.
+    [bizNotes, setBizNotes] = useState<Record<string, string>>({}),
+    // The note being written on the open Activity row, or null when not editing.
+    [noteDraft, setNoteDraft] = useState<string | null>(null),
     // The latest reading of the network, for the speed label. null until the first one.
     [netReading, setNetReading] = useState<ReturnType<typeof networkSpeed.reading> | null>(null),
     // Where and when the open Activity row landed, read from its receipt.
@@ -1048,9 +1053,23 @@ function Wallet() {
     }, networkSpeed.PROBE_MS);
     return () => clearInterval(interval);
   }, [owner]);
+  // Business notes are re-read on Activity, since Reports may have changed them.
+  useEffect(() => {
+    if (!business || !owner || !biz.sharesNotesWithReports) return;
+    if (page !== "activity" && page !== "activity-detail") return;
+    let live = true;
+    void biz
+      .loadNotes()
+      .then((loaded) => live && setBizNotes(loaded))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [business, owner, page]);
   // The open Activity row's block, time and fee, read when it opens.
   useEffect(() => {
     setDetailSpeed(null);
+    setNoteDraft(null);
     if (page !== "activity-detail" || !activityDetail) return;
     let live = true;
     const hash = activityDetail;
@@ -1854,6 +1873,18 @@ function Wallet() {
         createdAt: c.timestamp,
       })),
   ].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  // Notes on transactions. In Business they are the Reports notes, so either
+  // screen shows what the other wrote; in the wallet they sit in its own data.
+  const sharedNotes = business && biz.sharesNotesWithReports;
+  const txNotes: Record<string, string> = sharedNotes ? bizNotes : data.notes || {};
+  async function saveTxNote(hash: string, text: string) {
+    if (sharedNotes) {
+      await biz.saveNote(hash, text);
+      setBizNotes(await biz.loadNotes());
+    } else {
+      await store({ ...dataRef.current, notes: notesCore.setNote(dataRef.current.notes, hash, text) });
+    }
+  }
   function activityKind(row: any): "send" | "receive" | "swap" | "bridge" {
     if (row.direction === "send" || row.direction === "receive") return row.direction;
     if (row.activityType === "send" || row.activityType === "swap" || row.activityType === "bridge") return row.activityType;
@@ -6890,6 +6921,7 @@ function Wallet() {
           kindOf: activityKind,
           owner,
           nameFor: (address: string) => contactsCore.nameFor(book, address),
+          noteFor: (hash: string) => notesCore.noteFor(txNotes, hash),
         },
       );
       const narrowing = activitySearch.activeCount(activityFilters);
@@ -6925,7 +6957,7 @@ function Wallet() {
                   accessibilityLabel={t("Search activity", "搜索记录")}
                   value={activityQuery}
                   onChangeText={setActivityQuery}
-                  placeholder={t("Address, name, hash or asset", "地址、名称、哈希或资产")}
+                  placeholder={t("Address, name, note, hash or asset", "地址、名称、备注、哈希或资产")}
                   placeholderTextColor={colors.faint}
                   selectionColor={colors.green}
                   autoCorrect={false}
@@ -7130,6 +7162,14 @@ function Wallet() {
                   <View style={{ flex: 1, gap: 3 }}>
                     <Text style={s.label} numberOfLines={1}>{activityTitle(r)}</Text>
                     <Text style={s.small}>{r.createdAt ? new Date(r.createdAt).toLocaleString() : t("On-chain transaction", "链上交易")}</Text>
+                    {notesCore.noteFor(txNotes, r.hash) ? (
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
+                        <Icon name="pencil" size={12} color={colors.muted} />
+                        <Text style={[s.small, { color: colors.ink, flex: 1 }]} numberOfLines={1}>
+                          {notesCore.noteFor(txNotes, r.hash)}
+                        </Text>
+                      </View>
+                    ) : null}
                   </View>
                   <View style={{ borderRadius: 999, paddingHorizontal: 10, paddingVertical: 4, backgroundColor: statusTone(r.status).bg }}>
                     <Text style={[s.small, { fontWeight: "600", color: statusTone(r.status).color }]}>{activityStatus(r.status)}</Text>
@@ -7183,6 +7223,85 @@ function Wallet() {
               <Text style={[s.small, { fontWeight: "700", color: tone.color }]}>{activityStatus(r.status)}</Text>
             </View>
           </View>
+          {(() => {
+            const note = notesCore.noteFor(txNotes, r.hash);
+            const max = notesCore.LIMITS.maxLength;
+            if (noteDraft != null)
+              return (
+                <View style={[s.panel, { gap: 10 }]}>
+                  <Field
+                    label={t("Note", "备注")}
+                    value={noteDraft}
+                    onChangeText={setNoteDraft}
+                    maxLength={max}
+                    autoFocus
+                    autoCapitalize="sentences"
+                    placeholder={
+                      business
+                        ? t("Invoice number, client, purpose…", "发票号、客户、用途…")
+                        : t("What was this for?", "这笔交易是做什么的？")
+                    }
+                  />
+                  <Text style={s.small}>
+                    {`${noteDraft.length}/${max} · `}
+                    {sharedNotes
+                      ? t(
+                          "Also shown in Reports. Saved only on this device, never sent to Tera or your team.",
+                          "也会显示在报表中。仅保存在本设备，不会发送给 Tera 或你的团队。",
+                        )
+                      : t(notesCore.PRIVACY_NOTE, "备注仅保存在本设备的加密钱包数据中，不会发送给 Tera，也不会写入链上。")}
+                  </Text>
+                  <View style={{ flexDirection: "row", gap: 10 }}>
+                    <View style={{ flex: 1 }}>
+                      <Button onPress={() => setNoteDraft(null)}>{t("Cancel", "取消")}</Button>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Button
+                        primary
+                        onPress={() =>
+                          void run(async () => {
+                            await saveTxNote(r.hash, noteDraft);
+                            setNoteDraft(null);
+                          })
+                        }
+                      >
+                        {t("Save note", "保存备注")}
+                      </Button>
+                    </View>
+                  </View>
+                </View>
+              );
+            return note ? (
+              <View style={[s.panel, { gap: 10 }]}>
+                <Text style={s.eyebrow}>{t("Your note", "你的备注")}</Text>
+                <Text selectable style={s.text}>
+                  {note}
+                </Text>
+                <View style={{ flexDirection: "row", gap: 10 }}>
+                  <View style={{ flex: 1 }}>
+                    <Button onPress={() => setNoteDraft(note)}>{t("Edit", "编辑")}</Button>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Button danger onPress={() => void run(() => saveTxNote(r.hash, ""))}>
+                      {t("Remove", "删除")}
+                    </Button>
+                  </View>
+                </View>
+              </View>
+            ) : (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setNoteDraft("")}
+                style={({ pressed }) => [
+                  s.panel,
+                  { flexDirection: "row", alignItems: "center", gap: 10, opacity: pressed ? 0.7 : 1 },
+                ]}
+              >
+                <Icon name="pencil" size={17} color={colors.green} />
+                <Text style={[s.label, { color: colors.green }]}>{t("Add a note", "添加备注")}</Text>
+              </Pressable>
+            );
+          })()}
           {r.payee ? (
             <View style={[s.panel, { gap: 10 }]}>
               <Text style={s.eyebrow}>{t("To", "发送至")}</Text>

@@ -43,7 +43,7 @@ const lower = (value) => String(value ?? "").trim().toLowerCase();
  * What a row can be found by. `kind` is the row's type as the list shows it;
  * `nameFor(address)` returns a saved contact name or "".
  */
-export function searchable(row, { kind, owner = "", nameFor = () => "" } = {}) {
+export function searchable(row, { kind, owner = "", nameFor = () => "", noteFor = () => "" } = {}) {
   const me = lower(owner);
   const addresses = [
     ...new Set(
@@ -63,7 +63,7 @@ export function searchable(row, { kind, owner = "", nameFor = () => "" } = {}) {
     status: statusGroup(row?.status),
     at: Number(row?.createdAt) || 0,
     addresses,
-    words: [...names, ...labels, lower(row?.title)].map(lower).filter(Boolean),
+    words: [...names, ...labels, lower(row?.title), noteFor(row?.hash)].map(lower).filter(Boolean),
   };
 }
 
@@ -117,7 +117,7 @@ export function dateRange({ period = "any", from = "", to = "", now = Date.now()
  *
  * `filters`: { query, kind, asset, status, period, from, to, now } — any of
  * them left empty (or "all"/"any") does not filter.
- * `read`: { kindOf(row), owner, nameFor(address) }.
+ * `read`: { kindOf(row), owner, nameFor(address), noteFor(hash) }.
  */
 export function filter(rows, filters = {}, read = {}) {
   const terms = lower(filters.query).split(/\s+/).filter(Boolean);
@@ -130,6 +130,7 @@ export function filter(rows, filters = {}, read = {}) {
       kind: read.kindOf ? read.kindOf(row) : row?.direction,
       owner: read.owner,
       nameFor: read.nameFor,
+      noteFor: read.noteFor,
     });
     if (kind && entry.kind !== kind) return false;
     if (asset && entry.asset !== asset) return false;

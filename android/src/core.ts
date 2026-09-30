@@ -77,3 +77,6 @@ export * as activitySearch from "../../public/tera/core/activity-search.js";
 
 // How fast the network is right now, and how long a transaction took to confirm.
 export * as networkSpeed from "../../public/tera/core/network-speed.js";
+
+// Private notes on transactions, by hash.
+export * as notes from "../../public/tera/core/notes.js";

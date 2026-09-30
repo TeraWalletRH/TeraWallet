@@ -57,6 +57,11 @@ export type LocalData = {
    * Not trimmed by the retention window — a name is not a record of activity.
    */
   contacts: { address: string; name: string; savedAt: number }[];
+  /**
+   * The owner's notes on transactions, by lowercase hash. Sealed with the rest
+   * of this file and never sent anywhere; `core/notes.js` cleans them.
+   */
+  notes?: Record<string, string>;
   /** Whether the spotlight walkthrough has run on this device already. */
   tourSeen: boolean;
   /**

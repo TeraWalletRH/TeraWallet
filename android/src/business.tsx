@@ -10,6 +10,13 @@ export const available = false;
 export const mode = (): Mode => "personal";
 export function setMode(_next: Mode) {}
 
+// Notes live in the wallet's own data here; there is no Reports screen to share them with.
+export const sharesNotesWithReports = false;
+export async function loadNotes(): Promise<Record<string, string>> {
+  return {};
+}
+export async function saveNote(_hash: string, _text: string) {}
+
 export const emailAvailable = () => false;
 export async function loadEmailConfig() {
   return false;
