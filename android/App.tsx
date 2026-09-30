@@ -4889,9 +4889,45 @@ function Wallet() {
                     }}
                   />
                   <View style={{ alignItems: "center" }}>
-                    <Text style={[s.small, { color: colors.ink, opacity: 0.7 }]}>
-                      {t("Total balance", "资产总值")}
-                    </Text>
+                    {/*
+                      Privacy mode belongs here, not three taps into Settings.
+                      It is something an owner reaches for because someone has
+                      just walked up, and a control that takes six taps to
+                      return from has already failed at that.
+
+                      Same stored value as the settings row, so the two are one
+                      setting seen from two places rather than two that can
+                      disagree.
+                    */}
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        privacyOn
+                          ? t("Show balances", "显示余额")
+                          : t("Hide balances", "隐藏余额")
+                      }
+                      onPress={() =>
+                        void run(() =>
+                          store({ ...dataRef.current, privacy: !dataRef.current.privacy }),
+                        )
+                      }
+                      hitSlop={12}
+                      style={({ pressed }) => ({
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 6,
+                        opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <Text style={[s.small, { color: colors.ink, opacity: 0.7 }]}>
+                        {t("Total balance", "资产总值")}
+                      </Text>
+                      <Icon
+                        name={privacyOn ? "eye-off" : "eye"}
+                        size={15}
+                        color={colors.ink}
+                      />
+                    </Pressable>
                     {!balance ? (
                       <Skeleton
                         width={140}
