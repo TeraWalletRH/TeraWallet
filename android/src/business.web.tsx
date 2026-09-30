@@ -19,6 +19,7 @@ import type { Asset } from "./config";
 // switch. Metro resolves both spellings to the same module there.
 import * as store from "./keystore.web";
 import * as vault from "./storage";
+import { notes as notesCore } from "./core";
 import {
   amountText,
   CATEGORIES,
@@ -74,6 +75,29 @@ export const available = true;
 export const mode = (): Mode => store.vaultKind();
 /** Lock the open wallet before calling this: the next read comes from the other vault. */
 export const setMode = (next: Mode) => store.useVault(next);
+
+// Notes on transactions. In Business they are the notes the Reports screen
+// keeps beside each category, so Activity and Reports show the same words.
+export const sharesNotesWithReports = true;
+export async function loadNotes(): Promise<Record<string, string>> {
+  const book = await loadBook();
+  return notesCore.cleanNotes(
+    Object.fromEntries(Object.entries(book.labels).map(([hash, label]) => [hash, label?.note || ""])),
+  );
+}
+export async function saveNote(hash: string, text: string) {
+  const book = await loadBook();
+  const key = notesCore.keyFor(hash);
+  if (!key) return;
+  // Reports may have kept the label under the hash as the explorer wrote it.
+  const existing = Object.keys(book.labels).find((h) => h.toLowerCase() === key) || key;
+  const current = book.labels[existing] || { category: "", note: "" };
+  const note = notesCore.cleanNote(text);
+  const labels = { ...book.labels };
+  if (!note && !current.category) delete labels[existing];
+  else labels[existing] = { ...current, note };
+  await saveBook({ ...book, labels });
+}
 
 const logoMark = require("../assets/logo-mark.png");
 
@@ -1511,7 +1535,7 @@ function Reports({ t, wide, accounts, prices, go }: ScreensProps) {
                         maxLength={140}
                         placeholder={t("Invoice number, client, purpose…", "发票号、客户、用途…")}
                         onChangeText={setNote}
-                        onBlur={() => void label(l.hash, { note: note.trim() })}
+                        onBlur={() => void label(l.hash, { note: notesCore.cleanNote(note) })}
                       />
                     </View>
                   ) : null}
