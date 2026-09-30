@@ -71,3 +71,6 @@ export * as spend from "../../public/tera/core/spend.js";
 
 // Caps on what the wallet pays out through Tera, per payment, per day and per month.
 export * as limits from "../../public/tera/core/limits.js";
+
+// Searching and filtering the activity list by address, name, hash, asset, type, status and date.
+export * as activitySearch from "../../public/tera/core/activity-search.js";
