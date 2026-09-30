@@ -1,21 +1,41 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-f287cdec6244",
-  "builtAt": "2026-09-26T19:26:19.888Z",
+  "release": "r-9a049b8b6b23",
+  "builtAt": "2026-09-30T14:46:35.507Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
   "files": [
+    {
+      "path": "core/activity-search.js",
+      "hash": "sha256-sUhT+m/8odBsqqW4vdeVK36rb5ZBb0GQXvcbSk9KmDA=",
+      "bytes": 6150
+    },
+    {
+      "path": "core/business-email.js",
+      "hash": "sha256-iTrj/3ftdj/uNEa4jQfa8f5ou679BHIyS/ZPzS5rQRk=",
+      "bytes": 3435
+    },
     {
       "path": "core/contacts.js",
       "hash": "sha256-2l3Xvi2ltsP+KS4xt9bKiUdqaAagiQt0Y+WWI+UHSaI=",
       "bytes": 9239
     },
     {
+      "path": "core/discretion.js",
+      "hash": "sha256-+kyJyKa6MrVprH/1TcZPIRYDJeh0wFmJsxuiU1eS7U8=",
+      "bytes": 4446
+    },
+    {
       "path": "core/ingress.js",
       "hash": "sha256-dSyimOuvviIdzrDfHEYNMWZI8Fx6xzzfMm+FGlHUR9w=",
       "bytes": 8034
+    },
+    {
+      "path": "core/limits.js",
+      "hash": "sha256-hpY/vR0krUcMG97igvgG+zdL/am7ZF0tPNJBuLWBq2U=",
+      "bytes": 4852
     },
     {
       "path": "core/linkage.js",
@@ -28,14 +48,34 @@
       "bytes": 7671
     },
     {
+      "path": "core/network-speed.js",
+      "hash": "sha256-7m7OxjS9DWZQVWydNj/8NbVBIesDGR1ZuDoCEGk0lQQ=",
+      "bytes": 5408
+    },
+    {
       "path": "core/nft.js",
       "hash": "sha256-YDquuil9zAiulVDhrDEG3hlf6bTUYugqPMkFZMGSwlA=",
       "bytes": 23440
     },
     {
+      "path": "core/notes.js",
+      "hash": "sha256-diH8JhMkfT8QPMrBUdm8eBQHG8dFDxqqk6AxpxmeqQA=",
+      "bytes": 3014
+    },
+    {
+      "path": "core/notify.js",
+      "hash": "sha256-NRVfuJMNJZIbYhwQJAobrmpKf77S0nrGFV08YoSk0EA=",
+      "bytes": 6557
+    },
+    {
       "path": "core/parse.js",
       "hash": "sha256-04F+RPPxK6AJrihdwb+UkeDIshFq1hHWPJWcsJqNDuw=",
       "bytes": 16509
+    },
+    {
+      "path": "core/pay-links.js",
+      "hash": "sha256-whjZxEmz1sRgf1c/Rfs0D6VXuwUoyEbTVTexhIC7inU=",
+      "bytes": 4752
     },
     {
       "path": "core/receipt.js",
@@ -53,9 +93,19 @@
       "bytes": 6419
     },
     {
+      "path": "core/spend.js",
+      "hash": "sha256-qf071absOqZtfFX6kWYjiYU5moXuQwjfJOWKryEnr3E=",
+      "bytes": 6459
+    },
+    {
       "path": "core/tags.js",
       "hash": "sha256-cGw01ChCVxS/6mKWjdsAjIzwBNZvf0zEe0aqUvPuo5A=",
       "bytes": 9680
+    },
+    {
+      "path": "core/teams.js",
+      "hash": "sha256-8huJ1mU2JHg6GarcZszZWLoemVf9Qx+Q76fi4CbEsEU=",
+      "bytes": 5535
     },
     {
       "path": "core/update.js",
@@ -203,5 +253,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-8ofN7GJEkX/PMEHfaXnSe4sfKy3lFLeKNZCBTDcsQa4="
+  "filesHash": "sha256-mgSbi2sjsPyT4wMJQV9+i5wWhRaNWv72FJKSeTAVbZk="
 }

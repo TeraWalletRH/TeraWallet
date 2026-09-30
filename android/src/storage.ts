@@ -65,6 +65,16 @@ export type LocalData = {
   /** Whether the spotlight walkthrough has run on this device already. */
   tourSeen: boolean;
   /**
+   * What the screen shows and what it holds back. Display only — neither
+   * setting changes a balance, a total, a report or anything that gets
+   * signed. core/discretion.js holds the rules, including the one that keeps
+   * privacy mode away from the figure an owner is authorising.
+   */
+  hideSmall?: boolean;
+  /** In display currency. Absent means the module's default of one dollar. */
+  hideSmallThreshold?: number;
+  privacy?: boolean;
+  /**
    * Tokens the owner added by contract address — the app checks a balance
    * for these on every refresh alongside the built-in and registry-known
    * assets, the same way MetaMask's "import tokens" does for anything it
