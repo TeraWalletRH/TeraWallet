@@ -1,5 +1,6 @@
 import React from "react";
-import { Dimensions, Pressable, View } from "react-native";
+import { Pressable, View } from "react-native";
+import { screenSize } from "./viewport";
 import { colors, Steps, styles as s, Text } from "./ui";
 
 export type TourRect = { x: number; y: number; width: number; height: number };
@@ -40,7 +41,7 @@ export function AppTour({
   backLabel: string;
 }) {
   if (!rect) return null;
-  const { width: screenW, height: screenH } = Dimensions.get("window");
+  const { width: screenW, height: screenH } = screenSize();
   const pad = 6;
   const hx = Math.max(0, rect.x - pad);
   const hy = Math.max(0, rect.y - pad);

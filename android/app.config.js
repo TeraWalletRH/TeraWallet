@@ -14,6 +14,12 @@ module.exports = ({ config }) => {
   return {
     ...config,
     name: release ? "Tera Wallet" : "Tera Preview",
+    // The web build (scripts/build-web.mjs) is served from /app/ on the site,
+    // and asks for its bundle and assets there.
+    ...(process.env.TERA_WEB_BASE
+      ? { experiments: { ...config.experiments, baseUrl: process.env.TERA_WEB_BASE } }
+      : {}),
+    web: { ...config.web, output: "single", bundler: "metro" },
     // Updates arrive as whole APKs, so the in-bundle updater stays off.
     updates: { enabled: false },
     android: {

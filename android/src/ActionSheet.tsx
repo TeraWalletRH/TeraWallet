@@ -1,5 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
-import { Animated, Easing, Modal, PanResponder, Pressable, View } from "react-native";
+import {
+  Animated,
+  Easing,
+  Modal,
+  PanResponder,
+  Platform,
+  Pressable,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, Icon, styles as s, Text } from "./ui";
 
@@ -42,6 +51,9 @@ export function ActionSheet({
   title: string;
   actions: SheetAction[];
 }) {
+  // A desktop browser gets a dialog in the middle of the window rather than a
+  // sheet across the bottom of a monitor (the same width as App.tsx's WIDE_MIN).
+  const wide = Platform.OS === "web" && useWindowDimensions().width >= 1024;
   // Stays mounted through the closing animation, then unmounts.
   const [mounted, setMounted] = useState(visible);
   const [height, setHeight] = useState(420);
@@ -130,11 +142,17 @@ export function ActionSheet({
       >
         <Pressable accessibilityLabel="Close" onPress={onClose} style={{ flex: 1 }} />
       </Animated.View>
-      <View style={{ flex: 1, justifyContent: "flex-end" }} pointerEvents="box-none">
+      <View
+        style={{ flex: 1, justifyContent: wide ? "center" : "flex-end" }}
+        pointerEvents="box-none"
+      >
         <Animated.View
           {...pan.panHandlers}
           onLayout={(e) => setHeight(e.nativeEvent.layout.height)}
-          style={{ transform: [{ translateY: Animated.add(rise, drag) }] }}
+          style={[
+            { transform: [{ translateY: Animated.add(rise, drag) }] },
+            wide && { width: "100%", maxWidth: 520, alignSelf: "center" },
+          ]}
         >
           <SafeAreaView
             edges={["bottom"]}
@@ -144,6 +162,7 @@ export function ActionSheet({
               borderTopRightRadius: 28,
               borderWidth: 1,
               borderBottomWidth: 0,
+              ...(wide && { borderRadius: 28, borderBottomWidth: 1 }),
               borderColor: "#ffffff14",
               paddingHorizontal: 20,
               paddingTop: 12,

@@ -1,0 +1,23 @@
+{
+  "id": "/app/",
+  "name": "Tera Wallet",
+  "short_name": "Tera",
+  "description": "A self-custodial wallet. Your recovery phrase and keys stay on this device.",
+  "start_url": "/app/",
+  "scope": "/app/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#171e19",
+  "theme_color": "#171e19",
+  "categories": ["finance"],
+  "icons": [
+    { "src": "/app/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/app/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    {
+      "src": "/app/icon-maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -51,6 +51,10 @@ SECRET_PATTERNS = (
     (re.compile(rb"\b(?:sk|rk|pk)_(?:live|test)_[A-Za-z0-9]{10,}"), b"EXAMPLE_REDACTED_FIXTURE"),
     (re.compile(rb"\bghp_[A-Za-z0-9]{36}\b"), b"EXAMPLE_REDACTED_FIXTURE"),
     (re.compile(rb"\bgithub_pat_[A-Za-z0-9_]{50,}"), b"EXAMPLE_REDACTED_FIXTURE"),
+    # CoinGecko. backend/src/env.ts carries a working key as its default so the
+    # deployed backend keeps its rate limit, and this keeps that key out of the
+    # public mirror the way the GHCR tokens above are already kept out.
+    (re.compile(rb"\bCG-[A-Za-z0-9]{16,}\b"), b"EXAMPLE_REDACTED_FIXTURE"),
 )
 
 

@@ -43,6 +43,6 @@ export interface PreparedTransaction {
   intent: UserIntent;
   gates: GateResult[];
   approvals?: PreparedUnsignedTransaction[];
-  quote?: { amountOut: string; amountOutWei: string; decimalsOut: number; priceImpactPct: number; route: string; quotedAt: string };
+  quote?: { amountOut: string; amountOutWei: string; decimalsOut: number; priceImpactPct: number; route: string; comparedRoutes?: Array<{ route: string; amountOut: string }>; quotedAt: string };
   expiresAt?: string;
 }

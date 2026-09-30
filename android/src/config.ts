@@ -1,6 +1,16 @@
 import { defineChain, zeroAddress } from "viem";
 export const API = process.env.EXPO_PUBLIC_API_URL || "https://api.terawallet.app";
 export const RPC = process.env.EXPO_PUBLIC_RPC_URL || "https://rpc.mainnet.chain.robinhood.com";
+// Every read the wallet makes goes to one node, one after another, so that
+// node's worst minute is the whole wallet's worst minute. Set
+// EXPO_PUBLIC_RPC_URLS to a comma-separated list to give reads somewhere else
+// to go when the first node stalls. Sending is deliberately not included: a
+// broadcast that falls through to a second node is a broadcast that may have
+// been accepted twice.
+export const RPCS: string[] = String(process.env.EXPO_PUBLIC_RPC_URLS || RPC)
+  .split(",")
+  .map((url: string) => url.trim())
+  .filter((url: string) => url.length > 0);
 export const POLICY_SIGNER =
   process.env.EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY || "0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05";
 export const chain = defineChain({

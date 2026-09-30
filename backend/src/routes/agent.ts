@@ -1,7 +1,7 @@
 import { Router, type Request, type Response } from "express";
-import { isAddress } from "viem";
+import { isAddress, parseUnits } from "viem";
 import { env } from "../env";
-import { SUPPORTED_RWA_ASSETS, findAsset } from "../data/assets";
+import { SUPPORTED_RWA_ASSETS } from "../data/assets";
 import { runGatePipeline } from "../pipeline/gates";
 import { buildPreparedTransaction, UnsupportedActionError } from "../pipeline/builder";
 import { type UserIntent } from "../pipeline/types";
@@ -9,48 +9,6 @@ import { logger } from "../logging";
 import { authorizeServiceSession, ServiceSessionAuthorizationError } from "./session";
 
 const router = Router();
-
-const SYSTEM_PROMPT = `
-You are the Tera Wallet AI Agent Assistant on Robinhood Chain (Chain ID: 4663).
-The core principle of Tera Wallet is:
-"The agent formulates an intent. Tera Wallet determines whether the intent is permitted. The owner retains final authority."
-
-Your task:
-Analyze the user's natural language request regarding Real World Assets (RWAs) and tokenized assets on Robinhood Chain.
-Select the most appropriate approved asset from the Robinhood Asset Registry:
-${JSON.stringify(
-  SUPPORTED_RWA_ASSETS.map((a) => ({
-    symbol: a.symbol,
-    name: a.name,
-    address: a.address,
-    category: a.category,
-    minInvestment: `$${a.minInvestmentUsd}`,
-    decimals: a.decimals,
-  })),
-  null,
-  2
-)}
-
-Determine the intent actionType (BUY, SELL, TRANSFER, CLAIM_YIELD).
-Determine the token amount in base units (e.g. 18 decimals for equities/WETH/ETH, 6 decimals for USDG).
-Calculate maxSpendUsdCents (e.g. $100 = 10000 cents).
-For TRANSFER, extract the exact recipient address from the user's request. Never invent an address.
-
-You MUST respond strictly with a valid JSON object matching this schema:
-{
-  "explanation": "Brief explanation of the proposed action, why this asset was chosen, and that it requires owner approval.",
-  "intent": {
-    "assetAddress": "0x...",
-    "actionType": "BUY" | "SELL" | "TRANSFER" | "CLAIM_YIELD",
-    "amount": "1000000000000000000",
-    "maxSpendUsdCents": 10000,
-    "recipient": "0x..."
-  }
-}
-For BUY, SELL, and CLAIM_YIELD, use null for recipient. For TRANSFER, recipient is required and must be a 20-byte EVM address copied from the user's request.
-Do not include markdown formatting or backticks around the JSON.
-`;
-
 
 /**
  * POST /api/agent/propose
@@ -83,62 +41,21 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
       return;
     }
 
-    let explanation = "Drafted supervised RWA intent proposal based on user request.";
+    // Transaction fields are extracted from the owner's words and checked by
+    // the deterministic pipeline. A language model cannot invent spend terms.
+    let explanation = "";
     let intentDraft: Partial<UserIntent> = {};
-
-    // 1. Attempt AI synthesis via Groq Qwen
-    if (env.groqApiKey) {
-      try {
-        const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${env.groqApiKey}`,
-            "Content-Type": "application/json",
-          },
-          signal: AbortSignal.timeout(5000),
-          body: JSON.stringify({
-            model: env.groqModel,
-            messages: [
-              { role: "system", content: SYSTEM_PROMPT },
-              { role: "user", content: prompt },
-            ],
-            temperature: 0.1,
-            max_tokens: 500,
-          }),
-        });
-
-        if (response.ok) {
-          const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-          const content = data.choices?.[0]?.message?.content?.trim() ?? "";
-          const cleaned = content.replace(/```json/g, "").replace(/```/g, "").trim();
-          const parsed = JSON.parse(cleaned);
-
-          if (parsed.explanation) explanation = parsed.explanation;
-          if (parsed.intent) intentDraft = parsed.intent;
-        }
-      } catch (aiErr) {
-          logger.warn(req, "agent.groq_fallback", aiErr);
-      }
-    }
-
-    // Heuristic fallback if LLM was skipped or failed
-    if (!intentDraft.assetAddress) {
+    {
       const lowerPrompt = prompt.toLowerCase();
-      let matchedAsset = findAsset("SPCX") ?? SUPPORTED_RWA_ASSETS[0];
-
-      // Check all assets and aliases
-      for (const asset of SUPPORTED_RWA_ASSETS) {
-        if (
-          lowerPrompt.includes(asset.symbol.toLowerCase()) ||
+      const mentions = (word: string) => new RegExp(`\\b${word.toLowerCase()}\\b`).test(lowerPrompt);
+      const matchedAsset = SUPPORTED_RWA_ASSETS.find((asset) =>
+        mentions(asset.symbol) || (!!asset.underlyingTicker && mentions(asset.underlyingTicker)))
+        ?? [...SUPPORTED_RWA_ASSETS].sort((a, b) => b.name.length - a.name.length).find((asset) =>
           lowerPrompt.includes(asset.name.toLowerCase()) ||
-          (asset.underlyingTicker && lowerPrompt.includes(asset.underlyingTicker.toLowerCase()))
-        ) {
-          matchedAsset = asset;
-          break;
-        }
-      }
+          lowerPrompt.includes(asset.name.toLowerCase().split(" (")[0]) ||
+          mentions(asset.name.split(" ")[0]));
 
-      let action: "BUY" | "SELL" | "TRANSFER" | "CLAIM_YIELD" = "BUY";
+      let action: "BUY" | "SELL" | "TRANSFER" | "CLAIM_YIELD" | undefined;
       if (
         lowerPrompt.includes("buy") ||
         lowerPrompt.includes("invest") ||
@@ -163,27 +80,41 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
         action = "TRANSFER";
       }
 
-      const matchNum = prompt.match(/\$?(\d+(\.\d+)?)/);
-      const parsedDollars = matchNum ? parseFloat(matchNum[1]) : 100;
-      const multiplier = BigInt(10) ** BigInt(matchedAsset.decimals);
-      const amountUnits = (BigInt(Math.floor(parsedDollars)) * multiplier).toString();
+      const withoutAddresses = prompt.replace(/0x[a-fA-F0-9]{40}/g, "")
+        .replace(/\bchain(?:\s+id)?\s*[:#]?\s*\d+\b/gi, "");
+      const amounts = [...withoutAddresses.matchAll(/(?:\$|\b)(\d+(?:\.\d+)?)(?![\d.])/g)];
+      if (!matchedAsset || !action || amounts.length !== 1) {
+        res.status(422).json({ success: false, error: "Specify an action, supported asset, and exact amount." });
+        return;
+      }
+      const amountText = amounts[0][1];
+      const inputDecimals = action === "BUY" ? (matchedAsset.symbol === "TERA" ? 18 : 6) : matchedAsset.decimals;
+      let amountUnits: string;
+      try { amountUnits = parseUnits(amountText, inputDecimals).toString(); }
+      catch { res.status(422).json({ success: false, error: "Amount has too many decimal places for this asset." }); return; }
+      if (BigInt(amountUnits) <= 0n) {
+        res.status(422).json({ success: false, error: "Enter an amount greater than zero." });
+        return;
+      }
 
       intentDraft = {
         assetAddress: matchedAsset.address,
         actionType: action,
         amount: amountUnits,
-        maxSpendUsdCents: Math.floor(parsedDollars * 100),
+        maxSpendUsdCents: action === "BUY" && matchedAsset.symbol !== "TERA" ? Math.round(Number(amountText) * 100) : undefined,
         ...(action === "TRANSFER"
           ? { recipient: prompt.match(/0x[a-fA-F0-9]{40}/)?.[0] as `0x${string}` | undefined }
           : {}),
       };
 
-      explanation = `Drafted proposal to ${action} $${parsedDollars} worth of ${matchedAsset.symbol} (${matchedAsset.name}) on Robinhood Chain. Verified through deterministic compliance checks before owner signature.`;
+      explanation = action === "BUY"
+        ? `You are about to buy ${matchedAsset.symbol} using ${amountText} ${matchedAsset.symbol === "TERA" ? "ETH" : "USDG"}. Review the quote before signing.`
+        : `You are about to ${action === "TRANSFER" ? "send" : action.toLowerCase()} ${amountText} ${matchedAsset.symbol}. Review the transaction before signing.`;
     }
 
 
     const walletAddress = ownerAddress as `0x${string}`;
-    const actionType = (intentDraft.actionType as UserIntent["actionType"]) ?? "BUY";
+    const actionType = intentDraft.actionType as UserIntent["actionType"];
     // A transfer destination is owner-critical data. Only take it from the
     // submitted request, never from an AI-generated explanation or fallback.
     const recipient = prompt.match(/0x[a-fA-F0-9]{40}/)?.[0] as `0x${string}` | undefined;
@@ -199,8 +130,8 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
       accountAddress: walletAddress,
       assetAddress: intentDraft.assetAddress as `0x${string}`,
       actionType,
-      amount: String(intentDraft.amount ?? "100000000"),
-      maxSpendUsdCents: intentDraft.maxSpendUsdCents ?? 10000,
+      amount: intentDraft.amount!,
+      ...(intentDraft.maxSpendUsdCents !== undefined ? { maxSpendUsdCents: intentDraft.maxSpendUsdCents } : {}),
       ...(actionType === "TRANSFER" ? { recipient } : {}),
     };
 
@@ -292,8 +223,7 @@ router.post("/api/agent/chat", async (req: Request, res: Response) => {
     if (!env.groqApiKey) {
       res.status(200).json({
         success: true,
-        reply:
-          "Tera Wallet enforces private authorization for supervised RWA agents on Robinhood Chain. Every intent is strictly evaluated across 5 deterministic gates (Asset Registry, ERC-3643 Eligibility Preflight, Policy Vault, Risk Engine, and Owner Approval Controller) before any transaction is presented for your signature.",
+        reply: "I can explain a transaction or prepare a proposal. Tell me the asset, amount, and action; you review before signing.",
       });
       return;
     }
@@ -311,12 +241,12 @@ router.post("/api/agent/chat", async (req: Request, res: Response) => {
           {
             role: "system",
             content:
-              "You are the Tera Wallet Advisor on Robinhood Chain. Explain RWA compliance, ERC-3643 standard, identity claims, and Tera Wallet's private-by-default architecture clearly and concisely.",
+              "You are Tera Wallet's concise assistant. Answer the exact question in one or two short sentences, at most 45 words. Use plain language. For transaction risk, distinguish verified facts from unknowns. Never claim to have checked a wallet, recipient, contract, gas, route, or quote unless that data is supplied. Suggest one practical next step only when useful. Never claim a transaction is safe or approved.",
           },
           { role: "user", content: message },
         ],
         temperature: 0.3,
-        max_tokens: 300,
+        max_tokens: 100,
       }),
     });
 
@@ -325,7 +255,9 @@ router.post("/api/agent/chat", async (req: Request, res: Response) => {
     }
 
     const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
-    const reply = data.choices?.[0]?.message?.content ?? "No response generated";
+    const generated = (data.choices?.[0]?.message?.content ?? "I couldn't answer just now.").trim();
+    const words = generated.replace(/[#*`]/g, "").split(/\s+/);
+    const reply = words.slice(0, 45).join(" ");
 
     res.status(200).json({
       success: true,
@@ -335,8 +267,7 @@ router.post("/api/agent/chat", async (req: Request, res: Response) => {
     logger.error(req, "agent.chat_failed", error);
     res.status(200).json({
       success: true,
-      reply:
-        "Tera Wallet keeps approval with the owner. The assistant can prepare a typed proposal, but Tera checks the asset, eligibility, policy, and risk conditions before your wallet is asked to sign.",
+      reply: "I couldn't answer just now. Try again, or prepare a proposal to see the wallet's checks before signing.",
     });
   }
 });

@@ -611,6 +611,56 @@ export function Choices({
     </View>
   );
 }
+/** A row of choices that wraps onto new lines: for filters with more options than Choices fits. */
+export function Chips({
+  label,
+  options,
+  value,
+  select,
+}: {
+  label: string;
+  options: { value: string; label: string }[];
+  value: string;
+  select: (value: string) => void;
+}) {
+  return (
+    <View style={{ gap: 8 }}>
+      <Text style={styles.eyebrow}>{label}</Text>
+      <View
+        accessibilityRole="radiogroup"
+        accessibilityLabel={label}
+        style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}
+      >
+        {options.map((o) => {
+          const on = o.value === value;
+          return (
+            <Pressable
+              key={o.value}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: on }}
+              onPress={() => select(o.value)}
+              style={({ pressed }) => ({
+                minHeight: 34,
+                paddingHorizontal: 14,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: on ? colors.green : colors.line,
+                backgroundColor: on ? colors.green : "transparent",
+                alignItems: "center",
+                justifyContent: "center",
+                opacity: pressed ? 0.7 : 1,
+              })}
+            >
+              <Text style={[styles.small, { fontWeight: "600", color: on ? colors.paper : colors.ink }]}>
+                {o.label}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
 /** The kit's screen header: a round back button, the title centred over the screen. */
 export function Header({
   title,
