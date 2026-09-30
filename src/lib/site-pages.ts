@@ -10,14 +10,28 @@ function keyFor(pathname: string) {
 }
 
 export async function serveSitePage(pathname: string): Promise<Response> {
-  const loader = pages[keyFor(pathname)] ?? pages["../site/404/index.html"];
-  const found = Boolean(pages[keyFor(pathname)]);
+  const pageKey = keyFor(pathname);
+  const isAdminRoute = /^\/admin(?:\/|$)/.test(pathname);
+
+  // Check for direct key match or admin fallback
+  let loader = pages[pageKey];
+  let found = Boolean(loader);
+
+  if (!found && isAdminRoute) {
+    loader = pages["../site/admin/index.html"] || pages["../site/admin/login/index.html"] || pages["../site/admin/staking/index.html"];
+    found = Boolean(loader);
+  }
+
+  if (!loader) {
+    loader = pages["../site/404/index.html"];
+  }
 
   if (!loader) {
     return new Response("Not found", { status: 404 });
   }
 
   let html = await loader();
+
   if (/^\/dashboard(?:\/|$)/.test(pathname)) {
     const configuration = {
       apiUrl:
@@ -33,10 +47,6 @@ export async function serveSitePage(pathname: string): Promise<Response> {
       policyBundleMaxAgeSeconds: Number(
         import.meta.env["VITE_POLICY_BUNDLE_MAX_AGE_SECONDS"] || 86400,
       ),
-      // Oblivious HTTP. Unset means the wallet connects to Tera directly, which
-      // is what it has always done. The relay must be operated by someone other
-      // than Tera: the wallet refuses to run when it is not, because one party
-      // holding both the address and the request is the thing this prevents.
       ohttpRelayUrl: import.meta.env["VITE_OHTTP_RELAY_URL"] || "",
       ohttpKeyConfigUrl: import.meta.env["VITE_OHTTP_KEY_CONFIG_URL"] || "",
       ohttpPaths: (
@@ -53,6 +63,7 @@ export async function serveSitePage(pathname: string): Promise<Response> {
       `<script id="tera-config" type="application/json">${json}</script></head>`,
     );
   }
+
   return new Response(html, {
     status: found ? 200 : 404,
     headers: { "content-type": "text/html; charset=utf-8" },

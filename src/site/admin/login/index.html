@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TERA Admin Console - Login</title>
+    <style>
+      :root {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        background: #020617;
+        color: #f8fafc;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; }
+      .card { max-width: 420px; width: 100%; bg: #0f172a; background: rgba(15, 23, 42, 0.9); border: 1px solid #1e293b; border-radius: 16px; padding: 32px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5); backdrop-filter: blur(12px); }
+      .icon { width: 56px; height: 56px; border-radius: 14px; background: linear-gradient(135deg, #34d399, #0d9488); display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; color: #020617; font-weight: bold; font-size: 24px; shadow: 0 10px 15px -3px rgba(16, 185, 129, 0.3); }
+      h1 { text-align: center; font-size: 22px; font-weight: 800; margin: 0; letter-spacing: -0.02em; }
+      p.sub { text-align: center; color: #34d399; font-size: 13px; font-weight: 600; margin: 4px 0 16px 0; }
+      p.desc { text-align: center; color: #94a3b8; font-size: 12px; margin: 0 0 24px 0; line-height: 1.4; }
+      .form-group { margin-bottom: 20px; }
+      label { display: block; font-size: 12px; font-weight: 600; color: #cbd5e1; margin-bottom: 8px; }
+      input[type="password"] { width: 100%; padding: 12px 14px; background: #020617; border: 1px solid #1e293b; border-radius: 12px; color: #f8fafc; font-size: 14px; font-family: monospace; outline: none; transition: border-color 0.2s; }
+      input[type="password"]:focus { border-color: #10b981; }
+      button.btn { width: 100%; padding: 14px; background: #10b981; border: 0; border-radius: 12px; color: #020617; font-weight: 700; font-size: 14px; cursor: pointer; transition: background 0.2s; }
+      button.btn:hover { background: #34d399; }
+      .status { font-size: 12px; color: #f43f5e; text-align: center; margin-bottom: 16px; display: none; }
+      .footer { border-top: 1px solid #1e293b; margin-top: 24px; padding-top: 16px; text-align: center; font-size: 11px; color: #64748b; font-family: monospace; }
+    </style>
+  </head>
+  <body>
+    <div className="card">
+      <div class="card">
+        <div class="icon">🛡️</div>
+        <h1>TERA WALLET</h1>
+        <p class="sub">Admin Console Sign In</p>
+        <p class="desc">Enter master security passcode to access administrative controls.</p>
+
+        <div id="status" class="status"></div>
+
+        <form id="adminLoginForm">
+          <div class="form-group">
+            <label for="pass">Master Admin Passcode</label>
+            <input type="password" id="pass" placeholder="Enter passcode..." required autofocus />
+          </div>
+          <button type="submit" class="btn">Sign In to Console</button>
+        </form>
+
+        <div class="footer">
+          Protected Environment • Robinhood Chain (4663)
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const form = document.getElementById('adminLoginForm');
+      const passInput = document.getElementById('pass');
+      const statusDiv = document.getElementById('status');
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        statusDiv.style.display = 'none';
+        const passcode = passInput.value.trim();
+        if (!passcode) return;
+
+        try {
+          const res = await fetch('/api/admin/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: passcode }),
+          });
+          const data = await res.json();
+          if (res.ok && data.success && data.token) {
+            localStorage.setItem('tera_admin_token', data.token);
+            window.location.href = '/admin/dashboard';
+          } else {
+            statusDiv.textContent = data.error || 'Invalid admin passcode';
+            statusDiv.style.display = 'block';
+          }
+        } catch (err) {
+          statusDiv.textContent = 'Connection failed to backend API';
+          statusDiv.style.display = 'block';
+        }
+      });
+    </script>
+  </body>
+</html>
