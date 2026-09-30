@@ -21,6 +21,7 @@ import teamsRouter from "./routes/teams";
 import payLinksRouter from "./routes/pay-links";
 import notifyRouter from "./routes/notify";
 import leaderboardRouter from "./routes/leaderboard";
+import adminRouter from "./routes/admin";
 
 const app = express();
 
@@ -67,5 +68,6 @@ app.use(intentRouter);
 app.use(agentRouter);
 app.use(sessionRouter);
 app.use(accountRouter);
+app.use(adminRouter);
 
 export default app;
