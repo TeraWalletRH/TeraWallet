@@ -39,6 +39,7 @@ import * as tags from "./src/tags";
 import * as biz from "./src/business";
 import * as payLinks from "./src/paylinks";
 import { LinksScreen } from "./src/business/Links";
+import { SplitScreen } from "./src/Split";
 import * as notify from "./src/notify";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
@@ -54,6 +55,7 @@ import {
   lookalike as lookalikeCore,
   networkSpeed,
   notes as notesCore,
+  split as splitCore,
   contacts as contactsCore,
   limits as limitsCore,
   spend as spendCore,
@@ -7373,6 +7375,17 @@ function Wallet() {
         </>
       );
     }
+    if (page === "split")
+      return (
+        <SplitScreen
+          t={t}
+          go={setPage}
+          notify={setNotice}
+          splits={splitCore.cleanSplits(data.splits)}
+          save={(list) => store({ ...dataRef.current, splits: list })}
+          suggestions={book.map((c) => c.name)}
+        />
+      );
     if (page === "request")
       return <LinksScreen personal t={t} owner={owner as Address} go={setPage} notify={setNotice} />;
     if (page === "network") {
@@ -9661,6 +9674,12 @@ function Wallet() {
           },
           ...(payLinks.payLinksAvailable()
             ? [
+                {
+                  key: "split",
+                  icon: "split",
+                  label: t("Split a bill", "分账"),
+                  onPress: () => openFlow("split"),
+                },
                 {
                   key: "request",
                   icon: "link",
