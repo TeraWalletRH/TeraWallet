@@ -89,3 +89,6 @@ export * as lookalike from "../../public/tera/core/lookalike.js";
 
 // Paying several people in one review, from a pasted list or a CSV.
 export * as batch from "../../public/tera/core/batch.js";
+
+// Splitting a bill into one payment request per person.
+export * as split from "../../public/tera/core/split.js";

@@ -531,6 +531,7 @@ function Dashboard({
           ["arrow-top-right", "Send", "发送", () => onFlow("send")],
           ["arrow-down", "Receive", "收款", () => onFlow("receive")],
           ["layers", "Batch send", "批量发送", () => onFlow("batch")],
+          ["split", "Split", "分账", () => onFlow("split")],
           ["link", "Links", "链接", () => go("biz-links")],
           ["shield-check", "Team", "团队", () => go("biz-team")],
           ["users", "Accounts", "账户", () => go("biz-accounts")],
