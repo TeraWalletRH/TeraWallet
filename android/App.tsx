@@ -38,6 +38,7 @@ import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
 import * as biz from "./src/business";
 import * as payLinks from "./src/paylinks";
+import { LinksScreen } from "./src/business/Links";
 import * as notify from "./src/notify";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
@@ -1952,7 +1953,7 @@ function Wallet() {
     );
   }
   /** The warning: both addresses, differences marked, and the two ways on. */
-  function lookalikePanel(address: string, use: (address: string) => void) {
+  function lookalikePanel(address: string, use?: (address: string) => void) {
     const typed = address.trim();
     const match = lookalikeOf(typed);
     if (!match) return null;
@@ -2011,9 +2012,11 @@ function Wallet() {
           </Text>
         ) : (
           <>
-            <Button primary onPress={() => use(match.address)}>
-              {t(`Pay ${match.label} instead`, `改为付款给 ${match.label}`)}
-            </Button>
+            {use ? (
+              <Button primary onPress={() => use(match.address)}>
+                {t(`Pay ${match.label} instead`, `改为付款给 ${match.label}`)}
+              </Button>
+            ) : null}
             <Button danger onPress={() => setLookalikeAccepted(typed.toLowerCase())}>
               {t("It's a different person — I checked every character", "这是另一个人，我已逐字核对")}
             </Button>
@@ -2534,8 +2537,8 @@ function Wallet() {
     const typed = spendTo.trim();
     const destination = isAddress(typed) ? typed : (await resolveName(typed)).address;
     guard();
-    // A payment link's merchant comes from Tera, not the clipboard; anything else is checked.
-    if (!spendLink) checkLookalike(destination);
+    // A link's address is checked too: anyone can make a request link.
+    checkLookalike(destination);
     const link = spendLink;
     if (link) {
       // Read again: the merchant may have cancelled it, or someone paid it, since it opened.
@@ -5360,6 +5363,11 @@ function Wallet() {
               </Text>
             </View>
           </View>
+          {payLinks.payLinksAvailable() ? (
+            <Button onPress={() => setPage("request")}>
+              {t("Request an exact amount", "请求确切金额")}
+            </Button>
+          ) : null}
           {action("Copy address", "复制地址", async () => {
             await Clipboard.setStringAsync(owner);
             setNotice({
@@ -5527,7 +5535,12 @@ function Wallet() {
                 <Text style={[s.text, { fontWeight: "700", flex: 1 }]}>
                   {link.email
                     ? link.name || link.email
-                    : t("Unverified merchant", "未验证商家")}
+                    : contactsCore.nameFor(book, link.merchant)
+                      ? t(
+                          `${contactsCore.nameFor(book, link.merchant)} · in your contacts`,
+                          `${contactsCore.nameFor(book, link.merchant)} · 你的联系人`,
+                        )
+                      : t("Not verified", "未验证")}
                 </Text>
               </View>
               <Text style={s.small}>
@@ -5537,8 +5550,8 @@ function Wallet() {
                       `${link.email} · 此钱包已向 Tera 证明的商业邮箱`,
                     )
                   : t(
-                      "This wallet has not proved a business email. Check the address with whoever sent you the link before you pay.",
-                      "此钱包尚未证明商业邮箱。付款前请与发送链接的人核对地址。",
+                      "Anyone can make a request link. Check the address with whoever sent it before you pay.",
+                      "任何人都可以创建收款链接。付款前请与发送者核对地址。",
                     )}
               </Text>
               <Text style={[s.small, { color: colors.ink }]} selectable>
@@ -5625,7 +5638,7 @@ function Wallet() {
               )}
             </View>
           )}
-          {!link && lookalikePanel(spendTo, (address) => setSpendTo(address))}
+          {lookalikePanel(spendTo, link ? undefined : (address) => setSpendTo(address))}
           <Field
             label={t("Note (optional, only you see it)", "备注（可选，仅你可见）")}
             value={payNote}
@@ -6982,6 +6995,8 @@ function Wallet() {
         </>
       );
     }
+    if (page === "request")
+      return <LinksScreen personal t={t} owner={owner as Address} go={setPage} notify={setNotice} />;
     if (page === "network") {
       const r = netReading;
       const feeWei = networkSpeed.transferFeeWei(r?.gasPriceWei ?? null);
@@ -9260,6 +9275,16 @@ function Wallet() {
             label: t("Receive", "收款"),
             onPress: () => openFlow("receive"),
           },
+          ...(payLinks.payLinksAvailable()
+            ? [
+                {
+                  key: "request",
+                  icon: "link",
+                  label: t("Request", "请求收款"),
+                  onPress: () => setPage("request"),
+                },
+              ]
+            : []),
           {
             key: "swap",
             icon: "swap-horizontal",

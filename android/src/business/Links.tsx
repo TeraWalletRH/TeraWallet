@@ -1,9 +1,11 @@
-// Payment links in Tera Business: ask for an exact dollar amount, send the
-// link, and see it marked paid once the payment is on chain.
+// Payment links: ask for an exact dollar amount, send the link, and see it
+// marked paid once the payment is on chain. Tera Business calls them payment
+// links; the wallet calls the same thing "Request money" (`personal`), for
+// asking a friend rather than invoicing a client.
 
 import * as Clipboard from "expo-clipboard";
 import React, { useCallback, useEffect, useState } from "react";
-import { Linking, Pressable, TextInput, View } from "react-native";
+import { Image, Linking, Platform, Pressable, Share, TextInput, View } from "react-native";
 import type { Address } from "viem";
 import { spend } from "../core";
 import { cancelLink, createLink, myLinks, payLinksAvailable, type PayLink } from "../paylinks";
@@ -18,6 +20,8 @@ export type LinksProps = {
   owner: Address;
   go: (page: string) => void;
   notify: (notice: Notice) => void;
+  /** The wallet's "Request money": no business email, friendlier words, back to Home. */
+  personal?: boolean;
 };
 
 function Card({ children, style }: { children: React.ReactNode; style?: object }) {
@@ -50,8 +54,10 @@ const STATUS: Record<PayLink["status"], [string, string]> = {
   cancelled: ["Cancelled", "已取消"],
 };
 
-export function LinksScreen({ t, owner, go, notify }: LinksProps) {
+export function LinksScreen({ t, owner, go, notify, personal = false }: LinksProps) {
   const [links, setLinks] = useState<PayLink[] | null>(null);
+  // The link whose QR code is open: the one just made, or one picked from the list.
+  const [shown, setShown] = useState<PayLink | null>(null);
   const [email, setEmail] = useState<string | null | undefined>(undefined);
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
@@ -71,10 +77,11 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
   useEffect(() => {
     if (!payLinksAvailable()) return;
     void load();
+    if (personal) return;
     void linkedEmail(owner)
       .then((found) => setEmail(found?.email ?? null))
       .catch(() => setEmail(null));
-  }, [load, owner]);
+  }, [load, owner, personal]);
 
   async function work(task: () => Promise<void>) {
     setBusy(true);
@@ -100,11 +107,30 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
       }),
     );
 
+  // The phone's share sheet, or the browser's where it has one; a copy otherwise.
+  const share = async (link: PayLink) => {
+    const message = link.note
+      ? t(
+          `Please pay me ${spend.formatDollars(BigInt(link.amount))} for ${link.note}: ${link.link}`,
+          `请为「${link.note}」向我支付 ${spend.formatDollars(BigInt(link.amount))}：${link.link}`,
+        )
+      : t(
+          `Please pay me ${spend.formatDollars(BigInt(link.amount))}: ${link.link}`,
+          `请向我支付 ${spend.formatDollars(BigInt(link.amount))}：${link.link}`,
+        );
+    try {
+      if (Platform.OS === "web" && !(globalThis as any).navigator?.share) throw new Error("no share sheet");
+      await Share.share({ message });
+    } catch {
+      copy(link);
+    }
+  };
+
   const header = (
     <Header
-      title={t("Payment links", "收款链接")}
+      title={personal ? t("Request money", "收款请求") : t("Payment links", "收款链接")}
       onBack={() => go("home")}
-      backLabel={t("Dashboard", "概览")}
+      backLabel={personal ? t("Home", "首页") : t("Dashboard", "概览")}
     />
   );
 
@@ -115,7 +141,9 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
         <Card>
           <Text style={s.label}>{t("Not switched on yet", "尚未开放")}</Text>
           <Text style={s.small}>
-            {t("Payment links are not available on this server yet.", "此服务器尚未开放收款链接。")}
+            {personal
+              ? t("Requests are not available on this server yet.", "此服务器尚未开放收款请求。")
+              : t("Payment links are not available on this server yet.", "此服务器尚未开放收款链接。")}
           </Text>
         </Card>
       </>
@@ -134,10 +162,15 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
       <Card>
         <Text style={s.label}>{t("Ask to be paid", "发起收款")}</Text>
         <Text style={s.small}>
-          {t(
-            "Set an amount in dollars and a note. Whoever opens the link pays exactly that in USDG, to this wallet, from their own Tera — and it shows here as paid once the payment is on chain.",
-            "设置美元金额和备注。打开链接的人会用自己的 Tera 向此钱包支付等额 USDG，付款上链后此处显示为已付款。",
-          )}
+          {personal
+            ? t(
+                "Ask a friend for an exact amount. They open the link or scan the code in Tera and pay you in USDG — it shows here as paid once it's on chain.",
+                "向朋友请求一个确切金额。对方在 Tera 中打开链接或扫码，用 USDG 向你付款，付款上链后此处显示为已付款。",
+              )
+            : t(
+                "Set an amount in dollars and a note. Whoever opens the link pays exactly that in USDG, to this wallet, from their own Tera — and it shows here as paid once the payment is on chain.",
+                "设置美元金额和备注。打开链接的人会用自己的 Tera 向此钱包支付等额 USDG，付款上链后此处显示为已付款。",
+              )}
         </Text>
         <View style={{ flexDirection: "row", alignItems: "center" }}>
           <Text style={{ fontSize: 34, fontWeight: "700", color: colors.muted }}>$</Text>
@@ -158,13 +191,22 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
           />
         </View>
         <Field
-          label={t("Note (payers see this)", "备注（付款人可见）")}
+          label={
+            personal
+              ? t("What's it for? (they see this)", "用途（对方可见）")
+              : t("Note (payers see this)", "备注（付款人可见）")
+          }
           value={note}
           onChangeText={setNote}
           maxLength={140}
-          placeholder={t("Invoice #104 · Logo design", "发票 #104 · 标志设计")}
+          autoCapitalize="sentences"
+          placeholder={
+            personal
+              ? t("Pizza on Friday", "周五的披萨")
+              : t("Invoice #104 · Logo design", "发票 #104 · 标志设计")
+          }
         />
-        {email === null && (
+        {!personal && email === null && (
           <Text style={s.small}>
             {t(
               'Payers will see this wallet\'s address and "Unverified merchant". Link your business email so they see it instead.',
@@ -187,29 +229,78 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
               setAmount("");
               setNote("");
               setLinks((current) => [made, ...(current || [])]);
-              copy(made);
+              setShown(made);
+              if (!personal) copy(made);
             })
           }
         >
           {units
-            ? t(
-                `Create link for ${spend.formatDollars(units)}`,
-                `创建 ${spend.formatDollars(units)} 收款链接`,
-              )
-            : t("Create link", "创建链接")}
+            ? personal
+              ? t(`Request ${spend.formatDollars(units)}`, `请求 ${spend.formatDollars(units)}`)
+              : t(
+                  `Create link for ${spend.formatDollars(units)}`,
+                  `创建 ${spend.formatDollars(units)} 收款链接`,
+                )
+            : personal
+              ? t("Request", "请求")
+              : t("Create link", "创建链接")}
         </Button>
       </Card>
+      {shown && shown.status === "open" ? (
+        <Card style={{ alignItems: "center" }}>
+          <Text style={s.label}>
+            {t(
+              `Ask for ${spend.formatDollars(BigInt(shown.amount))}`,
+              `请求 ${spend.formatDollars(BigInt(shown.amount))}`,
+            )}
+          </Text>
+          {shown.note ? <Text style={[s.small, { textAlign: "center" }]}>{shown.note}</Text> : null}
+          {/* White behind the code whatever the theme: a scanner needs the contrast. */}
+          <View style={{ backgroundColor: "#ffffff", padding: 14, borderRadius: 18 }}>
+            <Image
+              accessibilityLabel={t("Payment request QR code", "收款请求二维码")}
+              source={{
+                uri: `https://api.qrserver.com/v1/create-qr-code/?size=220x220&data=${encodeURIComponent(shown.link)}`,
+              }}
+              style={{ width: 200, height: 200 }}
+            />
+          </View>
+          <Text selectable style={[s.small, { textAlign: "center" }]}>
+            {shown.link}
+          </Text>
+          <View style={{ flexDirection: "row", gap: 10, alignSelf: "stretch" }}>
+            <View style={{ flex: 1 }}>
+              <Button onPress={() => copy(shown)}>{t("Copy link", "复制链接")}</Button>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Button primary onPress={() => void share(shown)}>
+                {t("Share", "分享")}
+              </Button>
+            </View>
+          </View>
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "They need Tera to pay it. You'll see it marked paid below.",
+              "对方需要使用 Tera 付款。付款后会在下方显示为已付款。",
+            )}
+          </Text>
+        </Card>
+      ) : null}
       <Card>
         <View
           style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}
         >
-          <Text style={s.label}>{t("Your links", "你的链接")}</Text>
+          <Text style={s.label}>
+            {personal ? t("Your requests", "你的请求") : t("Your links", "你的链接")}
+          </Text>
           <Action label={t("Refresh", "刷新")} onPress={() => void work(load)} />
         </View>
         {!links ? (
           <Skeleton width="100%" height={60} borderRadius={12} />
         ) : !links.length ? (
-          <Text style={s.small}>{t("No links yet.", "暂无链接。")}</Text>
+          <Text style={s.small}>
+            {personal ? t("No requests yet.", "暂无请求。") : t("No links yet.", "暂无链接。")}
+          </Text>
         ) : (
           links.map((link) => (
             <View
@@ -253,6 +344,7 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
                 {link.status === "open" && (
                   <>
                     <Action label={t("Copy link", "复制链接")} onPress={() => copy(link)} />
+                    <Action label={t("Show QR", "显示二维码")} onPress={() => setShown(link)} />
                     <Action
                       danger
                       label={t("Cancel", "取消")}
@@ -264,6 +356,7 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
                               entry.id === closed.id ? closed : entry,
                             ),
                           );
+                          if (shown?.id === closed.id) setShown(null);
                         })
                       }
                     />
