@@ -49,6 +49,7 @@ import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
 import {
   activitySearch,
+  batch as batchCore,
   discretion,
   lookalike as lookalikeCore,
   networkSpeed,
@@ -124,6 +125,10 @@ type Review = {
   activityType?: "send" | "swap" | "bridge";
   /** The owner's private note, saved under the transaction's hash once it is signed. */
   note?: string;
+  /** For a batch: the biggest single payment in dollars, held to the per-payment cap. */
+  spendLargestUsd?: string | null;
+  /** For a batch: one entry per step, each recorded as its own payment. */
+  batch?: { to: string; label: string; amount: string; symbol: string; usd: string | null; note: string }[];
 };
 type ReviewSnapshot = Pick<Review, "rows" | "steps">;
 const tokenImages: Record<string, any> = {
@@ -720,6 +725,11 @@ function Wallet() {
     // A lookalike address the owner has looked at and confirmed is the one they
     // mean, lowercase. Any other address is checked afresh.
     [lookalikeAccepted, setLookalikeAccepted] = useState(""),
+    // Batch send: the pasted list, the asset it pays in, and lookalike
+    // addresses in it the owner has checked and confirmed.
+    [batchText, setBatchText] = useState(""),
+    [batchSymbol, setBatchSymbol] = useState("USDG"),
+    [batchAccepted, setBatchAccepted] = useState<string[]>([]),
     // The latest reading of the network, for the speed label. null until the first one.
     [netReading, setNetReading] = useState<ReturnType<typeof networkSpeed.reading> | null>(null),
     // Where and when the open Activity row landed, read from its receipt.
@@ -2184,11 +2194,12 @@ function Wallet() {
     return ((BigInt(raw) * priceUnits) / 10n ** BigInt(decimals) / 10n ** 6n).toString();
   }
   /** Why a payment breaks a limit, in words, or "" when it fits. */
-  function limitProblem(usd: string | null) {
+  function limitProblem(usd: string | null, largest?: string | null) {
     const result = limitsCore.check({
       limits: dataRef.current.limits,
       amount: usd === null ? null : BigInt(usd),
       rows: combinedHistory,
+      largest: largest == null ? null : BigInt(largest),
     });
     if (result.ok) return "";
     const dollars = spendCore.formatDollars;
@@ -2213,8 +2224,8 @@ function Wallet() {
         );
   }
   /** Stop here when a payment breaks a limit. */
-  function enforceLimits(usd: string | null) {
-    const problem = limitProblem(usd);
+  function enforceLimits(usd: string | null, largest?: string | null) {
+    const problem = limitProblem(usd, largest);
     if (problem) throw new Error(problem);
   }
   function usdReviewRow(symbol: string, tokenAmount: string): [string, string] {
@@ -2657,6 +2668,143 @@ function Wallet() {
       },
     });
   }
+  /** What the list on the batch screen pays, read the same way the screen shows it. */
+  function readBatch() {
+    const asset = assets.find((a) => a.symbol === batchSymbol) ?? assets[0];
+    const parsed = batchCore.parse(batchText, { decimals: asset.decimals, emails: biz.emailAvailable() });
+    return { asset, ...parsed };
+  }
+  /** Who a batch line is, as the review and Activity show it. */
+  function batchLabel(to: string, address: string) {
+    const name = contactsCore.nameFor(book, address);
+    if (name) return name;
+    return isAddress(to) ? short(address) : nameLabel(to);
+  }
+  async function prepareBatch(guard: () => void) {
+    const { asset, payments, errors } = readBatch();
+    check(payments.length > 0, t("Add at least one payment.", "请至少添加一笔付款。"));
+    check(!errors.length, t("Fix the lines marked in red first.", "请先修正标红的行。"));
+    // Names are resolved now, as for a single send: the address signed is the one held now.
+    const resolved: (ReturnType<typeof batchCore.parse>["payments"][number] & { address: string })[] = [];
+    const seen = new Map<string, number>();
+    for (const p of payments) {
+      const address = p.kind === "address" ? p.to : (await resolveName(p.to)).address;
+      guard();
+      check(
+        address.toLowerCase() !== String(owner).toLowerCase(),
+        t(`Line ${p.line} pays this wallet.`, `第 ${p.line} 行付款给本钱包。`),
+      );
+      const before = seen.get(address.toLowerCase());
+      check(
+        before === undefined,
+        t(
+          `Lines ${before} and ${p.line} pay the same address. Combine them or remove one.`,
+          `第 ${before} 行和第 ${p.line} 行付款给同一地址，请合并或删除一行。`,
+        ),
+      );
+      seen.set(address.toLowerCase(), p.line);
+      check(
+        !lookalikeOf(address) || batchAccepted.includes(address.toLowerCase()),
+        t(
+          `Line ${p.line} is a lookalike of an address you know. Check it on the screen first.`,
+          `第 ${p.line} 行是你已知地址的相似地址，请先在屏幕上核对。`,
+        ),
+      );
+      resolved.push({ ...p, address });
+    }
+    const sum = batchCore.total(resolved);
+    check(
+      sum <= BigInt(balance?.[asset.symbol] || "0"),
+      t(
+        `This batch needs ${formatUnits(sum, asset.decimals)} ${asset.symbol}, more than this wallet holds.`,
+        `此批次需要 ${formatUnits(sum, asset.decimals)} ${asset.symbol}，超出钱包余额。`,
+      ),
+    );
+    const usds = resolved.map((p) => paymentUsd(asset.symbol, p.units, asset.decimals));
+    const totalUsd = usds.some((u) => u === null) ? null : usds.reduce((a, u) => a + BigInt(u!), 0n).toString();
+    const largestUsd = usds.some((u) => u === null)
+      ? null
+      : usds.reduce((a, u) => (BigInt(u!) > a ? BigInt(u!) : a), 0n).toString();
+    enforceLimits(totalUsd, largestUsd);
+    const build = () =>
+      resolved.map((p) => transferTx(asset.address as Address, p.address as Address, p.units.toString()));
+    const steps = build();
+    const fingerprint = JSON.stringify(steps);
+    const totalText = formatUnits(sum, asset.decimals);
+    const lines = resolved.map((p, i) => ({
+      to: p.address,
+      label: batchLabel(p.to, p.address),
+      amount: p.amount,
+      symbol: asset.symbol,
+      usd: usds[i],
+      note: p.note,
+    }));
+    await presentReview({
+      title: t(`Review ${resolved.length} payments`, `审核 ${resolved.length} 笔付款`),
+      activityType: "send",
+      rows: [
+        [t("Asset", "资产"), asset.symbol],
+        [t("Payments", "付款笔数"), String(resolved.length)],
+        [t("Total", "合计"), `${totalText} ${asset.symbol}`],
+        usdReviewRow(asset.symbol, totalText),
+        ...lines.map(
+          (line, i): [string, string] => [
+            `${i + 1}. ${line.label}`,
+            `${line.amount} ${asset.symbol}${line.note ? ` · ${line.note}` : ""}`,
+          ],
+        ),
+        [
+          t("How it's sent", "发送方式"),
+          t(
+            "One after another, each its own transaction. If one fails, the ones after it are not sent.",
+            "逐笔发送，每笔都是独立交易。若某笔失败，其后的付款不会发送。",
+          ),
+        ],
+      ],
+      steps,
+      // The steps signed are the steps reviewed: rebuilt from the same list and compared.
+      verify: () => {
+        if (JSON.stringify(build()) !== fingerprint)
+          throw new Error(t("The batch changed. Review it again.", "批次已变化，请重新审核。"));
+      },
+      spendUsd: totalUsd,
+      spendLargestUsd: largestUsd,
+      batch: lines,
+      returnTo: "activity",
+    });
+  }
+  /** On the web, read a CSV the owner picks into the list. */
+  function uploadBatchFile() {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".csv,.txt,text/csv,text/plain";
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      if (file.size > 200_000) {
+        setNotice({
+          title: t("File too large", "文件过大"),
+          body: t("A batch file is at most 200 KB.", "批次文件不能超过 200 KB。"),
+          tone: "error",
+        });
+        return;
+      }
+      setBatchAccepted([]);
+      setBatchText(await file.text());
+    };
+    input.click();
+  }
+  /** On the web, save a starting CSV with the columns named. */
+  function downloadBatchTemplate() {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    const url = URL.createObjectURL(new Blob([batchCore.TEMPLATE], { type: "text/csv" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "tera-batch.csv";
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
   function openSpend() {
     setError("");
     setPayNote("");
@@ -2945,7 +3093,7 @@ function Wallet() {
     // Checked again here, not only when the payment was prepared: a review can
     // sit open while another payment goes out, or a limit is lowered.
     if (r.spendUsd !== undefined) {
-      const problem = limitProblem(r.spendUsd);
+      const problem = limitProblem(r.spendUsd, r.spendLargestUsd);
       if (problem) {
         setReview(null);
         setNotice({ title: t("Over your spending limit", "超出消费限额"), body: problem, tone: "error" });
@@ -2953,6 +3101,8 @@ function Wallet() {
       }
     }
     setSigning(true);
+    // A batch's notes, by hash, for Business, where notes are written after signing.
+    const batchNotes: { hash: string; note: string }[] = [];
     try {
       let submittedHash = "";
       const activityType = r.activityType ?? (r.bridgeInput || r.isPrivateBridge ? "bridge" : "send");
@@ -2971,7 +3121,25 @@ function Wallet() {
         r.verify,
         async (record) => {
           if (record.step === record.totalSteps) submittedHash = record.hash;
-          const row = {
+          const line = r.batch?.[record.step - 1];
+          if (line && line.note) batchNotes.push({ hash: record.hash, note: line.note });
+          const row = line
+            ? {
+                ...record,
+                // Each payment in a batch is whole on its own, so it shows in Activity.
+                step: 1,
+                totalSteps: 1,
+                title: t(`Sent ${line.amount} ${line.symbol}`, `已发送 ${line.amount} ${line.symbol}`),
+                activityType: "send",
+                activityAmount: `${line.amount} ${line.symbol}`,
+                counterparty: line.label,
+                recipient: line.to,
+                payee: line.to,
+                spendUsd: line.usd ?? undefined,
+                reviewSnapshot: { rows: r.rows, steps: [r.steps[record.step - 1]] } satisfies ReviewSnapshot,
+                batch: { index: record.step, of: r.batch!.length },
+              }
+            : {
             ...record,
             title: record.step === record.totalSteps ? activityTitle : t("Approval", "授权"),
             activityType: record.step === record.totalSteps ? activityType : "approval",
@@ -2989,9 +3157,11 @@ function Wallet() {
           };
           // The note rides in the same write as the row, so neither can undo the other.
           const withNote =
-            r.note && !sharedNotes && record.step === record.totalSteps
-              ? notesCore.setNote(dataRef.current.notes, record.hash, r.note)
-              : dataRef.current.notes;
+            line?.note && !sharedNotes
+              ? notesCore.setNote(dataRef.current.notes, record.hash, line.note)
+              : r.note && !sharedNotes && record.step === record.totalSteps
+                ? notesCore.setNote(dataRef.current.notes, record.hash, r.note)
+                : dataRef.current.notes;
           await store({
             ...dataRef.current,
             notes: withNote,
@@ -3002,6 +3172,8 @@ function Wallet() {
       );
       // Business notes live in the Reports book, a separate file, so they are written here.
       if (r.note && sharedNotes && submittedHash) await saveTxNote(submittedHash, r.note).catch(() => {});
+      if (sharedNotes)
+        for (const entry of batchNotes) await saveTxNote(entry.hash, entry.note).catch(() => {});
       if (r.afterSubmitted && submittedHash) await r.afterSubmitted(submittedHash);
       setPage(r.returnTo ?? "activity");
       await refresh();
@@ -3876,6 +4048,7 @@ function Wallet() {
   function openFlow(p: string, mode: "public" | "private" = "public") {
     setError("");
     setPayNote("");
+    if (p === "batch") setBatchAccepted([]);
     if (p === "swap") setSwapReturnPage(page);
     if (p === "bridge") setBridgeReturnPage(page);
     setAssetSymbol(p === "swap" ? "ETH" : "USDG");
@@ -6995,6 +7168,211 @@ function Wallet() {
         </>
       );
     }
+    if (page === "batch") {
+      const { asset, payments, errors } = readBatch();
+      const sum = batchCore.total(payments);
+      const have = BigInt(balance?.[asset.symbol] || "0");
+      const short_ = sum > have;
+      const flagged = payments
+        .filter((p) => p.kind === "address")
+        .map((p) => ({ p, match: lookalikeOf(p.to) }))
+        .filter((f) => f.match && !batchAccepted.includes(f.p.to.toLowerCase()));
+      const reason = (e: { line: number; reason: string; first?: number }) =>
+        ({
+          recipient: biz.emailAvailable()
+            ? t("isn't an address, @tag or email", "不是有效地址、@标签或邮箱")
+            : t("isn't an address or @tag", "不是有效地址或 @标签"),
+          amount: t("the amount isn't a number", "金额不是数字"),
+          decimals: t(`${asset.symbol} has at most ${asset.decimals} decimals`, `${asset.symbol} 最多 ${asset.decimals} 位小数`),
+          zero: t("the amount is zero", "金额为零"),
+          duplicate: t(`pays the same recipient as line ${e.first}`, `与第 ${e.first} 行收款人相同`),
+          "too-many": t(`a batch is at most ${batchCore.LIMITS.maxPayments} payments`, `每批最多 ${batchCore.LIMITS.maxPayments} 笔`),
+          columns: t("needs a recipient and an amount", "需要收款人和金额"),
+        })[e.reason] || e.reason;
+      const choices = assets.filter((a) => BigInt(balance?.[a.symbol] || "0") > 0n || a.symbol === batchSymbol);
+      return (
+        <>
+          <Header title={t("Batch send", "批量发送")} onBack={() => setPage("home")} backLabel={t("Home", "首页")} />
+          <View style={[s.panel, { gap: 6 }]}>
+            <Text style={s.small}>
+              {t(
+                "Pay up to 50 people in one review. One payment per line: who, how much, and an optional note only you see.",
+                "一次审核最多向 50 人付款。每行一笔：收款人、金额，以及仅你可见的备注（可选）。",
+              )}
+            </Text>
+          </View>
+          {choices.length ? (
+            <Chips
+              label={t("Pay in", "付款资产")}
+              value={asset.symbol}
+              select={(symbol) => {
+                setBatchSymbol(symbol);
+                setBatchAccepted([]);
+              }}
+              options={choices.map((a) => ({ value: a.symbol, label: a.symbol }))}
+            />
+          ) : null}
+          <View style={{ gap: 8 }}>
+            <Text style={s.eyebrow}>{t("Payments", "付款列表")}</Text>
+            <TextInput
+              accessibilityLabel={t("Payments, one per line", "付款列表，每行一笔")}
+              value={batchText}
+              onChangeText={(text) => {
+                setBatchText(text);
+                setBatchAccepted([]);
+              }}
+              multiline
+              autoCorrect={false}
+              autoCapitalize="none"
+              placeholder={
+                biz.emailAvailable()
+                  ? "0x5b27…9f05, 25, rent share\n@astra, 10\npay@acme.com, 120, invoice 1042"
+                  : "0x5b27…9f05, 25, rent share\n@astra, 10"
+              }
+              placeholderTextColor={colors.faint}
+              selectionColor={colors.green}
+              style={[
+                s.mono,
+                {
+                  minHeight: 150,
+                  textAlignVertical: "top",
+                  padding: 14,
+                  borderRadius: 16,
+                  borderWidth: 1,
+                  borderColor: colors.line,
+                  backgroundColor: colors.wash,
+                  color: colors.ink,
+                },
+              ]}
+            />
+            {Platform.OS === "web" ? (
+              <View style={{ flexDirection: "row", gap: 18, flexWrap: "wrap" }}>
+                <Pressable accessibilityRole="button" onPress={uploadBatchFile} hitSlop={6}>
+                  <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                    {t("Upload CSV", "上传 CSV")}
+                  </Text>
+                </Pressable>
+                <Pressable accessibilityRole="button" onPress={downloadBatchTemplate} hitSlop={6}>
+                  <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                    {t("Download template", "下载模板")}
+                  </Text>
+                </Pressable>
+              </View>
+            ) : null}
+          </View>
+          {errors.length ? (
+            <View style={[s.error, { gap: 4 }]}>
+              {errors.map((e) => (
+                <Text key={`${e.line}-${e.reason}`} style={s.text}>
+                  {t(`Line ${e.line}: ${reason(e)}`, `第 ${e.line} 行：${reason(e)}`)}
+                </Text>
+              ))}
+            </View>
+          ) : null}
+          {flagged.length ? (
+            <View style={[s.panel, { gap: 10, borderWidth: 1, borderColor: colors.danger, backgroundColor: colors.dangerTint }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Icon name="alert" size={18} color={colors.danger} />
+                <Text style={[s.label, { color: colors.danger, flex: 1 }]}>
+                  {t("Lookalike addresses — check them", "相似地址，请核对")}
+                </Text>
+              </View>
+              {flagged.map(({ p, match }) => (
+                <View key={p.line} style={{ gap: 3 }}>
+                  <Text style={s.small}>
+                    {t(
+                      `Line ${p.line} looks like ${match!.label}'s address, but is different:`,
+                      `第 ${p.line} 行看起来像 ${match!.label} 的地址，但并不相同：`,
+                    )}
+                  </Text>
+                  <Text selectable style={s.mono}>
+                    {lookalikeCore.diff(p.to, match!.address).map((run: { text: string; same: boolean }, i: number) => (
+                      <Text key={i} style={run.same ? undefined : { color: colors.danger, fontWeight: "800", textDecorationLine: "underline" }}>
+                        {run.text}
+                      </Text>
+                    ))}
+                  </Text>
+                  <Text selectable style={[s.mono, { color: colors.muted }]}>
+                    {match!.address}
+                  </Text>
+                </View>
+              ))}
+              <Button
+                danger
+                onPress={() =>
+                  setBatchAccepted((list) => [...list, ...flagged.map((f) => f.p.to.toLowerCase())])
+                }
+              >
+                {t("I checked every character of these", "我已逐字核对这些地址")}
+              </Button>
+            </View>
+          ) : null}
+          {payments.length ? (
+            <Group title={t(`${payments.length} payments`, `${payments.length} 笔付款`)}>
+              {payments.map((p) => (
+                <View
+                  key={p.line}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8 }}
+                >
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={s.label} numberOfLines={1}>
+                      {p.kind === "address"
+                        ? contactsCore.nameFor(book, p.to) || short(p.to)
+                        : p.kind === "tag"
+                          ? nameLabel(p.to)
+                          : p.to}
+                    </Text>
+                    {p.note ? (
+                      <Text style={s.small} numberOfLines={1}>
+                        {p.note}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Text style={s.mono}>{`${p.amount} ${asset.symbol}`}</Text>
+                </View>
+              ))}
+              <Row label={t("Total", "合计")} value={`${formatUnits(sum, asset.decimals)} ${asset.symbol}`} />
+              <Row
+                label={t("Balance", "余额")}
+                value={`${formatUnits(have, asset.decimals)} ${asset.symbol}`}
+              />
+            </Group>
+          ) : null}
+          {short_ ? (
+            <View style={s.error}>
+              <Text style={s.text}>
+                {t(
+                  `The total is more than this wallet holds in ${asset.symbol}.`,
+                  `合计超出本钱包的 ${asset.symbol} 余额。`,
+                )}
+              </Text>
+            </View>
+          ) : null}
+          <Button
+            primary
+            disabled={busy || !payments.length || errors.length > 0 || flagged.length > 0 || short_}
+            onPress={() => void run((guard) => prepareBatch(guard))}
+          >
+            {busy ? (
+              <TeraSpinner size={18} />
+            ) : payments.length ? (
+              t(
+                `Review ${payments.length} payments · ${formatUnits(sum, asset.decimals)} ${asset.symbol}`,
+                `审核 ${payments.length} 笔付款 · ${formatUnits(sum, asset.decimals)} ${asset.symbol}`,
+              )
+            ) : (
+              t("Review payments", "审核付款")
+            )}
+          </Button>
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Each payment is its own transaction, sent one after another after a single signature. Network fees apply to each.",
+              "每笔付款都是独立交易，一次签名后逐笔发送。每笔都需支付网络手续费。",
+            )}
+          </Text>
+        </>
+      );
+    }
     if (page === "request")
       return <LinksScreen personal t={t} owner={owner as Address} go={setPage} notify={setNotice} />;
     if (page === "network") {
@@ -9274,6 +9652,12 @@ function Wallet() {
             icon: "arrow-down",
             label: t("Receive", "收款"),
             onPress: () => openFlow("receive"),
+          },
+          {
+            key: "batch",
+            icon: "layers",
+            label: t("Batch send", "批量发送"),
+            onPress: () => openFlow("batch"),
           },
           ...(payLinks.payLinksAvailable()
             ? [

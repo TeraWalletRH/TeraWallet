@@ -198,7 +198,7 @@ export async function execute(
       });
       if (index < steps.length - 1) {
         const receipt = await client.waitForTransactionReceipt({ hash, timeout: 90000 });
-        if (receipt.status !== "success") throw new Error("Approval reverted. / 授权交易失败。");
+        if (receipt.status !== "success") throw new Error("An earlier step failed on chain, so the steps after it were not sent. / 前一步在链上失败，之后的步骤未发送。");
         active();
         // Minutes may have passed here, so the network is worth checking again
         // before the next step is signed against it.
