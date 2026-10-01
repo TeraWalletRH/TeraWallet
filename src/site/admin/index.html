@@ -4,37 +4,43 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>TERA Admin Console</title>
+    <link rel="icon" href="/logo.png" />
     <style>
       :root {
-        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        background: #020617;
-        color: #f8fafc;
+        font-family: Inter, system-ui, -apple-system, sans-serif;
+        background: #0d1712;
+        color: #f2f0ee;
       }
       * { box-sizing: border-box; }
-      body { margin: 0; padding: 24px; }
-      .nav { display: flex; align-items: center; justify-content: space-between; border-b: 1px solid #1e293b; padding-bottom: 16px; margin-bottom: 24px; }
-      .brand { font-size: 18px; font-weight: 800; color: #10b981; text-decoration: none; display: flex; align-items: center; gap: 8px; }
-      .nav-links { display: flex; gap: 12px; }
-      .nav-links a { color: #94a3b8; text-decoration: none; font-size: 13px; font-weight: 600; padding: 6px 12px; border-radius: 8px; transition: background 0.2s; }
-      .nav-links a:hover, .nav-links a.active { background: #1e293b; color: #34d399; }
+      body { margin: 0; padding: 24px; background: #0d1712; }
+      .nav { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #243b2c; padding-bottom: 16px; margin-bottom: 24px; }
+      .brand { font-size: 16px; font-weight: 700; color: #f7f4de; text-decoration: none; display: flex; align-items: center; gap: 10px; font-family: 'IBM Plex Mono', monospace; }
+      .brand img { height: 32px; width: auto; }
+      .nav-links { display: flex; gap: 8px; flex-wrap: wrap; }
+      .nav-links a { color: #9da998; text-decoration: none; font-size: 11px; font-weight: 600; padding: 6px 12px; border-radius: 8px; transition: all 0.2s; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; }
+      .nav-links a:hover, .nav-links a.active { background: #243b2c; color: #f7f4de; border: 1px solid #768143; }
       .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 32px; }
-      .card { background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; padding: 20px; }
-      .card-title { font-size: 12px; font-weight: 600; color: #94a3b8; margin-bottom: 8px; uppercase; }
-      .card-val { font-size: 28px; font-weight: 800; color: #f8fafc; }
-      .section { background: #0f172a; border: 1px solid #1e293b; border-radius: 14px; padding: 24px; margin-bottom: 24px; }
-      h2 { font-size: 16px; font-weight: 700; margin-top: 0; color: #f8fafc; }
+      .card { background: #16251c; border: 1px solid #243b2c; border-radius: 14px; padding: 20px; }
+      .card-title { font-size: 11px; font-weight: 600; color: #8a9765; margin-bottom: 8px; text-transform: uppercase; font-family: 'IBM Plex Mono', monospace; }
+      .card-val { font-size: 28px; font-weight: 700; color: #f7f4de; font-family: monospace; }
+      .section { background: #16251c; border: 1px solid #243b2c; border-radius: 14px; padding: 24px; margin-bottom: 24px; }
+      h2 { font-size: 16px; font-weight: 700; margin-top: 0; color: #f7f4de; }
       table { width: 100%; text-align: left; border-collapse: collapse; font-size: 12px; }
-      th { padding: 12px; background: #020617; border-bottom: 1px solid #1e293b; color: #94a3b8; text-transform: uppercase; }
-      td { padding: 12px; border-bottom: 1px solid #1e293b; font-family: monospace; }
-      .btn { padding: 8px 12px; background: #10b981; border: 0; border-radius: 8px; color: #020617; font-weight: 700; font-size: 12px; cursor: pointer; }
-      .btn-danger { background: rgba(244, 63, 94, 0.15); color: #f43f5e; border: 1px solid rgba(244, 63, 94, 0.3); }
+      th { padding: 12px; background: #0b130e; border-bottom: 1px solid #243b2c; color: #8a9765; text-transform: uppercase; font-family: 'IBM Plex Mono', monospace; }
+      td { padding: 12px; border-bottom: 1px solid #243b2c; font-family: monospace; color: #c4cebf; }
+      .btn { padding: 8px 12px; background: #243b2c; border: 1px solid #768143; border-radius: 8px; color: #f7f4de; font-weight: 700; font-size: 12px; cursor: pointer; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; }
+      .btn:hover { background: #52643e; color: #ffffff; }
+      .btn-danger { background: rgba(244, 63, 94, 0.15); color: #f87171; border: 1px solid rgba(244, 63, 94, 0.3); }
       .btn-danger:hover { background: rgba(244, 63, 94, 0.3); }
-      .badge { padding: 4px 8px; border-radius: 9999px; font-size: 10px; font-weight: 700; text-transform: uppercase; background: rgba(16, 185, 129, 0.15); color: #34d399; border: 1px solid rgba(16, 185, 129, 0.3); }
+      .badge { padding: 4px 8px; border-radius: 9999px; font-size: 10px; font-weight: 700; text-transform: uppercase; background: rgba(138, 151, 101, 0.15); color: #8a9765; border: 1px solid rgba(138, 151, 101, 0.3); font-family: 'IBM Plex Mono', monospace; }
     </style>
   </head>
   <body>
     <header class="nav">
-      <a href="/admin/dashboard" class="brand">🛡️ TERA ADMIN</a>
+      <a href="/admin/dashboard" class="brand">
+        <img src="/logo.png" alt="Tera Logo" onerror="this.onerror=null; this.src='/tera/logo.png';" />
+        <span>TERA ADMIN</span>
+      </a>
       <div class="nav-links">
         <a href="/admin/dashboard" class="active">Overview</a>
         <a href="/admin/accounts">Accounts</a>
@@ -45,8 +51,9 @@
         <a href="/admin/private-jobs">Private Jobs</a>
         <a href="/admin/staking">Staking</a>
         <a href="/admin/audit-logs">Audit Logs</a>
-        <a href="#" id="signOutBtn" style="color: #f43f5e;">Sign Out</a>
+        <a href="#" id="signOutBtn" style="color: #f87171;">Sign Out</a>
       </div>
+    </header>
     </header>
 
     <main id="app">
