@@ -28,11 +28,27 @@ export async function adminFetch<T = any>(
     headers.set("x-admin-token", token);
   }
 
-  const response = await fetch(path, {
-    ...options,
-    headers,
-    credentials: "same-origin",
-  });
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers,
+      credentials: "same-origin",
+    });
+
+    if (response.status === 502 || response.status === 404) {
+      throw new Error(`Proxy error ${response.status}`);
+    }
+  } catch {
+    // Fall back to direct backend port 3001 if local server-side proxy fails or is not running
+    const directUrl = path.startsWith("http")
+      ? path
+      : `http://127.0.0.1:3001${path}`;
+    response = await fetch(directUrl, {
+      ...options,
+      headers,
+    });
+  }
 
   const data = await response.json().catch(() => ({}));
 
