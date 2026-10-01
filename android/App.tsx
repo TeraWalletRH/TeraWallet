@@ -49,6 +49,7 @@ import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } f
 import {
   activitySearch,
   discretion,
+  lookalike as lookalikeCore,
   networkSpeed,
   notes as notesCore,
   contacts as contactsCore,
@@ -715,6 +716,9 @@ function Wallet() {
     [noteDraft, setNoteDraft] = useState<string | null>(null),
     // The note written on the Send or Pay screen, for the payment about to be reviewed.
     [payNote, setPayNote] = useState(""),
+    // A lookalike address the owner has looked at and confirmed is the one they
+    // mean, lowercase. Any other address is checked afresh.
+    [lookalikeAccepted, setLookalikeAccepted] = useState(""),
     // The latest reading of the network, for the speed label. null until the first one.
     [netReading, setNetReading] = useState<ReturnType<typeof networkSpeed.reading> | null>(null),
     // Where and when the open Activity row landed, read from its receipt.
@@ -1908,6 +1912,116 @@ function Wallet() {
       await store({ ...dataRef.current, notes: notesCore.setNote(dataRef.current.notes, hash, text) });
     }
   }
+  // Addresses the owner chose themselves: contacts, their own wallets, and
+  // whoever they paid from this device. Not what the explorer shows, because
+  // a poisoner's dust transfer shows there, and would make the lookalike
+  // "known" — the very address this check exists to catch.
+  function knownAddresses() {
+    const list: { address: string; label: string }[] = [];
+    for (const c of book) list.push({ address: c.address, label: c.name });
+    for (const a of accounts) list.push({ address: a.address, label: t("one of your wallets", "你的一个钱包") });
+    for (const h of data.history) {
+      if (h.payee && isAddress(h.payee))
+        list.push({
+          address: h.payee,
+          label: h.createdAt
+            ? t(`paid on ${new Date(h.createdAt).toLocaleDateString()}`, `${new Date(h.createdAt).toLocaleDateString()} 付过款`)
+            : t("paid before", "之前付过款"),
+        });
+    }
+    return list;
+  }
+  /** The known address `address` imitates, or null. */
+  function lookalikeOf(address: string) {
+    const typed = address.trim();
+    if (!isAddress(typed)) return null;
+    const match = lookalikeCore.findLookalike(typed, knownAddresses());
+    if (!match) return null;
+    const name = contactsCore.nameFor(book, match.address);
+    return { ...match, label: name || match.label };
+  }
+  /** Refuse to prepare a payment to an unconfirmed lookalike. Checked again here, not only on screen. */
+  function checkLookalike(address: string) {
+    const match = lookalikeOf(address);
+    check(
+      !match || lookalikeAccepted === address.trim().toLowerCase(),
+      t(
+        "This address looks like one you've used before but is different. Check it on the screen before you continue.",
+        "此地址与你用过的地址相似但并不相同。请先在屏幕上核对后再继续。",
+      ),
+    );
+  }
+  /** The warning: both addresses, differences marked, and the two ways on. */
+  function lookalikePanel(address: string, use: (address: string) => void) {
+    const typed = address.trim();
+    const match = lookalikeOf(typed);
+    if (!match) return null;
+    const accepted = lookalikeAccepted === typed.toLowerCase();
+    const marked = (shown: string, other: string) => (
+      <Text selectable style={[s.mono, { lineHeight: 20 }]}>
+        {lookalikeCore.diff(shown, other).map((run: { text: string; same: boolean }, i: number) => (
+          <Text
+            key={i}
+            style={
+              run.same
+                ? undefined
+                : { color: colors.danger, fontWeight: "800", textDecorationLine: "underline" }
+            }
+          >
+            {run.text}
+          </Text>
+        ))}
+      </Text>
+    );
+    return (
+      <View
+        style={[
+          s.panel,
+          {
+            gap: 12,
+            borderWidth: 1,
+            borderColor: accepted ? colors.line : colors.danger,
+            backgroundColor: accepted ? colors.wash : colors.dangerTint,
+          },
+        ]}
+      >
+        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+          <Icon name="alert" size={18} color={colors.danger} />
+          <Text style={[s.label, { color: colors.danger, flex: 1 }]}>
+            {t("Lookalike address — check it", "相似地址，请核对")}
+          </Text>
+        </View>
+        <Text style={s.small}>
+          {t(
+            lookalikeCore.WARNING,
+            "此地址的开头和结尾与你用过的某个地址相同，但它是另一个地址。骗子会制造相似地址并向你转一笔小额交易，让你从记录中误复制他们的地址。",
+          )}
+        </Text>
+        <View style={{ gap: 4 }}>
+          <Text style={s.eyebrow}>{t("You're about to pay", "你将付款给")}</Text>
+          {marked(typed, match.address)}
+        </View>
+        <View style={{ gap: 4 }}>
+          <Text style={s.eyebrow}>{t(`You've used before · ${match.label}`, `你之前用过 · ${match.label}`)}</Text>
+          {marked(match.address, typed)}
+        </View>
+        {accepted ? (
+          <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+            {t("You checked this address and chose to continue.", "你已核对此地址并选择继续。")}
+          </Text>
+        ) : (
+          <>
+            <Button primary onPress={() => use(match.address)}>
+              {t(`Pay ${match.label} instead`, `改为付款给 ${match.label}`)}
+            </Button>
+            <Button danger onPress={() => setLookalikeAccepted(typed.toLowerCase())}>
+              {t("It's a different person — I checked every character", "这是另一个人，我已逐字核对")}
+            </Button>
+          </>
+        )}
+      </View>
+    );
+  }
   function activityKind(row: any): "send" | "receive" | "swap" | "bridge" {
     if (row.direction === "send" || row.direction === "receive") return row.direction;
     if (row.activityType === "send" || row.activityType === "swap" || row.activityType === "bridge") return row.activityType;
@@ -2274,6 +2388,7 @@ function Wallet() {
     const destination =
       recipientKind === "tag" ? (await resolveName(recipient)).address : recipient.trim();
     guard();
+    checkLookalike(destination);
     const input = {
       ownerAddress: owner,
       accountAddress: owner,
@@ -2419,6 +2534,8 @@ function Wallet() {
     const typed = spendTo.trim();
     const destination = isAddress(typed) ? typed : (await resolveName(typed)).address;
     guard();
+    // A payment link's merchant comes from Tera, not the clipboard; anything else is checked.
+    if (!spendLink) checkLookalike(destination);
     const link = spendLink;
     if (link) {
       // Read again: the merchant may have cancelled it, or someone paid it, since it opened.
@@ -2577,6 +2694,7 @@ function Wallet() {
       recipientKind === "tag" ? (await resolveName(recipient)).address : recipient.trim();
     guard();
     check(isAddress(destination), t("Enter a valid recipient address.", "请输入有效收款地址。"));
+    checkLookalike(destination);
     const spendUsd = paymentUsd(asset, raw, decimals);
     enforceLimits(spendUsd);
     const created = await api("/api/private-send/jobs", {
@@ -5507,6 +5625,7 @@ function Wallet() {
               )}
             </View>
           )}
+          {!link && lookalikePanel(spendTo, (address) => setSpendTo(address))}
           <Field
             label={t("Note (optional, only you see it)", "备注（可选，仅你可见）")}
             value={payNote}
@@ -5834,6 +5953,14 @@ function Wallet() {
               )}
             </View>
           )}
+          {flowStep === 4 &&
+            lookalikePanel(
+              (tagLookup.state === "found" ? tagLookup.address : recipient) || "",
+              (address) => {
+                setRecipientKind("address");
+                setRecipient(address);
+              },
+            )}
           {flowStep === 4 && (
             <Field
               label={t("Note (optional, only you see it)", "备注（可选，仅你可见）")}
