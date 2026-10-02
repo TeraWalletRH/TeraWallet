@@ -60,6 +60,7 @@ import {
 import { check, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { screenOrigin } from "./src/viewport";
+import { useAppTheme } from "./src/theme";
 import { normalizePhrase, walletFromPhrase, walletFromPrivateKey } from "./src/crypto";
 import {
   Button,
@@ -639,6 +640,10 @@ function Wallet() {
     [liveTranscript, setLiveTranscript] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const { setting: themeSetting, effectiveTheme, updateSetting: updateThemeSetting } = useAppTheme();
+  useEffect(() => {
+    setColorTheme(effectiveTheme);
+  }, [effectiveTheme]);
   const [data, setData] = useState(vault.emptyData());
   // Which wallet this session opens: the personal one, or Tera Business — a
   // separate wallet with its own secret and PIN, web only for now (on the
@@ -668,7 +673,7 @@ function Wallet() {
     [flowStep, setFlowStep] = useState(0),
     [amountInvalid, setAmountInvalid] = useState(false),
     [settingsSection, setSettingsSection] = useState<
-      "root" | "security" | "privacy" | "sessions" | "device" | "accounts" | "contacts" | "limits" | "alerts"
+      "root" | "security" | "privacy" | "sessions" | "device" | "accounts" | "contacts" | "limits" | "alerts" | "appearance"
     >("root"),
     // The transaction banner at the top of the screen, and the browser's
     // permission for system notifications as last read.
@@ -7561,6 +7566,52 @@ function Wallet() {
       );
     }
     const toSettings = () => setSettingsSection("root");
+    if (settingsSection === "appearance") {
+      return (
+        <>
+          <Header
+            title={t("Appearance", "外观")}
+            onBack={toSettings}
+            backLabel={t("Settings", "设置")}
+          />
+          <Group title={t("Theme preference", "主题偏好设置")}>
+            <ListRow
+              icon="cellphone"
+              label={t("System default", "跟随系统")}
+              detail={t("Match your device's light or dark mode live", "实时跟随设备的浅色或深色模式")}
+              onPress={() => void updateThemeSetting("system")}
+              right={
+                themeSetting === "system" ? (
+                  <Icon name="check" size={20} color={colors.green} />
+                ) : null
+              }
+            />
+            <ListRow
+              icon="white-balance-sunny"
+              label={t("Light", "浅色模式")}
+              detail={t("Always use light theme", "始终使用浅色主题")}
+              onPress={() => void updateThemeSetting("light")}
+              right={
+                themeSetting === "light" ? (
+                  <Icon name="check" size={20} color={colors.green} />
+                ) : null
+              }
+            />
+            <ListRow
+              icon="moon-waning-crescent"
+              label={t("Dark", "深色模式")}
+              detail={t("Always use dark theme", "始终使用深色主题")}
+              onPress={() => void updateThemeSetting("dark")}
+              right={
+                themeSetting === "dark" ? (
+                  <Icon name="check" size={20} color={colors.green} />
+                ) : null
+              }
+            />
+          </Group>
+        </>
+      );
+    }
     if (settingsSection === "root") {
       const active = accounts.find((entry) => entry.active) || { index: 0, name: "" };
       return (
@@ -7738,6 +7789,27 @@ function Wallet() {
             ) : null}
           </Group>
           <Group title={t("Preferences", "偏好设置")}>
+            <ListRow
+              icon="palette-outline"
+              label={t("Appearance", "外观")}
+              detail={
+                themeSetting === "system"
+                  ? t("System default (follows OS)", "跟随系统 (自动切换)")
+                  : themeSetting === "light"
+                    ? t("Light mode", "浅色模式")
+                    : t("Dark mode", "深色模式")
+              }
+              onPress={() => setSettingsSection("appearance")}
+              right={
+                <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                  {themeSetting === "system"
+                    ? t("System", "跟随系统")
+                    : themeSetting === "light"
+                      ? t("Light", "浅色")
+                      : t("Dark", "深色")}
+                </Text>
+              }
+            />
             <ListRow
               icon="translate"
               label={t("Language", "语言")}
