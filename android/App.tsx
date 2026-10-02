@@ -2293,7 +2293,7 @@ function Wallet() {
       check(
         isTrustedRecipient(destination, book),
         t(
-          "Trusted-only mode is active. Recipient address must be saved in your contacts.",
+          "Trusted only mode is active. Recipient address must be saved in your contacts.",
           "受信任模式已启用。收款地址必须保存到联系人中。",
         ),
       );
@@ -4971,6 +4971,40 @@ function Wallet() {
                   </Pressable>
                 ))}
               </View>
+              {data.history?.some((item: any) => item?.status === "pending") ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setPage("activity")}
+                  style={({ pressed }) => [
+                    s.panel,
+                    {
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 12,
+                      borderColor: colors.lime,
+                      borderWidth: 1,
+                      backgroundColor: colors.tint,
+                      opacity: pressed ? 0.7 : 1,
+                    },
+                  ]}
+                >
+                  <View style={s.quickIcon}>
+                    <Icon name="clock" color={colors.lime} size={22} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.text, { fontWeight: "700", color: colors.lime }]}>
+                      {t(
+                        `${data.history.filter((i: any) => i?.status === "pending").length} transaction pending confirmation`,
+                        `${data.history.filter((i: any) => i?.status === "pending").length} 笔交易等待确认`,
+                      )}
+                    </Text>
+                    <Text style={s.small}>
+                      {t("Tap to view status and receipt details", "点击查看状态与收据详情")}
+                    </Text>
+                  </View>
+                  <Icon name="chevron-right" size={18} color={colors.lime} />
+                </Pressable>
+              ) : null}
               <Pressable
                 accessibilityRole="button"
                 onPress={openSpend}
@@ -7926,7 +7960,7 @@ function Wallet() {
             />
             <ListRow
               icon="clock"
-              label={t("Auto-lock timer", "自动锁定定时器")}
+              label={t("Auto lock timer", "自动锁定定时器")}
               detail={
                 (data.autoLockMinutes ?? 15) === 0
                   ? t("Never lock automatically", "从不自动锁定")
@@ -7943,7 +7977,7 @@ function Wallet() {
             />
             <ListRow
               icon="shield-check"
-              label={t("Trusted-only mode", "受信任模式")}
+              label={t("Trusted only mode", "受信任模式")}
               detail={
                 data.trustedOnlyMode
                   ? t("Transfers restricted to saved contacts", "仅允许向保存的联系人转账")
@@ -8218,7 +8252,7 @@ function Wallet() {
       };
       return (
         <>
-          <Header title={t("Auto-lock timer", "自动锁定定时器")} onBack={toSettings} backLabel={t("Settings", "设置")} />
+          <Header title={t("Auto lock timer", "自动锁定定时器")} onBack={toSettings} backLabel={t("Settings", "设置")} />
           <View style={[s.panel, { gap: 8 }]}>
             <Text style={s.small}>
               {t(
