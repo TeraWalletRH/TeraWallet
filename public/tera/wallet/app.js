@@ -16,6 +16,8 @@ import {
   assertWallet,
 } from "./core.js";
 import { ThemeManager } from "./theme.js";
+import { copyToClipboard, shareText } from "./share.js";
+import { checkAddressChecksum } from "./checks.js";
 
 export const themeManager = new ThemeManager();
 themeManager.applyToDocument();
@@ -2333,7 +2335,7 @@ function appearancePanel() {
 }
 
 function settings() {
-  return `<div class="content-grid">${appearancePanel()}<section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel" id="account-separation"><h2>Account separation</h2>${separationPanel()}</section><section class="panel"><h2>Your tag</h2>${tagPanel()}</section><section class="panel" id="saved-addresses"><h2>Saved addresses</h2>${contactsPanel()}</section><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
+  return `<div class="content-grid">${appearancePanel()}<section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${state.owner ? `<button class="btn" data-action="copy-text" data-text="${esc(state.owner)}">Copy address</button><button class="btn" data-action="share-text" data-text="${esc(state.owner)}">Share address</button>` : ""}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel" id="account-separation"><h2>Account separation</h2>${separationPanel()}</section><section class="panel"><h2>Your tag</h2>${tagPanel()}</section><section class="panel" id="saved-addresses"><h2>Saved addresses</h2>${contactsPanel()}</section><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
 /**
@@ -4309,6 +4311,30 @@ document.addEventListener("click", async (event) => {
         await prepare(p.intent, lineage);
         state.drafts = state.drafts.filter((d) => d !== p);
         void persist();
+        render();
+      }
+    }
+    if (action === "copy-text" && target.dataset.text) {
+      const ok = await copyToClipboard(target.dataset.text);
+      if (ok) {
+        state.notice = "Copied to clipboard.";
+        render();
+      }
+    }
+    if (action === "share-text" && target.dataset.text) {
+      const res = await shareText({ title: "Tera Wallet", text: target.dataset.text });
+      if (res.shared) {
+        state.notice = res.method === "clipboard" ? "Copied to clipboard." : "Shared successfully.";
+        render();
+      }
+    }
+    if (action === "fix-checksum" && target.dataset.targetId && target.dataset.checksummed) {
+      const field = document.getElementById(target.dataset.targetId);
+      if (field) {
+        field.value = target.dataset.checksummed;
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        state.notice = "Address converted to valid ERC-55 checksum.";
         render();
       }
     }
