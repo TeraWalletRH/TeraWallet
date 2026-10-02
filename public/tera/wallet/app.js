@@ -17,7 +17,7 @@ import {
 } from "./core.js";
 import { ThemeManager } from "./theme.js";
 import { copyToClipboard, shareText } from "./share.js";
-import { checkAddressChecksum } from "./checks.js";
+import { checkAddressChecksum, parseQrAddress } from "./checks.js";
 
 export const themeManager = new ThemeManager();
 themeManager.applyToDocument();
