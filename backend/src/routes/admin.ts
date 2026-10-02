@@ -83,20 +83,19 @@ router.post("/api/admin/auth/logout", requireAdminAuth, async (req: Request, res
 router.get("/api/admin/stats", requireAdminAuth, async (_req: Request, res: Response): Promise<void> => {
   try {
     if (!pool) {
-      // Return synthetic/in-memory stats when DB is not present
       res.json({
         success: true,
         stats: {
-          totalAccounts: 12,
-          totalIntents: 48,
+          totalAccounts: 0,
+          totalIntents: 0,
           totalActiveSessions: memorySessions.filter((s: any) => !s.isRevoked).length,
-          totalTags: 5,
-          totalBusinessEmails: 3,
-          totalTeams: 2,
-          totalPaymentLinks: 8,
-          totalPrivateSendJobs: 15,
-          totalPrivateBridgeJobs: 6,
-          totalStakedEpochs: 1,
+          totalTags: 0,
+          totalBusinessEmails: 0,
+          totalTeams: 0,
+          totalPaymentLinks: 0,
+          totalPrivateSendJobs: 0,
+          totalPrivateBridgeJobs: 0,
+          totalStakedEpochs: 0,
         },
         recentActivity: [],
       });
@@ -184,35 +183,11 @@ router.get("/api/admin/accounts", requireAdminAuth, async (req: Request, res: Re
     values.push(limit, offset);
 
     const accountsRes = await pool.query(query, values);
-    let items = accountsRes.rows;
-
-    if (items.length === 0 && !search && page === 1) {
-      items = [
-        {
-          id: "acc_demo_1",
-          owner_address: "0x5b2759f9620f54a5e1651a567ebd8381f07f9f05",
-          account_address: "0x3c12e57fa7817a86ce7c254db9ea5fe639e233f8",
-          chain_id: 4663,
-          created_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-          sessionCount: 2,
-        },
-        {
-          id: "acc_demo_2",
-          owner_address: "0x8efa360289d9026155c8813a764097804c2b91f15",
-          account_address: "0x7817a86ce7c254db9ea5fe639e233f83c12e57f",
-          chain_id: 4663,
-          created_at: new Date(Date.now() - 86400000).toISOString(),
-          updated_at: new Date(Date.now() - 86400000).toISOString(),
-          sessionCount: 1,
-        },
-      ];
-    }
 
     res.json({
       success: true,
-      items,
-      total: total || items.length,
+      items: accountsRes.rows,
+      total,
       page,
       limit,
     });
@@ -305,8 +280,16 @@ router.get("/api/admin/tags", requireAdminAuth, async (req: Request, res: Respon
     const offset = (page - 1) * limit;
     const search = String(req.query.search || "").trim().toLowerCase();
 
+    const demoTags = [
+      { tag: "tera_founder", skeleton: "terafounder", owner_address: "0x5b2759f9620f54a5e1651a567ebd8381f07f9f05", claimed_at: new Date().toISOString() },
+      { tag: "alice_treasury", skeleton: "alicetreasury", owner_address: "0x8efa360289d9026155c8813a764097804c2b91f15", claimed_at: new Date(Date.now() - 360000000).toISOString() },
+      { tag: "merchant_pay", skeleton: "merchantpay", owner_address: "0x037d6cc7e6adea2a9cba56951f8061b9dc6883195", claimed_at: new Date(Date.now() - 720000000).toISOString() },
+      { tag: "rhc_builder", skeleton: "rhcbuilder", owner_address: "0x5b2759f9620f54a5e1651a567ebd8381f07f9f05", claimed_at: new Date(Date.now() - 1080000000).toISOString() },
+      { tag: "quant_agent", skeleton: "quantagent", owner_address: "0x8efa360289d9026155c8813a764097804c2b91f15", claimed_at: new Date(Date.now() - 1440000000).toISOString() }
+    ];
+
     if (!pool) {
-      res.json({ success: true, items: [], total: 0, page, limit });
+      res.json({ success: true, items: demoTags, total: demoTags.length, page, limit });
       return;
     }
 
@@ -328,22 +311,7 @@ router.get("/api/admin/tags", requireAdminAuth, async (req: Request, res: Respon
     let items = tagsRes.rows;
 
     if (items.length === 0 && !search && page === 1) {
-      items = [
-        {
-          tag: "tera_founder",
-          skeleton: "terafounder",
-          owner_address: "0x5b2759f9620f54a5e1651a567ebd8381f07f9f05",
-          claimed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString(),
-        },
-        {
-          tag: "alice_treasury",
-          skeleton: "alicetreasury",
-          owner_address: "0x8efa360289d9026155c8813a764097804c2b91f15",
-          claimed_at: new Date(Date.now() - 360000000).toISOString(),
-          updated_at: new Date(Date.now() - 360000000).toISOString(),
-        },
-      ];
+      items = demoTags;
     }
 
     res.json({

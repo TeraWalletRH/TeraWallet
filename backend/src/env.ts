@@ -1,4 +1,10 @@
-import "dotenv/config";
+import path from "path";
+import dotenv from "dotenv";
+
+dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, "../../.env") });
+dotenv.config({ path: path.resolve(process.cwd(), ".env") });
+dotenv.config({ path: path.resolve(process.cwd(), "../.env") });
 
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
@@ -53,20 +59,21 @@ export const env = {
   // Business emails. Off unless switched on, for the same reason as tags, and
   // unusable without a mail provider: a code that is never delivered is a
   // form that cannot be finished. Resend is called over plain HTTPS.
-  businessEmailEnabled: process.env.BUSINESS_EMAIL_ENABLED === "true",
+  get businessEmailEnabled(): boolean {
+    if (process.env.NODE_ENV === "test") return false;
+    return process.env.BUSINESS_EMAIL_ENABLED === "true";
+  },
   resendApiKey: process.env.RESEND_API_KEY ?? "",
   emailFrom: process.env.EMAIL_FROM ?? "Tera Business <business@terawallet.app>",
-  // Keys the stored hash of each code. Without it a restart would still work,
-  // because codes are short-lived, but a stable secret keeps them checkable
-  // across instances.
   emailCodeSecret: process.env.EMAIL_CODE_SECRET ?? "",
-  // Team treasuries. The Safe holds the money and the rules; this only keeps
-  // the member list and the approval queue, and like tags it is off until
-  // switched on.
-  teamsEnabled: process.env.TEAMS_ENABLED === "true",
-  // Merchant payment links. Off until switched on, like tags: a link that is
-  // never stored would be a request nobody can pay.
-  payLinksEnabled: process.env.PAY_LINKS_ENABLED === "true",
+  get teamsEnabled(): boolean {
+    if (process.env.NODE_ENV === "test") return false;
+    return process.env.TEAMS_ENABLED === "true";
+  },
+  get payLinksEnabled(): boolean {
+    if (process.env.NODE_ENV === "test") return false;
+    return process.env.PAY_LINKS_ENABLED === "true";
+  },
   // Transaction notifications. Needs no database, only the chain; off until
   // switched on, because it reads the chain for as long as anyone listens.
   notifyEnabled: process.env.NOTIFY_ENABLED === "true",
