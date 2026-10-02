@@ -100,27 +100,22 @@ export function remaining(limits, rows, now = Date.now()) {
 }
 
 /**
- * Whether a payment of `amount` (USDG base units, i.e. dollars) fits. For a
- * batch, `amount` is the total and `largest` the biggest single payment. `amount`
+ * Whether a payment of `amount` (USDG base units, i.e. dollars) fits. `amount`
  * null means its dollar value is unknown: with any cap set that is a refusal,
  * since a limit that waves through what it cannot measure is not a limit.
- * @param {{ limits: any, amount: bigint | string | number | null | undefined, rows: any[], now?: number, largest?: bigint | null }} input
  */
-export function check({ limits, amount, rows, now = Date.now(), largest = null }) {
+export function check({ limits, amount, rows, now = Date.now() }) {
   const tidy = clean(limits);
   if (!hasAny(tidy)) return { ok: true };
   if (amount === null || amount === undefined) return { ok: false, kind: "unpriced" };
   const value = BigInt(amount);
-  // A batch is several payments: the per-payment cap is held against the
-  // biggest of them, and the day and month against all of them together.
-  const single = largest === null || largest === undefined ? value : BigInt(largest);
-  if (tidy.perPayment !== null && single > BigInt(tidy.perPayment))
+  if (tidy.perPayment !== null && value > BigInt(tidy.perPayment))
     return {
       ok: false,
       kind: "perPayment",
       limit: BigInt(tidy.perPayment),
       used: 0n,
-      after: single,
+      after: value,
     };
   const used = usage(rows, now);
   if (tidy.daily !== null && used.today + value > BigInt(tidy.daily))

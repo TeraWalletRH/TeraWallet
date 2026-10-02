@@ -83,12 +83,3 @@ export * as notes from "../../public/tera/core/notes.js";
 
 // What the screen shows and what it holds back: small balances, privacy mode.
 export * as discretion from "../../public/tera/core/discretion.js";
-
-// Warns when the address being paid starts and ends like a known one but is not it.
-export * as lookalike from "../../public/tera/core/lookalike.js";
-
-// Paying several people in one review, from a pasted list or a CSV.
-export * as batch from "../../public/tera/core/batch.js";
-
-// Splitting a bill into one payment request per person.
-export * as split from "../../public/tera/core/split.js";

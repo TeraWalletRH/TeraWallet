@@ -15,6 +15,16 @@ import {
   evaluateLocalPolicy,
   assertWallet,
 } from "./core.js";
+import { ThemeManager } from "./theme.js";
+import { copyToClipboard, shareText } from "./share.js";
+import { checkAddressChecksum } from "./checks.js";
+
+export const themeManager = new ThemeManager();
+themeManager.applyToDocument();
+themeManager.subscribe(() => {
+  themeManager.applyToDocument();
+  render();
+});
 import { renderAssistantMarkdown } from "./markdown.js";
 import {
   verifyPolicyBundle,
@@ -53,7 +63,6 @@ import {
 import { bridgeView, bridgeFormInput, checkBridgeQuote, sendBridge } from "./bridge.js";
 import { galleryView } from "./gallery.js";
 import * as nft from "../core/nft.js";
-import * as discretion from "../core/discretion.js";
 import {
   LOCAL_ONLY,
   REQUESTS,
@@ -429,25 +438,6 @@ const chip = (label, fail = false) =>
 const empty = (text) => `<div class="empty">${esc(text)}</div>`;
 const pair = (label, value) =>
   `<div class="pair"><span>${esc(label)}</span><b>${esc(value)}</b></div>`;
-/**
- * What this browser remembers about how the owner wants figures shown.
- *
- * Kept here rather than in the vault because it is a display preference, not
- * wallet data: somebody who hid their balances because of where they are
- * sitting has not stopped sitting there when the page reloads, and reading it
- * back must never be able to throw — a browser with storage blocked shows the
- * balances rather than failing to draw the wallet.
- */
-const PRIVACY_KEY = "tera-hide-balances";
-const HIDE_SMALL_KEY = "tera-hide-small";
-const remember = (key, on) => {
-  try {
-    localStorage.setItem(key, on ? "1" : "0");
-  } catch {
-    // A preference that cannot be saved is still honoured for this visit.
-  }
-};
-
 const state = {
   owner: "",
   // Whether this deployment keeps a tag register. Assumed off until the
@@ -540,23 +530,7 @@ const state = {
   loading: false,
   query: "",
   category: "all",
-  hide: (() => {
-    try {
-      return localStorage.getItem(PRIVACY_KEY) === "1";
-    } catch {
-      return false;
-    }
-  })(),
-  hideSmall: (() => {
-    try {
-      return localStorage.getItem(HIDE_SMALL_KEY) === "1";
-    } catch {
-      return false;
-    }
-  })(),
-  // Revealing the small balances is for the look you are taking now, not a
-  // change of setting, so it is not remembered.
-  showSmallOnce: false,
+  hide: false,
   notice: "",
 };
 let generation = 0;
@@ -994,48 +968,24 @@ function holdingsValue() {
  * rows are hidden under 750px. So this is the figure a phone shows, which is another
  * reason it must never be a total that quietly left a holding out.
  */
-/**
- * The control that hides the balance, drawn on the balance.
- *
- * Line art at one pixel, in currentColor, because this page is built from
- * one-pixel borders and space and has no icon set of its own. The label is on
- * the button rather than beside it, so a screen reader announces what the
- * control does instead of reading a decoration.
- */
-function eyeToggle() {
-  const open = `<path d="M1 8s2.5-5 7-5 7 5 7 5-2.5 5-7 5-7-5-7-5Z"/><circle cx="8" cy="8" r="2.2"/>`;
-  const shut = `<path d="M1 8s2.5-5 7-5c1.2 0 2.3.35 3.2.86M15 8s-2.5 5-7 5c-1.2 0-2.3-.35-3.2-.86"/><path d="M2 2l12 12"/>`;
-  return `<button class="btn btn-icon" data-action="privacy" aria-pressed="${state.hide ? "true" : "false"}" aria-label="${state.hide ? "Show balances" : "Hide balances"}" title="${state.hide ? "Show balances" : "Hide balances"}"><svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round">${state.hide ? shut : open}</svg></button>`;
-}
-
 function valueBlock() {
   if (state.hide)
-    return `<div class="metric"><strong>••••${eyeToggle()}</strong><small>Balances are hidden. The total is hidden with them.</small></div>`;
+    return `<div class="metric"><strong>••••</strong><small>Balances are hidden. The total is hidden with them.</small></div>`;
   const result = holdingsValue();
   const when = state.pricesAt ? new Date(state.pricesAt).toLocaleTimeString() : "";
   if (result.coverage === VALUE_NONE)
-    return `<div class="metric"><strong>${esc(formatValue(null))}${eyeToggle()}</strong><small>${esc(
+    return `<div class="metric"><strong>${esc(formatValue(null))}</strong><small>${esc(
       state.pricesError
         ? `No prices could be read: ${state.pricesError} Your balances above come from the chain and are unaffected.`
         : summariseValue(result),
     )}</small></div>`;
-  return `<div class="metric"><strong>${esc(formatValue(result.total))}${eyeToggle()}</strong>${
+  return `<div class="metric"><strong>${esc(formatValue(result.total))}</strong>${
     result.coverage === VALUE_PARTIAL ? chip("Subtotal", true) : ""
   }<small>${esc(summariseValue(result, { asOf: when }))}</small></div>`;
 }
 
 function overview() {
-  // Same rules as the phone, from public/tera/core/discretion.js: a holding
-  // nobody has priced is never treated as small, what is held back is still in
-  // the total, and the line underneath says how much is missing.
-  const priced = heldAssets().map((a) => ({
-    asset: a,
-    symbol: a.symbol,
-    value: valueOf(state.balances[a.address], state.prices[a.symbol]),
-  }));
-  const split = discretion.partitionSmall(priced, { on: state.hideSmall });
-  const visible = (state.showSmallOnce ? priced : split.shown).map((row) => row.asset);
-  const balanceRows = visible
+  const balanceRows = heldAssets()
     .map((a) => {
       // Per row as well as in the total, because this is where an unpriced holding stops
       // being invisible. A holding that contributes nothing to the total shows a dash
@@ -1044,13 +994,7 @@ function overview() {
       return `<div class="asset-mini"><span class="asset-symbol">${esc(a.symbol.slice(0, 2))}</span><div><b>${esc(a.symbol)}</b><small>${esc(a.category)}</small></div><div class="val">${state.hide ? "••••" : esc(state.balances[a.address])}${state.hide ? "" : `<small>${esc(formatValue(value))}</small>`}</div></div>`;
     })
     .join("");
-  return `${!state.owner ? accountPrompt() : ""}<div class="workspace"><aside class="column"><div class="section-label"><span>Your holdings</span>${button(state.hideSmall ? "Show small" : "Hide small", "hide-small")}</div>${state.owner ? valueBlock() : ""}${balanceRows || empty(state.owner ? "Balances load on the selected network." : "Connect to view your holdings.")}${
-    split.hidden.length
-      ? `<button class="btn btn-quiet" data-action="show-small">${esc(
-          discretion.hiddenNote(split.hidden, { formatted: formatValue(split.hiddenValue) }),
-        )} · ${state.showSmallOnce ? "Hide" : "Show"}</button>`
-      : ""
-  }${state.errors.balances ? `<p class="micro">${esc(state.errors.balances)}</p>` : ""}<details class="gate-detail"><summary><span class="gate-name">How this is valued</span></summary><div class="gate-body"><ul class="micro">${PRICE_SOURCES.map((source) => `<li><b>${esc(source.label)}</b> — ${esc(source.detail)}</li>`).join("")}</ul><p class="micro">What a valuation does not establish:</p><ul class="micro">${VALUE_LIMITS.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div></details><img class="portfolio-art" src="/tera/art/02-case-stairway.jpg" alt="Architectural stairway collage"></aside><section class="column"><div class="section-label"><span>Action inbox</span>${button("+ New proposal", "create")}</div>${state.drafts.length ? state.drafts.map(proposalCard).join("") : empty("No proposals in this session. Prepare an action to review it here.")}</section><aside class="column">${chat()}</aside></div><div class="lower-row"><section><div class="section-label"><span>Account activity</span><a href="${href("receipts")}">View history ↗</a></div>${state.errors.account ? empty(state.errors.account) : pair("Confirmed intents reported by Tera", state.account?.stats?.intents?.confirmed_intents ?? "—")}${pair("Transactions tracked on this device", state.records.length)}</section><section><div class="section-label">Your control surface</div><div class="quick-grid"><a href="${href("approvals")}">Approvals ↗</a><a href="${href("sessions")}">Agent sessions ↗</a><a href="${href("policy")}">Private policy ↗</a><a href="/dashboard/private-send/">Private routing ↗</a><a href="${href("assets")}">Asset registry ↗</a></div></section></div>`;
+  return `${!state.owner ? accountPrompt() : ""}<div class="workspace"><aside class="column"><div class="section-label"><span>Your holdings</span>${button(state.hide ? "Show" : "Hide", "privacy")}</div>${state.owner ? valueBlock() : ""}${balanceRows || empty(state.owner ? "Balances load on the selected network." : "Connect to view your holdings.")}${state.errors.balances ? `<p class="micro">${esc(state.errors.balances)}</p>` : ""}<details class="gate-detail"><summary><span class="gate-name">How this is valued</span></summary><div class="gate-body"><ul class="micro">${PRICE_SOURCES.map((source) => `<li><b>${esc(source.label)}</b> — ${esc(source.detail)}</li>`).join("")}</ul><p class="micro">What a valuation does not establish:</p><ul class="micro">${VALUE_LIMITS.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div></details><img class="portfolio-art" src="/tera/art/02-case-stairway.jpg" alt="Architectural stairway collage"></aside><section class="column"><div class="section-label"><span>Action inbox</span>${button("+ New proposal", "create")}</div>${state.drafts.length ? state.drafts.map(proposalCard).join("") : empty("No proposals in this session. Prepare an action to review it here.")}</section><aside class="column">${chat()}</aside></div><div class="lower-row"><section><div class="section-label"><span>Account activity</span><a href="${href("receipts")}">View history ↗</a></div>${state.errors.account ? empty(state.errors.account) : pair("Confirmed intents reported by Tera", state.account?.stats?.intents?.confirmed_intents ?? "—")}${pair("Transactions tracked on this device", state.records.length)}</section><section><div class="section-label">Your control surface</div><div class="quick-grid"><a href="${href("approvals")}">Approvals ↗</a><a href="${href("sessions")}">Agent sessions ↗</a><a href="${href("policy")}">Private policy ↗</a><a href="/dashboard/private-send/">Private routing ↗</a><a href="${href("assets")}">Asset registry ↗</a></div></section></div>`;
 }
 function registry() {
   if (state.assetError)
@@ -2385,8 +2329,13 @@ async function saveBalanceEndpoint() {
   await loadBalances();
 }
 
+function appearancePanel() {
+  const current = themeManager.getSetting();
+  return `<section class="panel" id="appearance-settings"><h2>Appearance</h2><p>Theme follows the OS live, or can be pinned to Light or Dark.</p><div class="field"><label for="theme-select">Theme</label><select id="theme-select"><option value="system" ${current === "system" ? "selected" : ""}>System (default)</option><option value="light" ${current === "light" ? "selected" : ""}>Light</option><option value="dark" ${current === "dark" ? "selected" : ""}>Dark</option></select></div></section>`;
+}
+
 function settings() {
-  return `<div class="content-grid"><section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel" id="account-separation"><h2>Account separation</h2>${separationPanel()}</section><section class="panel"><h2>Your tag</h2>${tagPanel()}</section><section class="panel" id="saved-addresses"><h2>Saved addresses</h2>${contactsPanel()}</section><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
+  return `<div class="content-grid">${appearancePanel()}<section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${state.owner ? `<button class="btn" data-action="copy-text" data-text="${esc(state.owner)}">Copy address</button><button class="btn" data-action="share-text" data-text="${esc(state.owner)}">Share address</button>` : ""}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel" id="account-separation"><h2>Account separation</h2>${separationPanel()}</section><section class="panel"><h2>Your tag</h2>${tagPanel()}</section><section class="panel" id="saved-addresses"><h2>Saved addresses</h2>${contactsPanel()}</section><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
 /**
@@ -2899,29 +2848,22 @@ function createProposal(symbol, draft = null) {
     }
     contactStatus.textContent = "";
     const saved = contactBook.searchContacts(state.contacts, typed);
-    const allHistory = [
-      ...state.records.map((r) => ({ payee: r.payee || r.recipient, createdAt: Date.parse(r.createdAt) })),
-      ...(state.history || []).map((r) => ({ payee: r.recipient || r.payee || r.intent?.recipient, createdAt: Date.parse(r.created_at || r.createdAt) })),
-    ];
-    const recent = contactBook.recentPayees(allHistory, state.contacts, { owner: state.owner, limit: 8 });
-    const filteredRecent = typed
-      ? recent.filter((r) => r.address.toLowerCase().includes(typed.toLowerCase()) || (r.name && r.name.toLowerCase().includes(typed.toLowerCase())))
-      : recent;
-
-    let html = "";
-    if (filteredRecent.length) {
-      html += `<div style="font-size: 11px; font-weight: 700; color: #52634f; margin-bottom: 4px; width: 100%;">RECENT RECIPIENTS</div>`;
-      html += filteredRecent.slice(0, 6).map((entry) =>
-        `<button type="button" class="btn" data-action="contact-pick" data-address="${esc(entry.address)}" title="${esc(entry.address)}">🕒 ${esc(entry.name || contactBook.short(entry.address))}</button>`
-      ).join(" ");
-    }
-    if (saved.length && (!filteredRecent.length || typed)) {
-      html += `<div style="font-size: 11px; font-weight: 700; color: #52634f; margin: 6px 0 4px; width: 100%;">SAVED CONTACTS</div>`;
-      html += saved.slice(0, 6).map((entry) =>
-        `<button type="button" class="btn" data-action="contact-pick" data-address="${esc(entry.address)}" title="${esc(entry.address)}">👤 ${esc(entry.name)} · ${esc(contactBook.short(entry.address))}</button>`
-      ).join(" ");
-    }
-    contactPicks.innerHTML = html;
+    const recent = typed
+      ? []
+      : contactBook
+          .recentPayees(
+            state.records.map((r) => ({ payee: r.payee, createdAt: Date.parse(r.createdAt) })),
+            state.contacts,
+            { owner: state.owner },
+          )
+          .filter((entry) => !entry.name);
+    contactPicks.innerHTML = [...saved, ...recent]
+      .slice(0, 8)
+      .map(
+        (entry) =>
+          `<button type="button" class="btn" data-action="contact-pick" data-address="${esc(entry.address)}" title="${esc(entry.address)}">${esc(entry.name || "Sent before")} · ${esc(contactBook.short(entry.address))}</button>`,
+      )
+      .join("");
   };
   form.addEventListener("input", renderContactPicks);
   form.addEventListener("change", renderContactPicks);
@@ -3908,222 +3850,17 @@ function downloadJson(data, filename) {
 function exportReceipt(index) {
   const record = state.records[index];
   if (!record) return;
-  const payeeName = record.payee ? (contactBook.nameFor(state.contacts, record.payee) || short(record.payee)) : "";
-  const dateStr = record.createdAt ? new Date(record.createdAt).toLocaleString() : new Date().toLocaleString();
-
-  dialog(
-    "Share receipt",
-    `<div class="receipt-share-wrap">
-       <p class="micro">Share this transaction receipt via shareable link, image card, or printable PDF.</p>
-       <div class="panel" style="margin: 14px 0; background: #fafaf8; border: 1px solid #dcdfd8; border-radius: 8px; padding: 14px;">
-         <div class="pair"><span>Action</span><b>${esc(record.action || "Transaction")}</b></div>
-         <div class="pair"><span>Status</span><b>${esc(record.status || "confirmed")}</b></div>
-         ${payeeName ? `<div class="pair"><span>Recipient</span><b>${esc(payeeName)}</b></div>` : ""}
-         <div class="pair"><span>Date</span><b>${esc(dateStr)}</b></div>
-         <div class="pair"><span>Transaction</span><b style="font-family: monospace; font-size: 11px;">${esc(short(record.txHash))}</b></div>
-       </div>
-       <div class="actions" style="display: flex; flex-direction: column; gap: 8px;">
-         <button class="btn primary" data-action="receipt-share-link" data-index="${index}">🔗 Share via Link</button>
-         <button class="btn" data-action="receipt-share-image" data-index="${index}">🖼️ Save as Image (PNG)</button>
-         <button class="btn" data-action="receipt-share-pdf" data-index="${index}">📄 Download as PDF</button>
-         <button class="btn b-sec" data-action="receipt-share-json" data-index="${index}">💾 Download JSON</button>
-         <button class="btn" data-action="close">Close</button>
-       </div>
-     </div>`
+  downloadJson(
+    {
+      chainId: record.chainId,
+      transactionHash: record.txHash,
+      actionHash: record.actionHash,
+      status: record.status,
+      recordedByTera: record.recorded,
+      receiptId: record.receiptId,
+    },
+    `tera-${record.txHash.slice(0, 12)}.json`,
   );
-}
-
-function shareReceiptLinkWeb(record) {
-  const url = `https://robinhoodchain.blockscout.com/tx/${record.txHash}`;
-  const text = `Tera Wallet Transaction Receipt\nAction: ${record.action || "Transaction"}\nStatus: ${record.status || "confirmed"}\nTx Hash: ${record.txHash}\n${url}`;
-  if (navigator.share) {
-    navigator.share({ title: "Tera Wallet Receipt", text, url }).catch(() => {});
-  }
-  navigator.clipboard.writeText(url).then(() => {
-    state.notice = "Receipt explorer link copied to clipboard.";
-    render();
-  }).catch(() => {
-    state.notice = "Receipt link: " + url;
-    render();
-  });
-}
-
-function shareReceiptImageWeb(record) {
-  const canvas = document.createElement("canvas");
-  const width = 800;
-  const height = 980;
-  canvas.width = width;
-  canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-
-  const grad = ctx.createLinearGradient(0, 0, width, height);
-  grad.addColorStop(0, "#0c1510");
-  grad.addColorStop(0.5, "#14231b");
-  grad.addColorStop(1, "#0d1711");
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, width, height);
-
-  ctx.strokeStyle = "#25402f";
-  ctx.lineWidth = 3;
-  ctx.strokeRect(20, 20, width - 40, height - 40);
-
-  ctx.fillStyle = "#16281e";
-  ctx.beginPath();
-  if (ctx.roundRect) ctx.roundRect(40, 40, width - 80, height - 80, 16);
-  else ctx.rect(40, 40, width - 80, height - 80);
-  ctx.fill();
-  ctx.strokeStyle = "#2f523c";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  ctx.fillStyle = "#6be48a";
-  ctx.font = "bold 15px sans-serif";
-  ctx.fillText("TERA WALLET · OFFICIAL RECEIPT", 70, 95);
-
-  ctx.fillStyle = "#ffffff";
-  ctx.font = "600 28px sans-serif";
-  ctx.fillText(record.action || "Transaction Receipt", 70, 145);
-
-  const isOk = record.status === "confirmed" || record.recorded;
-  ctx.fillStyle = isOk ? "#1e4d30" : "#4a3319";
-  ctx.beginPath();
-  if (ctx.roundRect) ctx.roundRect(70, 175, 170, 32, 16);
-  else ctx.rect(70, 175, 170, 32);
-  ctx.fill();
-  ctx.fillStyle = isOk ? "#6ee7b7" : "#fcd34d";
-  ctx.font = "bold 13px sans-serif";
-  ctx.fillText(isOk ? "✓ CONFIRMED" : (record.status || "PENDING").toUpperCase(), 88, 196);
-
-  let y = 260;
-  const drawRow = (label, val) => {
-    ctx.fillStyle = "#8fa395";
-    ctx.font = "14px sans-serif";
-    ctx.fillText(label, 70, y);
-    ctx.fillStyle = "#f3f5f3";
-    ctx.font = "500 15px monospace";
-    const x = width - 70 - ctx.measureText(val).width;
-    ctx.fillText(val, Math.max(260, x), y);
-    ctx.strokeStyle = "#203628";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(70, y + 16);
-    ctx.lineTo(width - 70, y + 16);
-    ctx.stroke();
-    y += 50;
-  };
-
-  const dateStr = record.createdAt ? new Date(record.createdAt).toLocaleString() : new Date().toLocaleString();
-  drawRow("Status", record.status || "confirmed");
-  drawRow("Date", dateStr);
-  if (record.payee) drawRow("Recipient", short(record.payee));
-  if (record.owner) drawRow("Sender", short(record.owner));
-  drawRow("Network", "Robinhood Chain (ID: 4663)");
-  if (record.receiptId) drawRow("Receipt ID", short(record.receiptId));
-
-  y += 20;
-  ctx.fillStyle = "#8fa395";
-  ctx.font = "13px monospace";
-  ctx.fillText("TRANSACTION HASH", 70, y);
-  y += 26;
-  ctx.fillStyle = "#122018";
-  ctx.beginPath();
-  if (ctx.roundRect) ctx.roundRect(70, y, width - 140, 48, 8);
-  else ctx.rect(70, y, width - 140, 48);
-  ctx.fill();
-  ctx.fillStyle = "#6de39c";
-  ctx.font = "13px monospace";
-  ctx.fillText(record.txHash, 86, y + 29);
-
-  y += 90;
-  ctx.fillStyle = "#607567";
-  ctx.font = "12px sans-serif";
-  ctx.fillText("Verified on Robinhood Chain Blockscout Explorer", 70, y);
-
-  canvas.toBlob((blob) => {
-    if (!blob) return;
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `tera-receipt-${record.txHash.slice(0, 10)}.png`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-    state.notice = "Receipt image downloaded.";
-    render();
-  }, "image/png");
-}
-
-function shareReceiptPdfWeb(record) {
-  const explorerUrl = `https://robinhoodchain.blockscout.com/tx/${record.txHash}`;
-  const dateStr = record.createdAt ? new Date(record.createdAt).toLocaleString() : new Date().toLocaleString();
-  const payeeName = record.payee ? (contactBook.nameFor(state.contacts, record.payee) || record.payee) : "—";
-
-  const printHtml = `
-    <!doctype html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <title>Tera Receipt - ${record.txHash.slice(0, 10)}</title>
-      <style>
-        @page { size: A4; margin: 20mm; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #17241c; background: #fff; padding: 24px; max-width: 680px; margin: auto; }
-        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #204e35; padding-bottom: 16px; margin-bottom: 24px; }
-        .brand { font-size: 22px; font-weight: 800; color: #1d4330; }
-        .badge { display: inline-block; padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; background: #e2f3e8; color: #175231; }
-        .table { width: 100%; border-collapse: collapse; margin-bottom: 28px; }
-        .table tr { border-bottom: 1px solid #e7ebe8; }
-        .table td { padding: 12px 6px; font-size: 14px; }
-        .table td.label { color: #617769; width: 35%; }
-        .table td.value { font-weight: 600; text-align: right; word-break: break-all; }
-        .hash-box { background: #f8faf8; border: 1px dashed #b9c7bd; border-radius: 8px; padding: 12px; margin-bottom: 24px; font-size: 11px; word-break: break-all; font-family: monospace; }
-        .footer { font-size: 12px; color: #798e81; text-align: center; border-top: 1px solid #e0e6e2; padding-top: 18px; }
-        @media print { body { padding: 0; } }
-      </style>
-    </head>
-    <body>
-      <div class="header">
-        <div class="brand">TERA WALLET</div>
-        <div class="badge">✓ CONFIRMED RECEIPT</div>
-      </div>
-      <table class="table">
-        <tr><td class="label">Action</td><td class="value">${esc(record.action || "Transaction")}</td></tr>
-        <tr><td class="label">Status</td><td class="value">${esc(record.status || "confirmed")}</td></tr>
-        <tr><td class="label">Date & Time</td><td class="value">${esc(dateStr)}</td></tr>
-        ${record.payee ? `<tr><td class="label">Recipient</td><td class="value">${esc(payeeName)}</td></tr>` : ""}
-        ${record.owner ? `<tr><td class="label">Sender</td><td class="value">${esc(record.owner)}</td></tr>` : ""}
-        <tr><td class="label">Network</td><td class="value">Robinhood Chain (ID: 4663)</td></tr>
-        ${record.receiptId ? `<tr><td class="label">Tera Audit Receipt ID</td><td class="value">${esc(record.receiptId)}</td></tr>` : ""}
-      </table>
-      <div class="hash-box">
-        <strong>Transaction Hash:</strong><br>${esc(record.txHash)}
-      </div>
-      <div class="footer">
-        Verified on Robinhood Chain Blockscout Explorer<br>${esc(explorerUrl)}
-      </div>
-      <script>window.onload = function() { window.print(); };</script>
-    </body>
-    </html>
-  `;
-
-  const iframe = document.createElement("iframe");
-  iframe.style.position = "fixed";
-  iframe.style.right = "0";
-  iframe.style.bottom = "0";
-  iframe.style.width = "0";
-  iframe.style.height = "0";
-  iframe.style.border = "none";
-  document.body.appendChild(iframe);
-  const doc = iframe.contentWindow?.document || iframe.contentDocument;
-  if (doc) {
-    doc.open();
-    doc.write(printHtml);
-    doc.close();
-    state.notice = "Print / PDF preview opened.";
-    render();
-    setTimeout(() => document.body.removeChild(iframe), 60000);
-  }
 }
 // Held between renders of the share dialog so the reference toggle can rebuild
 // the same preview without re-deriving which proposal was being shared.
@@ -4274,16 +4011,6 @@ document.addEventListener("click", async (event) => {
     }
     if (action === "privacy") {
       state.hide = !state.hide;
-      remember(PRIVACY_KEY, state.hide);
-      render();
-    }
-    if (action === "hide-small") {
-      state.hideSmall = !state.hideSmall;
-      remember(HIDE_SMALL_KEY, state.hideSmall);
-      render();
-    }
-    if (action === "show-small") {
-      state.showSmallOnce = !state.showSmallOnce;
       render();
     }
     if (action === "refresh") {
@@ -4587,30 +4314,32 @@ document.addEventListener("click", async (event) => {
         render();
       }
     }
+    if (action === "copy-text" && target.dataset.text) {
+      const ok = await copyToClipboard(target.dataset.text);
+      if (ok) {
+        state.notice = "Copied to clipboard.";
+        render();
+      }
+    }
+    if (action === "share-text" && target.dataset.text) {
+      const res = await shareText({ title: "Tera Wallet", text: target.dataset.text });
+      if (res.shared) {
+        state.notice = res.method === "clipboard" ? "Copied to clipboard." : "Shared successfully.";
+        render();
+      }
+    }
+    if (action === "fix-checksum" && target.dataset.targetId && target.dataset.checksummed) {
+      const field = document.getElementById(target.dataset.targetId);
+      if (field) {
+        field.value = target.dataset.checksummed;
+        field.dispatchEvent(new Event("input", { bubbles: true }));
+        field.dispatchEvent(new Event("change", { bubbles: true }));
+        state.notice = "Address converted to valid ERC-55 checksum.";
+        render();
+      }
+    }
+    if (action === "approve") await approve(index);
     if (action === "receipt-export") exportReceipt(index);
-    if (action === "receipt-share-link" && Number.isInteger(index) && state.records[index]) {
-      shareReceiptLinkWeb(state.records[index]);
-    }
-    if (action === "receipt-share-image" && Number.isInteger(index) && state.records[index]) {
-      shareReceiptImageWeb(state.records[index]);
-    }
-    if (action === "receipt-share-pdf" && Number.isInteger(index) && state.records[index]) {
-      shareReceiptPdfWeb(state.records[index]);
-    }
-    if (action === "receipt-share-json" && Number.isInteger(index) && state.records[index]) {
-      const rec = state.records[index];
-      downloadJson(
-        {
-          chainId: rec.chainId,
-          transactionHash: rec.txHash,
-          actionHash: rec.actionHash,
-          status: rec.status,
-          recordedByTera: rec.recorded,
-          receiptId: rec.receiptId,
-        },
-        `tera-${rec.txHash.slice(0, 12)}.json`,
-      );
-    }
     if (action === "contact-edit") contactDialog(target.dataset.address || "");
     if (action === "contact-remove" && target.dataset.address) {
       state.contacts = contactBook.removeContact(state.contacts, target.dataset.address);
@@ -4749,6 +4478,15 @@ document.addEventListener("click", async (event) => {
   }
 });
 document.addEventListener("change", (event) => {
+  if (event.target?.id === "theme-select") {
+    const val = event.target.value;
+    if (["system", "light", "dark"].includes(val)) {
+      themeManager.setSetting(val);
+      themeManager.applyToDocument();
+      render();
+    }
+    return;
+  }
   if (event.target?.id !== "vault-retention") return;
   const days = Number(event.target.value);
   if (![7, 30, 90, 365].includes(days)) return;

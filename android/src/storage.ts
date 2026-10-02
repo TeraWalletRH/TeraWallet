@@ -62,18 +62,6 @@ export type LocalData = {
    * of this file and never sent anywhere; `core/notes.js` cleans them.
    */
   notes?: Record<string, string>;
-  /**
-   * Bills the owner split: the shares and the payment link made for each.
-   * Names are the owner's labels; `core/split.js` cleans the list.
-   */
-  splits?: {
-    id: string;
-    title: string;
-    total: string;
-    mine: string;
-    createdAt: number;
-    shares: { name: string; amount: string; linkId: string; link: string }[];
-  }[];
   /** Whether the spotlight walkthrough has run on this device already. */
   tourSeen: boolean;
   /**

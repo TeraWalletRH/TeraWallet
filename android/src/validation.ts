@@ -3,11 +3,26 @@ import {
   decodeFunctionData,
   encodeFunctionData,
   erc20Abi,
+  getAddress,
   isAddress,
   zeroAddress,
   type Address,
 } from "viem";
 import { chain, DEPOSITORY, destinations, sources, USDG, type Tx } from "./config";
+
+export function checkChecksum(address: string): { isAddress: boolean; isChecksummed: boolean; checksummed: string | null } {
+  if (!isAddress(address)) return { isAddress: false, isChecksummed: false, checksummed: null };
+  try {
+    const formatted = getAddress(address);
+    return {
+      isAddress: true,
+      isChecksummed: address === formatted,
+      checksummed: formatted,
+    };
+  } catch {
+    return { isAddress: false, isChecksummed: false, checksummed: null };
+  }
+}
 export const same = (a: unknown, b: unknown) =>
   typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
 export function check(
