@@ -62,6 +62,11 @@ import {
   UNVERIFIABLE,
   value as valueCore,
 } from "./src/core";
+import {
+  shareReceiptViaLink,
+  shareReceiptViaImage,
+  shareReceiptViaPdf,
+} from "./src/receiptShare";
 import { check, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { screenOrigin } from "./src/viewport";
@@ -4177,7 +4182,7 @@ function Wallet() {
   }
   /**
    * Saved names and recent payees under the recipient field. A pick fills the
-   * full address, which is what the checks and the signature see.
+   * full address or tag, which is what the checks and the signature see.
    */
   function recipientPicks() {
     const typed = recipient.trim();
@@ -4192,43 +4197,153 @@ function Wallet() {
         </Text>
       ) : null;
     }
+
     const saved = contactsCore.searchContacts(book, typed);
-    const recent = typed
-      ? []
-      : contactsCore.recentPayees(data.history, book, { owner }).filter((entry) => !entry.name);
-    const picks = [...saved, ...recent].slice(0, 6);
-    if (!picks.length) return null;
+    const recent = contactsCore.recentPayees(combinedHistory, book, { owner, limit: 12 });
+    const filteredRecent = typed
+      ? recent.filter(
+          (r: any) =>
+            r.address.toLowerCase().includes(typed.toLowerCase()) ||
+            (r.name && r.name.toLowerCase().includes(typed.toLowerCase())) ||
+            (r.tag && r.tag.toLowerCase().includes(typed.toLowerCase())),
+        )
+      : recent;
+
+    if (!saved.length && !filteredRecent.length) return null;
+
+    const onSelectRecipient = (entry: any) => {
+      if (entry.tag && (tagsAvailable() || biz.emailAvailable())) {
+        setRecipientKind("tag");
+        setRecipient(entry.tag);
+        setTagLookup({ state: "idle" });
+      } else {
+        setRecipientKind("address");
+        setRecipient(entry.address);
+        setTagLookup({ state: "idle" });
+      }
+    };
+
     return (
-      <View style={{ gap: 8 }}>
-        <Text style={s.eyebrow}>
-          {typed ? t("SAVED CONTACTS", "已保存联系人") : t("CONTACTS & RECENT", "联系人与最近")}
-        </Text>
-        {picks.map((entry) => (
-          <Pressable
-            key={entry.address}
-            accessibilityRole="button"
-            accessibilityLabel={`${entry.name || t("Sent before", "曾发送")} ${entry.address}`}
-            onPress={() => {
-              setRecipient(entry.address);
-              setTagLookup({ state: "idle" });
-            }}
-            style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
-          >
-            <Icon
-              name={entry.name ? "account-circle-outline" : "history"}
-              size={24}
-              color={colors.green}
-            />
-            <View style={{ flex: 1 }}>
-              <Text style={[s.text, { fontWeight: "700" }]}>
-                {entry.name || t("Sent before", "曾发送")}
+      <View style={{ gap: 14, marginTop: 4 }}>
+        {filteredRecent.length > 0 && (
+          <View style={{ gap: 8 }}>
+            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+              <Text style={s.eyebrow}>
+                {t("RECENT RECIPIENTS", "最近收款人")}
               </Text>
-              <Text style={s.mono} numberOfLines={1} ellipsizeMode="middle">
-                {entry.address}
+              <Text style={[s.small, { fontSize: 11, color: colors.faint }]}>
+                {t("Quick select", "快捷选择")}
               </Text>
             </View>
-          </Pressable>
-        ))}
+            <View style={{ gap: 6 }}>
+              {filteredRecent.slice(0, 5).map((entry: any) => (
+                <Pressable
+                  key={`recent-${entry.address}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${entry.name || t("Recent recipient", "最近收款人")} ${entry.address}`}
+                  onPress={() => onSelectRecipient(entry)}
+                  style={({ pressed }) => [
+                    s.panel,
+                    {
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 12,
+                      paddingVertical: 12,
+                      paddingHorizontal: 14,
+                      backgroundColor: pressed ? colors.wash : colors.panel,
+                      borderColor: colors.line,
+                    },
+                  ]}
+                >
+                  <View
+                    style={{
+                      width: 38,
+                      height: 38,
+                      borderRadius: 19,
+                      backgroundColor: colors.wash,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Icon
+                      name={entry.name ? "account-circle-outline" : "history"}
+                      size={20}
+                      color={colors.green}
+                    />
+                  </View>
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                      <Text style={[s.text, { fontWeight: "700", fontSize: 14 }]}>
+                        {entry.name || (entry.tag ? `@${entry.tag.replace(/^@/, "")}` : short(entry.address))}
+                      </Text>
+                      {entry.amount && entry.symbol ? (
+                        <Text style={[s.small, { fontSize: 11, color: colors.faint }]}>
+                          · {entry.amount} {entry.symbol}
+                        </Text>
+                      ) : null}
+                    </View>
+                    <Text style={[s.mono, { fontSize: 11, color: colors.muted }]} numberOfLines={1} ellipsizeMode="middle">
+                      {entry.address}
+                    </Text>
+                  </View>
+                  <Icon name="arrow-top-right" size={16} color={colors.faint} />
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {saved.length > 0 && (!filteredRecent.length || typed) && (
+          <View style={{ gap: 8 }}>
+            <Text style={s.eyebrow}>
+              {t("SAVED CONTACTS", "已保存联系人")}
+            </Text>
+            <View style={{ gap: 6 }}>
+              {saved.slice(0, 5).map((entry) => (
+                <Pressable
+                  key={`contact-${entry.address}`}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${entry.name} ${entry.address}`}
+                  onPress={() => onSelectRecipient(entry)}
+                  style={({ pressed }) => [
+                    s.panel,
+                    {
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 12,
+                      paddingVertical: 12,
+                      paddingHorizontal: 14,
+                      backgroundColor: pressed ? colors.wash : colors.panel,
+                      borderColor: colors.line,
+                    },
+                  ]}
+                >
+                  <View
+                    style={{
+                      width: 38,
+                      height: 38,
+                      borderRadius: 19,
+                      backgroundColor: colors.wash,
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Icon name="account-circle-outline" size={20} color={colors.green} />
+                  </View>
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={[s.text, { fontWeight: "700", fontSize: 14 }]}>
+                      {entry.name}
+                    </Text>
+                    <Text style={[s.mono, { fontSize: 11, color: colors.muted }]} numberOfLines={1} ellipsizeMode="middle">
+                      {entry.address}
+                    </Text>
+                  </View>
+                  <Icon name="arrow-top-right" size={16} color={colors.faint} />
+                </Pressable>
+              ))}
+            </View>
+          </View>
+        )}
       </View>
     );
   }
@@ -6072,7 +6187,7 @@ function Wallet() {
                   if (tagLookup.state !== "idle") setTagLookup({ state: "idle" });
                 }}
               />
-              {recipientKind === "address" && recipientPicks()}
+              {recipientPicks()}
               {recipientKind === "tag" ? (
                 <Text style={[s.small, tagLookup.state === "error" && { color: colors.danger }]}>
                   {tagLookup.state === "looking"
@@ -8110,6 +8225,83 @@ function Wallet() {
               label={t("View on explorer", "在浏览器查看")}
               onPress={() =>
                 void Linking.openURL(`https://robinhoodchain.blockscout.com/tx/${r.hash}`)
+              }
+            />
+          </Group>
+          <Group title={t("Share receipt", "分享收据")}>
+            <ListRow
+              icon="link"
+              label={t("Share link", "分享链接")}
+              detail={t("Copy & share explorer receipt", "复制并分享收据链接")}
+              onPress={() =>
+                void shareReceiptViaLink(
+                  {
+                    hash: r.hash,
+                    title: activityTitle(r),
+                    status: r.status,
+                    amount: r.amount,
+                    symbol: r.symbol,
+                    payee: r.payee || r.recipient || r.counterpartyAddress,
+                    recipient: r.recipient,
+                    recipientName: savedName,
+                    sender: owner,
+                    createdAt: r.createdAt,
+                    block: detailSpeed?.block,
+                    feeEth: detailSpeed?.feeWei ? formatUnits(detailSpeed.feeWei, 18) : undefined,
+                    delivery: r.delivery,
+                  },
+                  (title, body, tone) => setNotice({ title, body, tone }),
+                )
+              }
+            />
+            <ListRow
+              icon="image-outline"
+              label={t("Save as image", "保存为图片")}
+              detail={t("Download high-res PNG receipt card", "下载高清 PNG 收据卡片")}
+              onPress={() =>
+                void shareReceiptViaImage(
+                  {
+                    hash: r.hash,
+                    title: activityTitle(r),
+                    status: r.status,
+                    amount: r.amount,
+                    symbol: r.symbol,
+                    payee: r.payee || r.recipient || r.counterpartyAddress,
+                    recipient: r.recipient,
+                    recipientName: savedName,
+                    sender: owner,
+                    createdAt: r.createdAt,
+                    block: detailSpeed?.block,
+                    feeEth: detailSpeed?.feeWei ? formatUnits(detailSpeed.feeWei, 18) : undefined,
+                    delivery: r.delivery,
+                  },
+                  (title, body, tone) => setNotice({ title, body, tone }),
+                )
+              }
+            />
+            <ListRow
+              icon="file-down"
+              label={t("Download as PDF", "下载为 PDF")}
+              detail={t("Print or save printable PDF receipt", "打印或保存 PDF 格式收据")}
+              onPress={() =>
+                void shareReceiptViaPdf(
+                  {
+                    hash: r.hash,
+                    title: activityTitle(r),
+                    status: r.status,
+                    amount: r.amount,
+                    symbol: r.symbol,
+                    payee: r.payee || r.recipient || r.counterpartyAddress,
+                    recipient: r.recipient,
+                    recipientName: savedName,
+                    sender: owner,
+                    createdAt: r.createdAt,
+                    block: detailSpeed?.block,
+                    feeEth: detailSpeed?.feeWei ? formatUnits(detailSpeed.feeWei, 18) : undefined,
+                    delivery: r.delivery,
+                  },
+                  (title, body, tone) => setNotice({ title, body, tone }),
+                )
               }
             />
           </Group>

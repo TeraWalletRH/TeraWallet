@@ -2899,22 +2899,29 @@ function createProposal(symbol, draft = null) {
     }
     contactStatus.textContent = "";
     const saved = contactBook.searchContacts(state.contacts, typed);
-    const recent = typed
-      ? []
-      : contactBook
-          .recentPayees(
-            state.records.map((r) => ({ payee: r.payee, createdAt: Date.parse(r.createdAt) })),
-            state.contacts,
-            { owner: state.owner },
-          )
-          .filter((entry) => !entry.name);
-    contactPicks.innerHTML = [...saved, ...recent]
-      .slice(0, 8)
-      .map(
-        (entry) =>
-          `<button type="button" class="btn" data-action="contact-pick" data-address="${esc(entry.address)}" title="${esc(entry.address)}">${esc(entry.name || "Sent before")} · ${esc(contactBook.short(entry.address))}</button>`,
-      )
-      .join("");
+    const allHistory = [
+      ...state.records.map((r) => ({ payee: r.payee || r.recipient, createdAt: Date.parse(r.createdAt) })),
+      ...(state.history || []).map((r) => ({ payee: r.recipient || r.payee || r.intent?.recipient, createdAt: Date.parse(r.created_at || r.createdAt) })),
+    ];
+    const recent = contactBook.recentPayees(allHistory, state.contacts, { owner: state.owner, limit: 8 });
+    const filteredRecent = typed
+      ? recent.filter((r) => r.address.toLowerCase().includes(typed.toLowerCase()) || (r.name && r.name.toLowerCase().includes(typed.toLowerCase())))
+      : recent;
+
+    let html = "";
+    if (filteredRecent.length) {
+      html += `<div style="font-size: 11px; font-weight: 700; color: #52634f; margin-bottom: 4px; width: 100%;">RECENT RECIPIENTS</div>`;
+      html += filteredRecent.slice(0, 6).map((entry) =>
+        `<button type="button" class="btn" data-action="contact-pick" data-address="${esc(entry.address)}" title="${esc(entry.address)}">🕒 ${esc(entry.name || contactBook.short(entry.address))}</button>`
+      ).join(" ");
+    }
+    if (saved.length && (!filteredRecent.length || typed)) {
+      html += `<div style="font-size: 11px; font-weight: 700; color: #52634f; margin: 6px 0 4px; width: 100%;">SAVED CONTACTS</div>`;
+      html += saved.slice(0, 6).map((entry) =>
+        `<button type="button" class="btn" data-action="contact-pick" data-address="${esc(entry.address)}" title="${esc(entry.address)}">👤 ${esc(entry.name)} · ${esc(contactBook.short(entry.address))}</button>`
+      ).join(" ");
+    }
+    contactPicks.innerHTML = html;
   };
   form.addEventListener("input", renderContactPicks);
   form.addEventListener("change", renderContactPicks);
@@ -3901,17 +3908,222 @@ function downloadJson(data, filename) {
 function exportReceipt(index) {
   const record = state.records[index];
   if (!record) return;
-  downloadJson(
-    {
-      chainId: record.chainId,
-      transactionHash: record.txHash,
-      actionHash: record.actionHash,
-      status: record.status,
-      recordedByTera: record.recorded,
-      receiptId: record.receiptId,
-    },
-    `tera-${record.txHash.slice(0, 12)}.json`,
+  const payeeName = record.payee ? (contactBook.nameFor(state.contacts, record.payee) || short(record.payee)) : "";
+  const dateStr = record.createdAt ? new Date(record.createdAt).toLocaleString() : new Date().toLocaleString();
+
+  dialog(
+    "Share receipt",
+    `<div class="receipt-share-wrap">
+       <p class="micro">Share this transaction receipt via shareable link, image card, or printable PDF.</p>
+       <div class="panel" style="margin: 14px 0; background: #fafaf8; border: 1px solid #dcdfd8; border-radius: 8px; padding: 14px;">
+         <div class="pair"><span>Action</span><b>${esc(record.action || "Transaction")}</b></div>
+         <div class="pair"><span>Status</span><b>${esc(record.status || "confirmed")}</b></div>
+         ${payeeName ? `<div class="pair"><span>Recipient</span><b>${esc(payeeName)}</b></div>` : ""}
+         <div class="pair"><span>Date</span><b>${esc(dateStr)}</b></div>
+         <div class="pair"><span>Transaction</span><b style="font-family: monospace; font-size: 11px;">${esc(short(record.txHash))}</b></div>
+       </div>
+       <div class="actions" style="display: flex; flex-direction: column; gap: 8px;">
+         <button class="btn primary" data-action="receipt-share-link" data-index="${index}">🔗 Share via Link</button>
+         <button class="btn" data-action="receipt-share-image" data-index="${index}">🖼️ Save as Image (PNG)</button>
+         <button class="btn" data-action="receipt-share-pdf" data-index="${index}">📄 Download as PDF</button>
+         <button class="btn b-sec" data-action="receipt-share-json" data-index="${index}">💾 Download JSON</button>
+         <button class="btn" data-action="close">Close</button>
+       </div>
+     </div>`
   );
+}
+
+function shareReceiptLinkWeb(record) {
+  const url = `https://robinhoodchain.blockscout.com/tx/${record.txHash}`;
+  const text = `Tera Wallet Transaction Receipt\nAction: ${record.action || "Transaction"}\nStatus: ${record.status || "confirmed"}\nTx Hash: ${record.txHash}\n${url}`;
+  if (navigator.share) {
+    navigator.share({ title: "Tera Wallet Receipt", text, url }).catch(() => {});
+  }
+  navigator.clipboard.writeText(url).then(() => {
+    state.notice = "Receipt explorer link copied to clipboard.";
+    render();
+  }).catch(() => {
+    state.notice = "Receipt link: " + url;
+    render();
+  });
+}
+
+function shareReceiptImageWeb(record) {
+  const canvas = document.createElement("canvas");
+  const width = 800;
+  const height = 980;
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+
+  const grad = ctx.createLinearGradient(0, 0, width, height);
+  grad.addColorStop(0, "#0c1510");
+  grad.addColorStop(0.5, "#14231b");
+  grad.addColorStop(1, "#0d1711");
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, width, height);
+
+  ctx.strokeStyle = "#25402f";
+  ctx.lineWidth = 3;
+  ctx.strokeRect(20, 20, width - 40, height - 40);
+
+  ctx.fillStyle = "#16281e";
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(40, 40, width - 80, height - 80, 16);
+  else ctx.rect(40, 40, width - 80, height - 80);
+  ctx.fill();
+  ctx.strokeStyle = "#2f523c";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  ctx.fillStyle = "#6be48a";
+  ctx.font = "bold 15px sans-serif";
+  ctx.fillText("TERA WALLET · OFFICIAL RECEIPT", 70, 95);
+
+  ctx.fillStyle = "#ffffff";
+  ctx.font = "600 28px sans-serif";
+  ctx.fillText(record.action || "Transaction Receipt", 70, 145);
+
+  const isOk = record.status === "confirmed" || record.recorded;
+  ctx.fillStyle = isOk ? "#1e4d30" : "#4a3319";
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(70, 175, 170, 32, 16);
+  else ctx.rect(70, 175, 170, 32);
+  ctx.fill();
+  ctx.fillStyle = isOk ? "#6ee7b7" : "#fcd34d";
+  ctx.font = "bold 13px sans-serif";
+  ctx.fillText(isOk ? "✓ CONFIRMED" : (record.status || "PENDING").toUpperCase(), 88, 196);
+
+  let y = 260;
+  const drawRow = (label, val) => {
+    ctx.fillStyle = "#8fa395";
+    ctx.font = "14px sans-serif";
+    ctx.fillText(label, 70, y);
+    ctx.fillStyle = "#f3f5f3";
+    ctx.font = "500 15px monospace";
+    const x = width - 70 - ctx.measureText(val).width;
+    ctx.fillText(val, Math.max(260, x), y);
+    ctx.strokeStyle = "#203628";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(70, y + 16);
+    ctx.lineTo(width - 70, y + 16);
+    ctx.stroke();
+    y += 50;
+  };
+
+  const dateStr = record.createdAt ? new Date(record.createdAt).toLocaleString() : new Date().toLocaleString();
+  drawRow("Status", record.status || "confirmed");
+  drawRow("Date", dateStr);
+  if (record.payee) drawRow("Recipient", short(record.payee));
+  if (record.owner) drawRow("Sender", short(record.owner));
+  drawRow("Network", "Robinhood Chain (ID: 4663)");
+  if (record.receiptId) drawRow("Receipt ID", short(record.receiptId));
+
+  y += 20;
+  ctx.fillStyle = "#8fa395";
+  ctx.font = "13px monospace";
+  ctx.fillText("TRANSACTION HASH", 70, y);
+  y += 26;
+  ctx.fillStyle = "#122018";
+  ctx.beginPath();
+  if (ctx.roundRect) ctx.roundRect(70, y, width - 140, 48, 8);
+  else ctx.rect(70, y, width - 140, 48);
+  ctx.fill();
+  ctx.fillStyle = "#6de39c";
+  ctx.font = "13px monospace";
+  ctx.fillText(record.txHash, 86, y + 29);
+
+  y += 90;
+  ctx.fillStyle = "#607567";
+  ctx.font = "12px sans-serif";
+  ctx.fillText("Verified on Robinhood Chain Blockscout Explorer", 70, y);
+
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `tera-receipt-${record.txHash.slice(0, 10)}.png`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    state.notice = "Receipt image downloaded.";
+    render();
+  }, "image/png");
+}
+
+function shareReceiptPdfWeb(record) {
+  const explorerUrl = `https://robinhoodchain.blockscout.com/tx/${record.txHash}`;
+  const dateStr = record.createdAt ? new Date(record.createdAt).toLocaleString() : new Date().toLocaleString();
+  const payeeName = record.payee ? (contactBook.nameFor(state.contacts, record.payee) || record.payee) : "—";
+
+  const printHtml = `
+    <!doctype html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <title>Tera Receipt - ${record.txHash.slice(0, 10)}</title>
+      <style>
+        @page { size: A4; margin: 20mm; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; color: #17241c; background: #fff; padding: 24px; max-width: 680px; margin: auto; }
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #204e35; padding-bottom: 16px; margin-bottom: 24px; }
+        .brand { font-size: 22px; font-weight: 800; color: #1d4330; }
+        .badge { display: inline-block; padding: 5px 12px; border-radius: 999px; font-size: 12px; font-weight: 700; background: #e2f3e8; color: #175231; }
+        .table { width: 100%; border-collapse: collapse; margin-bottom: 28px; }
+        .table tr { border-bottom: 1px solid #e7ebe8; }
+        .table td { padding: 12px 6px; font-size: 14px; }
+        .table td.label { color: #617769; width: 35%; }
+        .table td.value { font-weight: 600; text-align: right; word-break: break-all; }
+        .hash-box { background: #f8faf8; border: 1px dashed #b9c7bd; border-radius: 8px; padding: 12px; margin-bottom: 24px; font-size: 11px; word-break: break-all; font-family: monospace; }
+        .footer { font-size: 12px; color: #798e81; text-align: center; border-top: 1px solid #e0e6e2; padding-top: 18px; }
+        @media print { body { padding: 0; } }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <div class="brand">TERA WALLET</div>
+        <div class="badge">✓ CONFIRMED RECEIPT</div>
+      </div>
+      <table class="table">
+        <tr><td class="label">Action</td><td class="value">${esc(record.action || "Transaction")}</td></tr>
+        <tr><td class="label">Status</td><td class="value">${esc(record.status || "confirmed")}</td></tr>
+        <tr><td class="label">Date & Time</td><td class="value">${esc(dateStr)}</td></tr>
+        ${record.payee ? `<tr><td class="label">Recipient</td><td class="value">${esc(payeeName)}</td></tr>` : ""}
+        ${record.owner ? `<tr><td class="label">Sender</td><td class="value">${esc(record.owner)}</td></tr>` : ""}
+        <tr><td class="label">Network</td><td class="value">Robinhood Chain (ID: 4663)</td></tr>
+        ${record.receiptId ? `<tr><td class="label">Tera Audit Receipt ID</td><td class="value">${esc(record.receiptId)}</td></tr>` : ""}
+      </table>
+      <div class="hash-box">
+        <strong>Transaction Hash:</strong><br>${esc(record.txHash)}
+      </div>
+      <div class="footer">
+        Verified on Robinhood Chain Blockscout Explorer<br>${esc(explorerUrl)}
+      </div>
+      <script>window.onload = function() { window.print(); };</script>
+    </body>
+    </html>
+  `;
+
+  const iframe = document.createElement("iframe");
+  iframe.style.position = "fixed";
+  iframe.style.right = "0";
+  iframe.style.bottom = "0";
+  iframe.style.width = "0";
+  iframe.style.height = "0";
+  iframe.style.border = "none";
+  document.body.appendChild(iframe);
+  const doc = iframe.contentWindow?.document || iframe.contentDocument;
+  if (doc) {
+    doc.open();
+    doc.write(printHtml);
+    doc.close();
+    state.notice = "Print / PDF preview opened.";
+    render();
+    setTimeout(() => document.body.removeChild(iframe), 60000);
+  }
 }
 // Held between renders of the share dialog so the reference toggle can rebuild
 // the same preview without re-deriving which proposal was being shared.
@@ -4375,8 +4587,30 @@ document.addEventListener("click", async (event) => {
         render();
       }
     }
-    if (action === "approve") await approve(index);
     if (action === "receipt-export") exportReceipt(index);
+    if (action === "receipt-share-link" && Number.isInteger(index) && state.records[index]) {
+      shareReceiptLinkWeb(state.records[index]);
+    }
+    if (action === "receipt-share-image" && Number.isInteger(index) && state.records[index]) {
+      shareReceiptImageWeb(state.records[index]);
+    }
+    if (action === "receipt-share-pdf" && Number.isInteger(index) && state.records[index]) {
+      shareReceiptPdfWeb(state.records[index]);
+    }
+    if (action === "receipt-share-json" && Number.isInteger(index) && state.records[index]) {
+      const rec = state.records[index];
+      downloadJson(
+        {
+          chainId: rec.chainId,
+          transactionHash: rec.txHash,
+          actionHash: rec.actionHash,
+          status: rec.status,
+          recordedByTera: rec.recorded,
+          receiptId: rec.receiptId,
+        },
+        `tera-${rec.txHash.slice(0, 12)}.json`,
+      );
+    }
     if (action === "contact-edit") contactDialog(target.dataset.address || "");
     if (action === "contact-remove" && target.dataset.address) {
       state.contacts = contactBook.removeContact(state.contacts, target.dataset.address);
