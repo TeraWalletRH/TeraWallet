@@ -32,7 +32,7 @@ import { StatusBar } from "expo-status-bar";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "./src/speech";
-import { erc20Abi, formatUnits, parseUnits, zeroAddress, isAddress, type Address } from "viem";
+import { erc20Abi, formatUnits, parseUnits, zeroAddress, isAddress, getAddress, type Address } from "viem";
 import { api } from "./src/api";
 import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
@@ -57,10 +57,11 @@ import {
   UNVERIFIABLE,
   value as valueCore,
 } from "./src/core";
-import { check, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
+import { check, checkChecksum, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { screenOrigin } from "./src/viewport";
 import { useAppTheme } from "./src/theme";
+import { shareText } from "./src/share";
 import { normalizePhrase, walletFromPhrase, walletFromPrivateKey } from "./src/crypto";
 import {
   Button,
@@ -7561,6 +7562,40 @@ function Wallet() {
             <Text selectable style={[s.mono, { fontSize: 11, color: colors.faint }]}>
               {r.hash}
             </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginTop: 4 }}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("Copy hash", "复制哈希")}
+                onPress={() =>
+                  void Clipboard.setStringAsync(r.hash).then(() =>
+                    setNotice({
+                      title: t("Hash copied", "哈希已复制"),
+                      body: t("Transaction hash copied to clipboard.", "交易哈希已复制到剪贴板。"),
+                      tone: "success",
+                    }),
+                  )
+                }
+                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+              >
+                <Icon name="content-copy" size={14} color={colors.muted} />
+                <Text style={[s.small, { color: colors.muted }]}>{t("Copy", "复制")}</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("Share hash", "分享哈希")}
+                onPress={() =>
+                  void shareText({
+                    title: t("Transaction Hash", "交易哈希"),
+                    text: r.hash,
+                    url: `https://robinhoodchain.blockscout.com/tx/${r.hash}`,
+                  })
+                }
+                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+              >
+                <Icon name="share-2" size={14} color={colors.muted} />
+                <Text style={[s.small, { color: colors.muted }]}>{t("Share", "分享")}</Text>
+              </Pressable>
+            </View>
           </View>
         </>
       );
@@ -7638,26 +7673,42 @@ function Wallet() {
               <Text style={[s.text, { fontSize: 18, fontWeight: "700" }]} numberOfLines={1}>
                 {walletName(active)}
               </Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={t("Copy address", "复制地址")}
-                onPress={() =>
-                  void Clipboard.setStringAsync(owner).then(() =>
-                    setNotice({
-                      title: t("Address copied", "地址已复制"),
-                      body: t(
-                        "Your Robinhood Chain wallet address is ready to paste.",
-                        "你的 Robinhood Chain 钱包地址已可粘贴。",
-                      ),
-                      tone: "success",
-                    }),
-                  )
-                }
-                style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
-              >
-                <Text style={[s.mono, { color: colors.muted }]}>{short(owner)}</Text>
-                <Icon name="content-copy" size={14} color={colors.muted} />
-              </Pressable>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t("Copy address", "复制地址")}
+                  onPress={() =>
+                    void Clipboard.setStringAsync(owner).then(() =>
+                      setNotice({
+                        title: t("Address copied", "地址已复制"),
+                        body: t(
+                          "Your Robinhood Chain wallet address is ready to paste.",
+                          "你的 Robinhood Chain 钱包地址已可粘贴。",
+                        ),
+                        tone: "success",
+                      }),
+                    )
+                  }
+                  style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+                >
+                  <Text style={[s.mono, { color: colors.muted }]}>{short(owner)}</Text>
+                  <Icon name="content-copy" size={14} color={colors.muted} />
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t("Share address", "分享地址")}
+                  onPress={() =>
+                    void shareText({
+                      title: t("Tera Wallet Address", "Tera 钱包地址"),
+                      text: owner,
+                    })
+                  }
+                  hitSlop={6}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+                >
+                  <Icon name="share-2" size={14} color={colors.muted} />
+                </Pressable>
+              </View>
               {business ? (
                 <Pressable
                   accessibilityRole="button"
