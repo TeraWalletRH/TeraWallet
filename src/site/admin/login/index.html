@@ -60,18 +60,19 @@
 
       async function postLogin(path, payload) {
         let res;
+        const directUrl = 'http://127.0.0.1:3001' + path;
         try {
           res = await fetch(path, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(payload),
           });
-          if (!res.ok && (res.status === 502 || res.status === 404)) {
+          const ct = res.headers.get('content-type') || '';
+          if (!res.ok || res.status === 502 || res.status === 404 || ct.includes('text/html')) {
             throw new Error('Proxy status ' + res.status);
           }
         } catch (e) {
-          // Fall back to direct backend port 3001 if proxy fails
-          const directUrl = 'http://127.0.0.1:3001' + path;
+          // Fall back to direct backend port 3001 if proxy fails or returns HTML fallback
           res = await fetch(directUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
