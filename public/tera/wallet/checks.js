@@ -4,6 +4,23 @@
 
 import { GATES, ZERO_ADDRESS, sameAddress, isAddress, isHash } from "./core.js";
 import { gateVerdict, labelFor } from "../core/verdict.js";
+import { getAddress } from "viem";
+
+export function checkAddressChecksum(address) {
+  if (typeof address !== "string" || !isAddress(address)) {
+    return { validAddress: false, isChecksummed: false, checksummedAddress: null };
+  }
+  try {
+    const checksummed = getAddress(address);
+    return {
+      validAddress: true,
+      isChecksummed: address === checksummed,
+      checksummedAddress: checksummed,
+    };
+  } catch (_) {
+    return { validAddress: false, isChecksummed: false, checksummedAddress: null };
+  }
+}
 
 export const GATE_LABELS = {
   asset_registry: "Asset registry",

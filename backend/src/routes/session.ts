@@ -10,7 +10,7 @@ import type { ActionType } from "../pipeline/types";
 const router = Router();
 
 // In-memory fallback
-const memorySessions: Array<{
+export const memorySessions: Array<{
   id: string;
   accountAddress: string;
   sessionKeyAddress: string;

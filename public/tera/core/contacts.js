@@ -199,11 +199,7 @@ export function recentPayees(history, book, { owner = "", limit = 8 } = {}) {
     if (!address || address === self || seen.has(address)) continue;
     seen.add(address);
     const contact = saved.find((entry) => entry.address === address);
-    out.push({
-      address,
-      name: contact?.name ?? "",
-      lastSentAt: Number(row?.createdAt) || 0,
-    });
+    out.push({ address, name: contact?.name ?? "", lastSentAt: Number(row?.createdAt) || 0 });
     if (out.length >= limit) break;
   }
   return out;

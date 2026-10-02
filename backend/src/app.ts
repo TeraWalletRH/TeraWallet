@@ -21,6 +21,7 @@ import teamsRouter from "./routes/teams";
 import payLinksRouter from "./routes/pay-links";
 import notifyRouter from "./routes/notify";
 import leaderboardRouter from "./routes/leaderboard";
+import adminRouter from "./routes/admin";
 
 const app = express();
 
@@ -28,11 +29,12 @@ app.use(requestIdMiddleware);
 
 app.use((req, res, next) => {
   const origin = req.headers.origin;
-  const allowedOrigins = new Set(["https://terawallet.app", "https://www.terawallet.app", "http://localhost:5173"]);
-  if (origin && allowedOrigins.has(origin)) res.header("Access-Control-Allow-Origin", origin);
+  const isLocalhost = Boolean(origin && /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/i.test(origin));
+  const allowedOrigins = new Set(["https://terawallet.app", "https://www.terawallet.app", "http://localhost:5173", "http://localhost:8080", "http://127.0.0.1:8080"]);
+  if (origin && (allowedOrigins.has(origin) || isLocalhost)) res.header("Access-Control-Allow-Origin", origin);
   else res.header("Access-Control-Allow-Origin", "*");
   res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  res.header("Access-Control-Allow-Headers", "Content-Type,Authorization");
+  res.header("Access-Control-Allow-Headers", "Content-Type,Authorization,x-admin-token");
   res.header("Access-Control-Allow-Credentials", "true");
   if (req.method === "OPTIONS") {
     res.sendStatus(204);
@@ -67,5 +69,6 @@ app.use(intentRouter);
 app.use(agentRouter);
 app.use(sessionRouter);
 app.use(accountRouter);
+app.use(adminRouter);
 
 export default app;

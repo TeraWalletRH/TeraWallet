@@ -1,21 +1,16 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-e23e12a7e6d7",
-  "builtAt": "2026-10-02T10:26:57.710Z",
+  "release": "r-b8add885085a",
+  "builtAt": "2026-10-02T15:24:52.134Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
   "files": [
     {
       "path": "core/activity-search.js",
-      "hash": "sha256-sUhT+m/8odBsqqW4vdeVK36rb5ZBb0GQXvcbSk9KmDA=",
-      "bytes": 6150
-    },
-    {
-      "path": "core/batch.js",
-      "hash": "sha256-cf8whORB87g6+XgxxJW4hjg9Xf3R1FQPa8fn07tNJEI=",
-      "bytes": 4766
+      "hash": "sha256-ZOvBj2h83Insh6qKxxNq5kJbKhj4IojFRF+A62o9BWc=",
+      "bytes": 5999
     },
     {
       "path": "core/business-email.js",
@@ -24,8 +19,8 @@
     },
     {
       "path": "core/contacts.js",
-      "hash": "sha256-EXnjQoyhTc+5gPDFAkoLj3hwieOI+v5v1EJK2Vhw6o0=",
-      "bytes": 9262
+      "hash": "sha256-2l3Xvi2ltsP+KS4xt9bKiUdqaAagiQt0Y+WWI+UHSaI=",
+      "bytes": 9239
     },
     {
       "path": "core/discretion.js",
@@ -39,18 +34,13 @@
     },
     {
       "path": "core/limits.js",
-      "hash": "sha256-IURJbRnnsqQv/zHKa8n/ff/X2YOmc7Lcx7WaqHyzJO8=",
-      "bytes": 5466
+      "hash": "sha256-hpY/vR0krUcMG97igvgG+zdL/am7ZF0tPNJBuLWBq2U=",
+      "bytes": 4852
     },
     {
       "path": "core/linkage.js",
       "hash": "sha256-J+X4NGLEfY4oKyqBT1OgHxnUcCe5KYB40MkA25fZYiM=",
       "bytes": 15253
-    },
-    {
-      "path": "core/lookalike.js",
-      "hash": "sha256-H5l/v+OjrqjlorM3iKHzji3DGtRJ0zKzObwO1qQCrCw=",
-      "bytes": 3673
     },
     {
       "path": "core/minimise.js",
@@ -69,8 +59,8 @@
     },
     {
       "path": "core/notes.js",
-      "hash": "sha256-diH8JhMkfT8QPMrBUdm8eBQHG8dFDxqqk6AxpxmeqQA=",
-      "bytes": 3014
+      "hash": "sha256-U1HPvUWisdyeh2CC8YOMLG/Z+U0d+x3oac/S+r78YTk=",
+      "bytes": 2939
     },
     {
       "path": "core/notify.js",
@@ -108,11 +98,6 @@
       "bytes": 6459
     },
     {
-      "path": "core/split.js",
-      "hash": "sha256-njye1RA7+nYiodA/zLzhlHXzF8n6ZaHStXEpnXc3fS8=",
-      "bytes": 4852
-    },
-    {
       "path": "core/tags.js",
       "hash": "sha256-cGw01ChCVxS/6mKWjdsAjIzwBNZvf0zEe0aqUvPuo5A=",
       "bytes": 9680
@@ -144,13 +129,13 @@
     },
     {
       "path": "wallet/app.css",
-      "hash": "sha256-EVr5aj6Ec+EBnHqPnefutzoCHDikZUNkgSsBfbhgjO4=",
-      "bytes": 22684
+      "hash": "sha256-S70utLrG3NC85P+NdLAuYnAJjPJrdSFg6SHyjSfxW1w=",
+      "bytes": 21443
     },
     {
       "path": "wallet/app.js",
-      "hash": "sha256-KKkPkRyOxUW37qMi+nfOlccmmp18JKAmYuBtj/E6s4I=",
-      "bytes": 237947
+      "hash": "sha256-8q9Ogy2q6GkmCaP8eXKgxHMauvOjEQDytTqSFkk2is8=",
+      "bytes": 225952
     },
     {
       "path": "wallet/boundary.js",
@@ -164,8 +149,8 @@
     },
     {
       "path": "wallet/checks.js",
-      "hash": "sha256-a+33TWBYCzU/ASNr3pAlkMGATN7R0ClkI8sHYSJudLY=",
-      "bytes": 8416
+      "hash": "sha256-6Ar1z+hvc+VhE1GOXg5BPYhOpn7O1UtA1iDGVNig1Ag=",
+      "bytes": 8938
     },
     {
       "path": "wallet/core.js",
@@ -248,6 +233,11 @@
       "bytes": 4530
     },
     {
+      "path": "wallet/share.js",
+      "hash": "sha256-Sd+kF4/0wAk7c87YJveO8AyQ5cS2dFfdU0ohizda6o4=",
+      "bytes": 2189
+    },
+    {
       "path": "wallet/simulator.js",
       "hash": "sha256-Hdw3UEOcxs+3122inPCOl6JQkxo52yx4M1JNKKRTNtc=",
       "bytes": 7225
@@ -256,6 +246,11 @@
       "path": "wallet/submission.js",
       "hash": "sha256-XWXdDT/N1dZISGzvqN39Ywn7VriRISxdcAB91ab/XBw=",
       "bytes": 8282
+    },
+    {
+      "path": "wallet/theme.js",
+      "hash": "sha256-ErWYWpFrL6dbr8xUXZlrnEUo5VE7zVrgwdnG2LhMh/Q=",
+      "bytes": 3272
     },
     {
       "path": "wallet/vault.js",
@@ -268,5 +263,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-4j4Sp+bX9h1wbMHMSVB8GJjGZeBXpfBXxktykhfI3ec="
+  "filesHash": "sha256-uK3YhQhaIyL5nf97zWIPEKkcUrKKZF3ldBSM4a8qum8="
 }

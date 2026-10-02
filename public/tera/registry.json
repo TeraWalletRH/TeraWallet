@@ -2,43 +2,31 @@
   "registry": "Tera approved builds",
   "version": 1,
   "algorithm": "sha256",
-  "publishedAt": "2026-10-02T10:26:58.141Z",
+  "publishedAt": "2026-10-02T15:24:52.300Z",
   "note": "Every release this site has published, newest first. A receipt naming a release absent from this list was not produced by a build Tera shipped. Presence here does not establish that any particular page was running that build — check the file hashes yourself against the published source.",
   "builds": [
     {
-      "release": "r-e23e12a7e6d7",
-      "filesHash": "sha256-4j4Sp+bX9h1wbMHMSVB8GJjGZeBXpfBXxktykhfI3ec=",
-      "publishedAt": "2026-10-02T10:26:58.073Z",
-      "files": 52
-    },
-    {
-      "release": "r-499b9102ebda",
-      "filesHash": "sha256-SZuRAuvaEMm6nXT765iWlJpTWrJJfrDJglpaDl7s6hc=",
-      "publishedAt": "2026-10-02T10:07:27.350Z",
-      "files": 52
-    },
-    {
-      "release": "r-f301d29ebb5a",
-      "filesHash": "sha256-8wHSnrtaL+TTxGvQmMYDwUQdSKC6GGZ0pF6/xRGVd5E=",
-      "publishedAt": "2026-10-01T23:50:07.141Z",
-      "files": 52
-    },
-    {
-      "release": "r-f7024cf1e0bc",
-      "filesHash": "sha256-9wJM8eC8pBMRyq6+J7sZApc+3GW3INOem5xP8CHWorU=",
-      "publishedAt": "2026-10-01T23:24:06.839Z",
+      "release": "r-b8add885085a",
+      "filesHash": "sha256-uK3YhQhaIyL5nf97zWIPEKkcUrKKZF3ldBSM4a8qum8=",
+      "publishedAt": "2026-10-02T15:24:52.272Z",
       "files": 51
     },
     {
-      "release": "r-c777fcb763f5",
-      "filesHash": "sha256-x3f8t2P1GZEZjRhShm1tOF0t1P9sKD+MXk9Mm2TAJD0=",
-      "publishedAt": "2026-10-01T15:39:37.730Z",
+      "release": "r-13361d0f502d",
+      "filesHash": "sha256-EzYdD1At7RYCqUuLjPdgOVWeUzCloHmbTHvc7Ev59yE=",
+      "publishedAt": "2026-10-02T15:15:37.891Z",
+      "files": 51
+    },
+    {
+      "release": "r-2d323284331c",
+      "filesHash": "sha256-LTIyhDMcink1bgOtSgFXMPTuU8a8DbhWdszoed3rsnk=",
+      "publishedAt": "2026-10-02T12:37:06.239Z",
       "files": 50
     },
     {
-      "release": "r-4dbe6368c3cc",
-      "filesHash": "sha256-Tb5jaMPMv8Ya73izykS2JHFqpOL7JbDSZIf4oslCRrA=",
-      "publishedAt": "2026-09-30T22:40:54.211Z",
+      "release": "r-22ec50138d94",
+      "filesHash": "sha256-IuxQE42UUaMDeXU6xp+Xz7S07mfQ5AjGrbiwDtKrFLQ=",
+      "publishedAt": "2026-10-02T11:41:53.534Z",
       "files": 49
     },
     {
