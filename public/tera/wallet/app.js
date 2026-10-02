@@ -523,6 +523,7 @@ const state = {
   pricesError: "",
   keyInfo: null,
   vaultKeyEpoch: 1,
+  autoLockMinutes: 15,
   recovery: null,
   demo: false,
   guide: 0,
@@ -545,6 +546,9 @@ function vaultStorageKey() {
 }
 function vaultSettingsKey() {
   return `${storageKey()}:retention`;
+}
+function autoLockSettingsKey() {
+  return `${storageKey()}:autolock`;
 }
 function keyInfoStorageKey() {
   return `${storageKey()}:keyinfo`;
@@ -587,6 +591,7 @@ function vaultPayload() {
     agentSessionToken: state.agentSessionToken,
     presets: state.presets,
     rpcEndpoints: state.rpcEndpoints,
+    autoLockMinutes: state.autoLockMinutes,
   };
 }
 async function persist() {
@@ -622,6 +627,8 @@ function loadRecords() {
   state.recovery = null;
   const stored = Number(localStorage.getItem(vaultSettingsKey()));
   state.vaultRetentionDays = [7, 30, 90, 365].includes(stored) ? stored : 30;
+  const storedAutoLock = Number(localStorage.getItem(autoLockSettingsKey()));
+  state.autoLockMinutes = [0, 5, 15, 30, 60].includes(storedAutoLock) ? storedAutoLock : 15;
 }
 async function unlockEncryptedStorage(passphrase = "") {
   connected();
@@ -644,6 +651,9 @@ async function unlockEncryptedStorage(passphrase = "") {
   state.vaultKey = key;
   state.keyInfo = info;
   state.vaultKeyEpoch = info?.epoch || 1;
+  if (typeof vault?.autoLockMinutes === "number" && [0, 5, 15, 30, 60].includes(vault.autoLockMinutes)) {
+    state.autoLockMinutes = vault.autoLockMinutes;
+  }
   state.records = Array.isArray(vault?.records)
     ? vault.records.filter(
         (r) => isHash(r.txHash) && sameAddress(r.owner, state.owner) && r.chainId === chainId,
@@ -681,6 +691,37 @@ async function unlockEncryptedStorage(passphrase = "") {
   // Remove the previous plaintext record store after the encrypted vault unlocks.
   localStorage.removeItem(storageKey());
 }
+function lockVault() {
+  if (!state.vaultKey) return;
+  state.vaultKey = null;
+  state.records = [];
+  state.contacts = [];
+  state.drafts = [];
+  state.bridges = [];
+  state.versions = {};
+  state.agentSessionToken = "";
+  state.presets = [];
+  state.rpcEndpoints = [];
+  state.notice = "Vault locked due to inactivity.";
+  render();
+}
+let lastUserActivity = Date.now();
+function recordActivity() {
+  lastUserActivity = Date.now();
+}
+if (typeof window !== "undefined") {
+  ["mousemove", "keydown", "touchstart", "scroll", "pointerdown", "click"].forEach((evt) => {
+    window.addEventListener(evt, recordActivity, { passive: true });
+  });
+}
+setInterval(() => {
+  if (!state.vaultKey) return;
+  const mins = state.autoLockMinutes ?? 15;
+  if (mins <= 0) return;
+  if (Date.now() - lastUserActivity >= mins * 60 * 1000) {
+    lockVault();
+  }
+}, 10000);
 function clearEncryptedStorage() {
   if (!state.owner) return;
   localStorage.removeItem(vaultStorageKey());
@@ -2335,7 +2376,7 @@ function appearancePanel() {
 }
 
 function settings() {
-  return `<div class="content-grid">${appearancePanel()}<section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${state.owner ? `<button class="btn" data-action="copy-text" data-text="${esc(state.owner)}">Copy address</button><button class="btn" data-action="share-text" data-text="${esc(state.owner)}">Share address</button>` : ""}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Vault unlocked" : "Unlock encrypted vault", "vault-unlock", !state.owner || state.vaultKey ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel" id="account-separation"><h2>Account separation</h2>${separationPanel()}</section><section class="panel"><h2>Your tag</h2>${tagPanel()}</section><section class="panel" id="saved-addresses"><h2>Saved addresses</h2>${contactsPanel()}</section><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
+  return `<div class="content-grid">${appearancePanel()}<section class="panel"><h2>Wallet connection</h2>${pair("Account", state.owner || "Not connected")}${pair("Network ID", chainId)}${pair("Wallet network", state.chain || "Not connected")}<div class="actions">${button(state.owner ? "Disconnect" : "Connect wallet", state.owner ? "disconnect" : "connect")}${state.owner ? `<button class="btn" data-action="copy-text" data-text="${esc(state.owner)}">Copy address</button><button class="btn" data-action="share-text" data-text="${esc(state.owner)}">Share address</button>` : ""}${button(state.hide ? "Show balances" : "Hide balances", "privacy")}</div></section><aside class="panel"><h2>Encrypted local storage</h2><p>${state.vaultKey ? "Drafts and device-side transaction records are encrypted in this browser." : "Unlock with a wallet signature to read and save encrypted drafts and device-side transaction records."}</p>${pair("Retention", `${state.vaultRetentionDays} days`)}${pair("Auto-lock", (state.autoLockMinutes ?? 15) === 0 ? "Never" : `${state.autoLockMinutes ?? 15} min`)}<div class="field"><label for="vault-retention">Keep encrypted data for</label><select id="vault-retention" ${!state.owner ? "disabled" : ""}>${[7, 30, 90, 365].map((days) => `<option value="${days}" ${state.vaultRetentionDays === days ? "selected" : ""}>${days} days</option>`).join("")}</select></div><div class="field"><label for="auto-lock-timer">Auto-lock after inactivity</label><select id="auto-lock-timer" ${!state.owner ? "disabled" : ""}>${[5, 15, 30, 60, 0].map((mins) => `<option value="${mins}" ${(state.autoLockMinutes ?? 15) === mins ? "selected" : ""}>${mins === 0 ? "Never" : `${mins} minutes${mins === 15 ? " (default)" : ""}`}</option>`).join("")}</select></div><p class="micro">Unlocking signs a local storage message only. It does not approve a transaction or send a key to Tera.</p><div class="actions">${button(state.vaultKey ? "Lock vault" : "Unlock encrypted vault", state.vaultKey ? "vault-lock" : "vault-unlock", !state.owner ? "disabled" : "")}${button("Clear encrypted data", "vault-clear", !state.owner ? "disabled" : "")}</div></aside><aside class="panel"><h2>Data retention</h2><p>Delete assistant messages, drafts, proposal versions, presets, and local request metadata. Confirmed transaction receipts stay available for audit history.</p><div class="actions">${button("Delete local assistant data", "assistant-local-clear", !state.owner ? "disabled" : "")}${button("Delete stored assistant data", "assistant-server-clear", !state.owner ? "disabled" : "")}</div></aside><section class="panel"><h2>Vault key lifecycle</h2>${vaultKeyPanel()}</section><aside class="panel"><h2>Balance reads</h2>${balanceReadsPanel()}</aside><section class="panel" id="account-separation"><h2>Account separation</h2>${separationPanel()}</section><section class="panel"><h2>Your tag</h2>${tagPanel()}</section><section class="panel" id="saved-addresses"><h2>Saved addresses</h2>${contactsPanel()}</section><section class="panel"><h2>Code transparency</h2>${codeTransparencyPanel()}</section><section class="panel panel-duress"><h2>Wipe this browser</h2>${duressPanel()}</section><aside class="panel"><h2>Guided private demo</h2><p>Run the wallet on sample data to show the privacy boundary without a real account. No request leaves the page and no transaction can be signed.</p><div class="actions">${state.demo ? button("Reset demo", "demo-reset") + button("Exit demo", "demo-exit") : button("Start guided demo", "demo-start")}</div></aside></div>`;
 }
 
 /**
@@ -4047,6 +4088,11 @@ document.addEventListener("click", async (event) => {
         render();
       }
     }
+    if (action === "vault-lock") {
+      lockVault();
+      state.notice = "Encrypted local storage locked.";
+      render();
+    }
     if (action === "duress-wipe") duressWipeDialog();
     if (action === "vault-rotate") rotateVaultKeyDialog();
     if (action === "vault-rotate-confirm") {
@@ -4485,6 +4531,15 @@ document.addEventListener("change", (event) => {
       themeManager.applyToDocument();
       render();
     }
+    return;
+  }
+  if (event.target?.id === "auto-lock-timer") {
+    const mins = Number(event.target.value);
+    if (![0, 5, 15, 30, 60].includes(mins)) return;
+    state.autoLockMinutes = mins;
+    if (state.owner) localStorage.setItem(autoLockSettingsKey(), String(mins));
+    void persist();
+    render();
     return;
   }
   if (event.target?.id !== "vault-retention") return;
