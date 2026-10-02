@@ -12,69 +12,60 @@
         color: #f2f0ee;
       }
       * { box-sizing: border-box; }
-      body { margin: 0; padding: 24px; background: #0d1712; }
-      .nav { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #243b2c; padding-bottom: 16px; margin-bottom: 24px; }
+      body { margin: 0; padding: 24px; background: #0d1712; min-height: 100vh; }
+      .nav { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #243b2c; padding-bottom: 16px; margin-bottom: 24px; gap: 16px; }
       .brand { font-size: 16px; font-weight: 700; color: #f7f4de; text-decoration: none; display: flex; align-items: center; gap: 10px; font-family: 'IBM Plex Mono', monospace; }
-      .brand img { height: 32px; width: auto; }
-      .nav-links { display: flex; gap: 8px; flex-wrap: wrap; }
-      .nav-links a { color: #9da998; text-decoration: none; font-size: 11px; font-weight: 600; padding: 6px 12px; border-radius: 8px; transition: all 0.2s; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; }
-      .nav-links a:hover, .nav-links a.active { background: #243b2c; color: #f7f4de; border: 1px solid #768143; }
-      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 32px; }
+      .brand img { height: 32px; width: auto; object-fit: contain; }
+      .nav-links { display: flex; gap: 6px; flex-wrap: wrap; }
+      .nav-links a { color: #9da998; text-decoration: none; font-size: 11px; font-weight: 600; padding: 7px 12px; border-radius: 8px; transition: all 0.2s; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.03em; border: 1px solid transparent; }
+      .nav-links a:hover { color: #f7f4de; background: #1a2c20; }
+      .nav-links a.active { background: #243b2c; color: #f7f4de; border-color: #768143; box-shadow: 0 2px 8px rgba(118, 129, 67, 0.2); }
+      .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; margin-bottom: 24px; }
       .card { background: #16251c; border: 1px solid #243b2c; border-radius: 14px; padding: 20px; }
-      .card-title { font-size: 11px; font-weight: 600; color: #8a9765; margin-bottom: 8px; text-transform: uppercase; font-family: 'IBM Plex Mono', monospace; }
+      .card-title { font-size: 11px; font-weight: 600; color: #8a9765; margin-bottom: 8px; text-transform: uppercase; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.04em; }
       .card-val { font-size: 28px; font-weight: 700; color: #f7f4de; font-family: monospace; }
       .section { background: #16251c; border: 1px solid #243b2c; border-radius: 14px; padding: 24px; margin-bottom: 24px; }
-      h2 { font-size: 16px; font-weight: 700; margin-top: 0; color: #f7f4de; }
+      .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; flex-wrap: wrap; gap: 12px; }
+      h2 { font-size: 16px; font-weight: 700; margin: 0; color: #f7f4de; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.03em; display: flex; align-items: center; gap: 8px; }
+      .sub-title { font-size: 12px; color: #8a9765; margin-top: 4px; font-weight: 400; font-family: sans-serif; }
+      .table-wrap { overflow-x: auto; border: 1px solid #243b2c; border-radius: 10px; }
       table { width: 100%; text-align: left; border-collapse: collapse; font-size: 12px; }
-      th { padding: 12px; background: #0b130e; border-bottom: 1px solid #243b2c; color: #8a9765; text-transform: uppercase; font-family: 'IBM Plex Mono', monospace; }
-      td { padding: 12px; border-bottom: 1px solid #243b2c; font-family: monospace; color: #c4cebf; }
-      .btn { padding: 8px 12px; background: #243b2c; border: 1px solid #768143; border-radius: 8px; color: #f7f4de; font-weight: 700; font-size: 12px; cursor: pointer; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; }
-      .btn:hover { background: #52643e; color: #ffffff; }
-      .btn-danger { background: rgba(244, 63, 94, 0.15); color: #f87171; border: 1px solid rgba(244, 63, 94, 0.3); }
-      .btn-danger:hover { background: rgba(244, 63, 94, 0.3); }
-      .badge { padding: 4px 8px; border-radius: 9999px; font-size: 10px; font-weight: 700; text-transform: uppercase; background: rgba(138, 151, 101, 0.15); color: #8a9765; border: 1px solid rgba(138, 151, 101, 0.3); font-family: 'IBM Plex Mono', monospace; }
+      th { padding: 14px 16px; background: #0b130e; border-bottom: 1px solid #243b2c; color: #8a9765; text-transform: uppercase; font-family: 'IBM Plex Mono', monospace; font-size: 11px; letter-spacing: 0.04em; }
+      td { padding: 14px 16px; border-bottom: 1px solid #243b2c; font-family: monospace; color: #c4cebf; white-space: nowrap; }
+      tr:last-child td { border-bottom: 0; }
+      tr:hover td { background: rgba(36, 59, 44, 0.4); }
+      .btn { padding: 6px 12px; background: #243b2c; border: 1px solid #768143; border-radius: 6px; color: #f7f4de; font-weight: 700; font-size: 11px; cursor: pointer; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; transition: all 0.15s; }
+      .btn:hover { background: #52643e; color: #ffffff; border-color: #8a9765; }
+      .btn-danger { background: rgba(239, 68, 68, 0.12); color: #f87171; border: 1px solid rgba(239, 68, 68, 0.3); }
+      .btn-danger:hover { background: rgba(239, 68, 68, 0.25); color: #ffffff; border-color: #f87171; }
+      .badge { padding: 4px 10px; border-radius: 9999px; font-size: 10px; font-weight: 700; text-transform: uppercase; background: rgba(138, 151, 101, 0.15); color: #8a9765; border: 1px solid rgba(138, 151, 101, 0.3); font-family: 'IBM Plex Mono', monospace; display: inline-flex; align-items: center; gap: 4px; }
+      .badge-success { background: rgba(52, 211, 153, 0.15); color: #34d399; border-color: rgba(52, 211, 153, 0.3); }
+      .badge-warning { background: rgba(251, 191, 36, 0.15); color: #fbbf24; border-color: rgba(251, 191, 36, 0.3); }
+      .empty-state { text-align: center; padding: 40px 16px; color: #72806a; font-family: 'IBM Plex Mono', monospace; }
     </style>
   </head>
   <body>
     <header class="nav">
-      <a href="/admin/dashboard" class="brand">
+      <a href="/admin/dashboard" class="brand" data-route="/admin/dashboard">
         <img src="/logo.png" alt="Tera Logo" onerror="this.onerror=null; this.src='/tera/logo.png';" />
         <span>TERA ADMIN</span>
       </a>
       <div class="nav-links">
-        <a href="/admin/dashboard" class="active">Overview</a>
-        <a href="/admin/accounts">Accounts</a>
-        <a href="/admin/tags">Tags (@tags)</a>
-        <a href="/admin/business-emails">Emails</a>
-        <a href="/admin/teams">Teams</a>
-        <a href="/admin/payment-links">Payment Links</a>
-        <a href="/admin/private-jobs">Private Jobs</a>
-        <a href="/admin/staking">Staking</a>
-        <a href="/admin/audit-logs">Audit Logs</a>
+        <a href="/admin/dashboard" data-route="/admin/dashboard">Overview</a>
+        <a href="/admin/accounts" data-route="/admin/accounts">Accounts</a>
+        <a href="/admin/tags" data-route="/admin/tags">Tags (@tags)</a>
+        <a href="/admin/business-emails" data-route="/admin/business-emails">Emails</a>
+        <a href="/admin/teams" data-route="/admin/teams">Teams</a>
+        <a href="/admin/payment-links" data-route="/admin/payment-links">Payment Links</a>
+        <a href="/admin/private-jobs" data-route="/admin/private-jobs">Private Jobs</a>
+        <a href="/admin/staking" data-route="/admin/staking">Staking</a>
+        <a href="/admin/audit-logs" data-route="/admin/audit-logs">Audit Logs</a>
         <a href="#" id="signOutBtn" style="color: #f87171;">Sign Out</a>
       </div>
     </header>
-    </header>
 
     <main id="app">
-      <div class="grid" id="statsGrid">
-        <div class="card"><div class="card-title">Total Accounts</div><div class="card-val" id="stAccounts">—</div></div>
-        <div class="card"><div class="card-title">Active Sessions</div><div class="card-val" id="stSessions">—</div></div>
-        <div class="card"><div class="card-title">Registered Tags</div><div class="card-val" id="stTags">—</div></div>
-        <div class="card"><div class="card-title">Business Emails</div><div class="card-val" id="stEmails">—</div></div>
-      </div>
-
-      <div class="section">
-        <h2>Recent Admin Audit Activity</h2>
-        <table>
-          <thead>
-            <tr><th>Action</th><th>Target Entity</th><th>Target ID</th><th>Timestamp</th></tr>
-          </thead>
-          <tbody id="activityBody">
-            <tr><td colspan="4" style="color: #64748b; text-align: center;">Loading activity telemetry...</td></tr>
-          </tbody>
-        </table>
-      </div>
+      <div class="empty-state">Loading Admin Console View...</div>
     </main>
 
     <script>
@@ -83,46 +74,419 @@
         window.location.href = '/admin/login';
       }
 
-      async function apiFetch(path) {
-        const res = await fetch('/api/admin' + path, {
-          headers: {
-            'Authorization': 'Bearer ' + token,
-            'x-admin-token': token || ''
+      async function apiFetch(path, options = {}) {
+        let res;
+        try {
+          res = await fetch('/api/admin' + path, {
+            ...options,
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + token,
+              'x-admin-token': token || '',
+              ...(options.headers || {})
+            }
+          });
+          if (res.status === 401) {
+            localStorage.removeItem('tera_admin_token');
+            window.location.href = '/admin/login';
+            throw Error('Unauthorized');
           }
-        });
-        if (res.status === 401) {
-          localStorage.removeItem('tera_admin_token');
-          window.location.href = '/admin/login';
-          throw Error('Unauthorized');
+          if (res.status === 502 || res.status === 404 || (res.headers.get('content-type') || '').includes('text/html')) {
+            throw Error('Proxy status ' + res.status);
+          }
+        } catch (e) {
+          // Fall back to direct backend port 3001
+          res = await fetch('http://127.0.0.1:3001/api/admin' + path, {
+            ...options,
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ' + token,
+              'x-admin-token': token || '',
+              ...(options.headers || {})
+            }
+          });
+          if (res.status === 401) {
+            localStorage.removeItem('tera_admin_token');
+            window.location.href = '/admin/login';
+            throw Error('Unauthorized');
+          }
         }
-        return res.json();
+        return res.json().catch(() => ({}));
       }
 
-      async function loadStats() {
-        try {
-          const data = await apiFetch('/stats');
-          if (data.success && data.stats) {
-            document.getElementById('stAccounts').textContent = data.stats.totalAccounts || 0;
-            document.getElementById('stSessions').textContent = data.stats.totalActiveSessions || 0;
-            document.getElementById('stTags').textContent = data.stats.totalTags || 0;
-            document.getElementById('stEmails').textContent = data.stats.totalBusinessEmails || 0;
+      // Dynamic view renderer based on current route
+      async function renderView() {
+        const path = location.pathname.replace(/\/$/, '') || '/admin/dashboard';
+        const app = document.getElementById('app');
 
-            const tbody = document.getElementById('activityBody');
-            if (data.recentActivity && data.recentActivity.length > 0) {
-              tbody.innerHTML = data.recentActivity.map(act => `
+        // Highlight active nav link
+        document.querySelectorAll('.nav-links a[data-route]').forEach(link => {
+          const targetRoute = link.getAttribute('data-route');
+          if (targetRoute === path || (targetRoute === '/admin/dashboard' && (path === '/admin' || path === '/admin/'))) {
+            link.classList.add('active');
+          } else {
+            link.classList.remove('active');
+          }
+        });
+
+        if (path === '/admin/dashboard' || path === '/admin') {
+          app.innerHTML = `
+            <div class="grid">
+              <div class="card"><div class="card-title">Total Accounts</div><div class="card-val" id="stAccounts">—</div></div>
+              <div class="card"><div class="card-title">Active Sessions</div><div class="card-val" id="stSessions">—</div></div>
+              <div class="card"><div class="card-title">Registered Tags</div><div class="card-val" id="stTags">—</div></div>
+              <div class="card"><div class="card-title">Business Emails</div><div class="card-val" id="stEmails">—</div></div>
+            </div>
+            <div class="section">
+              <div class="section-header">
+                <div>
+                  <h2>Recent Telemetry & Audit Activity</h2>
+                  <div class="sub-title">Real-time administrative operations log</div>
+                </div>
+                <button class="btn" onclick="renderView()">Refresh</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Action</th><th>Target Entity</th><th>Target ID</th><th>Timestamp</th></tr>
+                  </thead>
+                  <tbody id="activityBody">
+                    <tr><td colspan="4" class="empty-state">Loading telemetry...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+          try {
+            const data = await apiFetch('/stats');
+            if (data.success && data.stats) {
+              document.getElementById('stAccounts').textContent = data.stats.totalAccounts || 0;
+              document.getElementById('stSessions').textContent = data.stats.totalActiveSessions || 0;
+              document.getElementById('stTags').textContent = data.stats.totalTags || 0;
+              document.getElementById('stEmails').textContent = data.stats.totalBusinessEmails || 0;
+              const tbody = document.getElementById('activityBody');
+              if (data.recentActivity && data.recentActivity.length > 0) {
+                tbody.innerHTML = data.recentActivity.map(act => `
+                  <tr>
+                    <td><span class="badge badge-success">${act.action}</span></td>
+                    <td>${act.target_entity}</td>
+                    <td>${act.target_id}</td>
+                    <td style="color: #72806a;">${new Date(act.created_at).toLocaleString()}</td>
+                  </tr>
+                `).join('');
+              } else {
+                tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No audit logs logged yet.</td></tr>';
+              }
+            }
+          } catch(e) { console.error(e); }
+
+        } else if (path === '/admin/accounts') {
+          app.innerHTML = `
+            <div class="section">
+              <div class="section-header">
+                <div>
+                  <h2>Registered Accounts & Active Sessions</h2>
+                  <div class="sub-title">View user accounts and manage active session keys</div>
+                </div>
+                <button class="btn" onclick="renderView()">Refresh Data</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Account Address</th><th>Active Sessions</th><th>Registered At</th><th>Actions</th></tr>
+                  </thead>
+                  <tbody id="accountsBody">
+                    <tr><td colspan="4" class="empty-state">Loading accounts data...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+          try {
+            const data = await apiFetch('/accounts');
+            const tbody = document.getElementById('accountsBody');
+            if (data.success && data.items && data.items.length > 0) {
+              tbody.innerHTML = data.items.map(acc => `
                 <tr>
-                  <td style="color: #34d399; font-weight: bold;">${act.action}</td>
-                  <td>${act.target_entity}</td>
-                  <td>${act.target_id}</td>
-                  <td style="color: #64748b;">${new Date(act.created_at).toLocaleString()}</td>
+                  <td style="color: #f7f4de; font-weight: bold;">${acc.address}</td>
+                  <td><span class="badge">${acc.sessionCount || 0} Sessions</span></td>
+                  <td style="color: #72806a;">${acc.createdAt ? new Date(acc.createdAt).toLocaleString() : 'N/A'}</td>
+                  <td><button class="btn" onclick="alert('Account Details: ' + '${acc.address}')">Inspect</button></td>
                 </tr>
               `).join('');
             } else {
-              tbody.innerHTML = '<tr><td colspan="4" style="color: #64748b; text-align: center;">No audit logs yet.</td></tr>';
+              tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No user accounts found.</td></tr>';
             }
-          }
-        } catch (e) { console.error(e); }
+          } catch(e) { console.error(e); }
+
+        } else if (path === '/admin/tags') {
+          app.innerHTML = `
+            <div class="section">
+              <div class="section-header">
+                <div>
+                  <h2>Handle Tags (@tags) Moderation</h2>
+                  <div class="sub-title">Inspect, claim, or release user handle tags</div>
+                </div>
+                <button class="btn" onclick="renderView()">Refresh Tags</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Tag Handle</th><th>Owner Address</th><th>Status</th><th>Actions</th></tr>
+                  </thead>
+                  <tbody id="tagsBody">
+                    <tr><td colspan="4" class="empty-state">Loading handle tags...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+          try {
+            const data = await apiFetch('/tags');
+            const tbody = document.getElementById('tagsBody');
+            if (data.success && data.items && data.items.length > 0) {
+              tbody.innerHTML = data.items.map(tag => `
+                <tr>
+                  <td style="color: #8a9765; font-weight: bold;">@${tag.handle || tag.name}</td>
+                  <td>${tag.owner_address || tag.owner}</td>
+                  <td><span class="badge badge-success">ACTIVE</span></td>
+                  <td><button class="btn btn-danger" onclick="alert('Release handle tag @${tag.handle || tag.name}')">Release Tag</button></td>
+                </tr>
+              `).join('');
+            } else {
+              tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No registered handle tags found.</td></tr>';
+            }
+          } catch(e) { console.error(e); }
+
+        } else if (path === '/admin/business-emails') {
+          app.innerHTML = `
+            <div class="section">
+              <div class="section-header">
+                <div>
+                  <h2>Business Emails Directory</h2>
+                  <div class="sub-title">Verified corporate email domain handles</div>
+                </div>
+                <button class="btn" onclick="renderView()">Refresh Directory</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Email Address</th><th>Wallet Address</th><th>Verified Status</th><th>Actions</th></tr>
+                  </thead>
+                  <tbody id="emailsBody">
+                    <tr><td colspan="4" class="empty-state">Loading business emails...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+          try {
+            const data = await apiFetch('/business-emails');
+            const tbody = document.getElementById('emailsBody');
+            if (data.success && data.items && data.items.length > 0) {
+              tbody.innerHTML = data.items.map(m => `
+                <tr>
+                  <td style="color: #f7f4de;">${m.email}</td>
+                  <td>${m.address}</td>
+                  <td><span class="badge ${m.verified ? 'badge-success' : 'badge-warning'}">${m.verified ? 'VERIFIED' : 'PENDING'}</span></td>
+                  <td><button class="btn" onclick="alert('Email detail: ' + '${m.email}')">View Code</button></td>
+                </tr>
+              `).join('');
+            } else {
+              tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No business emails registered yet.</td></tr>';
+            }
+          } catch(e) { console.error(e); }
+
+        } else if (path === '/admin/teams') {
+          app.innerHTML = `
+            <div class="section">
+              <div class="section-header">
+                <div>
+                  <h2>Team Treasuries</h2>
+                  <div class="sub-title">Safe multisig treasuries and signers</div>
+                </div>
+                <button class="btn" onclick="renderView()">Refresh Teams</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Team Name</th><th>Safe Address</th><th>Signers Threshold</th><th>Actions</th></tr>
+                  </thead>
+                  <tbody id="teamsBody">
+                    <tr><td colspan="4" class="empty-state">Loading team treasuries...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+          try {
+            const data = await apiFetch('/teams');
+            const tbody = document.getElementById('teamsBody');
+            if (data.success && data.items && data.items.length > 0) {
+              tbody.innerHTML = data.items.map(t => `
+                <tr>
+                  <td style="color: #f7f4de; font-weight: bold;">${t.name}</td>
+                  <td>${t.safe_address || t.address}</td>
+                  <td><span class="badge">${t.threshold || 1}/${t.totalSigners || 1} Signers</span></td>
+                  <td><button class="btn" onclick="alert('Team details: ' + '${t.name}')">Inspect Safe</button></td>
+                </tr>
+              `).join('');
+            } else {
+              tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No team treasuries registered.</td></tr>';
+            }
+          } catch(e) { console.error(e); }
+
+        } else if (path === '/admin/payment-links') {
+          app.innerHTML = `
+            <div class="section">
+              <div class="section-header">
+                <div>
+                  <h2>Merchant Payment Links</h2>
+                  <div class="sub-title">Track and manage USDG payment requests</div>
+                </div>
+                <button class="btn" onclick="renderView()">Refresh Links</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Link ID</th><th>Merchant Address</th><th>Amount (USDG)</th><th>Status</th><th>Actions</th></tr>
+                  </thead>
+                  <tbody id="payBody">
+                    <tr><td colspan="5" class="empty-state">Loading payment links...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+          try {
+            const data = await apiFetch('/payment-links');
+            const tbody = document.getElementById('payBody');
+            if (data.success && data.items && data.items.length > 0) {
+              tbody.innerHTML = data.items.map(l => `
+                <tr>
+                  <td style="color: #8a9765; font-weight: bold;">${l.linkId || l.id}</td>
+                  <td>${l.merchant_address || l.merchant}</td>
+                  <td style="color: #f7f4de;">$${l.amountUsdg || l.amount}</td>
+                  <td><span class="badge badge-success">${l.status || 'ACTIVE'}</span></td>
+                  <td><button class="btn btn-danger" onclick="alert('Cancel link: ' + '${l.linkId || l.id}')">Cancel Link</button></td>
+                </tr>
+              `).join('');
+            } else {
+              tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No merchant payment links found.</td></tr>';
+            }
+          } catch(e) { console.error(e); }
+
+        } else if (path === '/admin/private-jobs') {
+          app.innerHTML = `
+            <div class="section">
+              <div class="section-header">
+                <div>
+                  <h2>Private Send & Bridge Jobs</h2>
+                  <div class="sub-title">Relayer jobs for private asset transactions</div>
+                </div>
+                <button class="btn" onclick="renderView()">Refresh Jobs</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Job ID</th><th>Type</th><th>Asset</th><th>Amount</th><th>Status</th></tr>
+                  </thead>
+                  <tbody id="jobsBody">
+                    <tr><td colspan="5" class="empty-state">Loading private jobs...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+          try {
+            const data = await apiFetch('/private-jobs');
+            const tbody = document.getElementById('jobsBody');
+            if (data.success && data.items && data.items.length > 0) {
+              tbody.innerHTML = data.items.map(j => `
+                <tr>
+                  <td style="color: #8a9765; font-weight: bold;">${j.id}</td>
+                  <td><span class="badge">${j.type || 'PRIVATE_SEND'}</span></td>
+                  <td>${j.asset || 'USDG'}</td>
+                  <td style="color: #f7f4de;">${j.amount}</td>
+                  <td><span class="badge badge-success">${j.status || 'COMPLETED'}</span></td>
+                </tr>
+              `).join('');
+            } else {
+              tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No private send/bridge jobs logged.</td></tr>';
+            }
+          } catch(e) { console.error(e); }
+
+        } else if (path === '/admin/staking') {
+          app.innerHTML = `
+            <div class="section">
+              <div class="section-header">
+                <div>
+                  <h2>TERA Staking Protocol Reserve</h2>
+                  <div class="sub-title">Staking positions, tier yields, and reserve health</div>
+                </div>
+                <button class="btn" onclick="renderView()">Refresh Reserve</button>
+              </div>
+              <div class="grid">
+                <div class="card"><div class="card-title">30-Day Tier APY</div><div class="card-val" style="color: #34d399;">6.0%</div></div>
+                <div class="card"><div class="card-title">45-Day Tier APY</div><div class="card-val" style="color: #34d399;">9.0%</div></div>
+                <div class="card"><div class="card-title">90-Day Tier APY</div><div class="card-val" style="color: #34d399;">14.0%</div></div>
+              </div>
+            </div>
+          `;
+        } else if (path === '/admin/audit-logs') {
+          app.innerHTML = `
+            <div class="section">
+              <div class="section-header">
+                <div>
+                  <h2>Security Audit Trail</h2>
+                  <div class="sub-title">System-wide immutable administrative audit events</div>
+                </div>
+                <button class="btn" onclick="renderView()">Refresh Logs</button>
+              </div>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr><th>Event Action</th><th>Target Entity</th><th>Target ID</th><th>IP Address</th><th>Timestamp</th></tr>
+                  </thead>
+                  <tbody id="auditBody">
+                    <tr><td colspan="5" class="empty-state">Loading audit logs...</td></tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          `;
+          try {
+            const data = await apiFetch('/audit-logs');
+            const tbody = document.getElementById('auditBody');
+            if (data.success && data.items && data.items.length > 0) {
+              tbody.innerHTML = data.items.map(l => `
+                <tr>
+                  <td><span class="badge badge-success">${l.action}</span></td>
+                  <td>${l.target_entity}</td>
+                  <td>${l.target_id}</td>
+                  <td style="color: #8a9765;">${l.ip || '127.0.0.1'}</td>
+                  <td style="color: #72806a;">${new Date(l.created_at).toLocaleString()}</td>
+                </tr>
+              `).join('');
+            } else {
+              tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No audit log records found.</td></tr>';
+            }
+          } catch(e) { console.error(e); }
+        }
       }
+
+      // Attach client navigation click handlers
+      document.addEventListener('click', e => {
+        const link = e.target.closest('a[data-route]');
+        if (link) {
+          e.preventDefault();
+          const targetRoute = link.getAttribute('data-route');
+          history.pushState(null, '', targetRoute);
+          renderView();
+        }
+      });
+
+      window.addEventListener('popstate', renderView);
 
       document.getElementById('signOutBtn').onclick = (e) => {
         e.preventDefault();
@@ -130,7 +494,7 @@
         window.location.href = '/admin/login';
       };
 
-      loadStats();
+      renderView();
     </script>
   </body>
 </html>
