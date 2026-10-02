@@ -23,7 +23,7 @@
 | 7 | #19 | Trusted-only mode | Done | Yes | Yes | Yes |
 | 10 | #10 | Pending transaction nudge | Done | Yes | Yes | Yes |
 | 11 | #24 | Fiat currency display [SHARED] | Done | Yes | Yes | Yes |
-| 12 | #2 | CSV export of activity | Not Started | No | No | No |
+| 12 | #2 | CSV export of activity | Done | Yes | Yes | Yes |
 | 13 | #8 | Monthly spending summary | Not Started | No | No | No |
 | 14 | #22 | Portfolio chart | Not Started | No | No | No |
 | 15 | #22 | Price alerts | Not Started | No | No | No |

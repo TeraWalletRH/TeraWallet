@@ -43,3 +43,25 @@ export async function shareText({ title = "Tera Wallet", text, url }: { title?: 
 
   return copyToClipboard(message);
 }
+
+export function generateActivityCsv(history: any[]): string {
+  const headers = ["Date", "TxHash", "Action", "Payee", "Status", "ChainID"];
+  const escapeCsv = (str: string | number | undefined) => {
+    const val = str === undefined || str === null ? "" : String(str);
+    return `"${val.replace(/"/g, '""')}"`;
+  };
+
+  const rows = Array.isArray(history)
+    ? history.map((item) => {
+        const date = item.createdAt || item.timestamp || "";
+        const hash = item.txHash || item.hash || "";
+        const action = item.action || item.actionType || "TRANSFER";
+        const payee = item.payee || item.to || item.recipient || "";
+        const status = item.status || "confirmed";
+        const chainId = item.chainId || 4663;
+        return [date, hash, action, payee, status, chainId].map(escapeCsv).join(",");
+      })
+    : [];
+
+  return [headers.map(escapeCsv).join(","), ...rows].join("\n");
+}

@@ -61,7 +61,7 @@ import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parse
 import * as vault from "./src/storage";
 import { screenOrigin } from "./src/viewport";
 import { useAppTheme } from "./src/theme";
-import { shareText } from "./src/share";
+import { generateActivityCsv, shareText } from "./src/share";
 import { normalizePhrase, walletFromPhrase, walletFromPrivateKey } from "./src/crypto";
 import {
   Button,
@@ -7146,7 +7146,48 @@ function Wallet() {
         );
       return (
         <>
-          <Header title={t("Activity", "记录")} />
+          <Header
+            title={t("Activity", "记录")}
+            right={
+              combinedHistory.length ? (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t("Export CSV", "导出 CSV")}
+                  onPress={() => {
+                    const csv = generateActivityCsv(combinedHistory);
+                    if (Platform.OS === "web") {
+                      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+                      const url = URL.createObjectURL(blob);
+                      const link = document.createElement("a");
+                      link.href = url;
+                      link.setAttribute("download", `terrawallet-activity-${Date.now()}.csv`);
+                      document.body.appendChild(link);
+                      link.click();
+                      document.body.removeChild(link);
+                    } else {
+                      void shareText({ title: t("Export CSV", "导出 CSV"), text: csv });
+                    }
+                  }}
+                  style={({ pressed }) => [
+                    {
+                      paddingHorizontal: 12,
+                      paddingVertical: 6,
+                      borderRadius: 16,
+                      backgroundColor: pressed ? colors.raised : colors.wash,
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 4,
+                    },
+                  ]}
+                >
+                  <Icon name="share" size={16} color={colors.ink} />
+                  <Text style={[s.small, { color: colors.ink, fontWeight: "600" }]}>
+                    {t("CSV", "CSV")}
+                  </Text>
+                </Pressable>
+              ) : undefined
+            }
+          />
           {combinedHistory.length ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
               <View
