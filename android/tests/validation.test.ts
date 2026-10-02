@@ -1,11 +1,27 @@
 import { describe, expect, it } from "bun:test";
 import { encodeFunctionData, zeroAddress } from "viem";
 import { destinations, DEPOSITORY, sources, USDG } from "../src/config";
-import { transferTx, verifyBridge, verifyTransfer } from "../src/validation";
+import { checkChecksum, transferTx, verifyBridge, verifyTransfer } from "../src/validation";
 import { swapAbi, verifyProposal } from "../src/proposals";
 const owner = "0x1111111111111111111111111111111111111111";
 const recipient = "0x2222222222222222222222222222222222222222";
 const word = (a: string) => a.slice(2).toLowerCase().padStart(64, "0");
+
+describe("address checksum verification", () => {
+  it("detects checksummed vs non-checksummed addresses", () => {
+    const checksummed = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+    const lowercase = "0x71c7656ec7ab88b098defb751b7401b5f6d8976f";
+    const res1 = checkChecksum(checksummed);
+    expect(res1.isAddress).toBe(true);
+    expect(res1.isChecksummed).toBe(true);
+    expect(res1.checksummed).toBe(checksummed);
+
+    const res2 = checkChecksum(lowercase);
+    expect(res2.isAddress).toBe(true);
+    expect(res2.isChecksummed).toBe(false);
+    expect(res2.checksummed).toBe(checksummed);
+  });
+});
 describe("signing boundary", () => {
   it("checks native and token transfers against amount and recipient", () => {
     for (const token of [zeroAddress, USDG]) {
