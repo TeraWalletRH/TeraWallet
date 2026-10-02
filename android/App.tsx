@@ -57,7 +57,7 @@ import {
   UNVERIFIABLE,
   value as valueCore,
 } from "./src/core";
-import { check, checkChecksum, isTrustedRecipient, parseQrAddress, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
+import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { screenOrigin } from "./src/viewport";
 import { useAppTheme } from "./src/theme";
@@ -7993,6 +7993,22 @@ function Wallet() {
               }
             />
             <ListRow
+              icon="currency-usd"
+              label={t("Fiat currency", "法币单位")}
+              detail={
+                t(
+                  `Display portfolio and transaction values in ${data.fiatCurrency || "USD"}`,
+                  `以 ${data.fiatCurrency || "USD"} 显示资产与交易价值`,
+                )
+              }
+              onPress={() => setSettingsSection("currency")}
+              right={
+                <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                  {data.fiatCurrency || "USD"}
+                </Text>
+              }
+            />
+            <ListRow
               icon="translate"
               label={t("Language", "语言")}
               onPress={toggleLanguage}
@@ -8278,6 +8294,38 @@ function Wallet() {
               else if (choice === t("30 minutes", "30 分钟")) selected = 30;
               else if (choice === t("Never", "永不")) selected = 0;
               void run(() => store({ ...dataRef.current, autoLockMinutes: selected }));
+            }}
+          />
+        </>
+      );
+    }
+    if (settingsSection === "currency") {
+      const currentCurrency = data.fiatCurrency || "USD";
+      const currencies: Array<"USD" | "EUR" | "GBP" | "JPY" | "CAD" | "AUD"> = [
+        "USD",
+        "EUR",
+        "GBP",
+        "JPY",
+        "CAD",
+        "AUD",
+      ];
+      return (
+        <>
+          <Header title={t("Fiat currency", "法币单位")} onBack={toSettings} backLabel={t("Settings", "设置")} />
+          <View style={[s.panel, { gap: 8 }]}>
+            <Text style={s.small}>
+              {t(
+                "Choose your preferred local currency for displaying asset balances and market values.",
+                "选择用于显示资产余额和市场价值的首选本地货币。",
+              )}
+            </Text>
+          </View>
+          <Choices
+            options={currencies.map((c) => `${c} (${FIAT_RATES[c]?.symbol || "$"})`)}
+            value={`${currentCurrency} (${FIAT_RATES[currentCurrency]?.symbol || "$"})`}
+            select={(choice) => {
+              const selected = choice.slice(0, 3) as "USD" | "EUR" | "GBP" | "JPY" | "CAD" | "AUD";
+              void run(() => store({ ...dataRef.current, fiatCurrency: selected }));
             }}
           />
         </>

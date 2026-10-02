@@ -55,6 +55,8 @@ export type LocalData = {
   autoLockMinutes?: number;
   /** Whether transfers are restricted to saved contacts only. */
   trustedOnlyMode?: boolean;
+  /** Preferred fiat display currency. */
+  fiatCurrency?: "USD" | "EUR" | "GBP" | "JPY" | "CAD" | "AUD";
   /**
    * Names the owner gave addresses they send to. Sealed with the rest of this
    * file and never sent anywhere; `core/contacts.js` cleans it on every read.
