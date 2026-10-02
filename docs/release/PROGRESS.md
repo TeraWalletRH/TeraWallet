@@ -20,7 +20,7 @@
 | 3 | #7 | Address checksum warning [SHARED] | Done | Yes | Yes | Yes |
 | 4 | #4 | QR code scanner on Send | Done | Yes | Yes | Yes |
 | 5 | #18 | Auto-lock timer | Done | Yes | Yes | Yes |
-| 7 | #19 | Trusted-only mode | Not Started | No | No | No |
+| 7 | #19 | Trusted-only mode | Done | Yes | Yes | Yes |
 | 10 | #10 | Pending transaction nudge | Not Started | No | No | No |
 | 11 | #24 | Fiat currency display [SHARED] | Not Started | No | No | No |
 | 12 | #2 | CSV export of activity | Not Started | No | No | No |

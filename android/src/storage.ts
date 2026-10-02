@@ -53,6 +53,8 @@ export type LocalData = {
   theme: "light" | "dark";
   /** Auto-lock timer in minutes (0 for disabled/never, defaults to 15). */
   autoLockMinutes?: number;
+  /** Whether transfers are restricted to saved contacts only. */
+  trustedOnlyMode?: boolean;
   /**
    * Names the owner gave addresses they send to. Sealed with the rest of this
    * file and never sent anywhere; `core/contacts.js` cleans it on every read.
