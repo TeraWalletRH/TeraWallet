@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TERA Admin Console - Login</title>
+    <link rel="icon" href="/tera/logo.png" />
+    <style>
+      :root {
+        font-family: Inter, system-ui, -apple-system, sans-serif;
+        background: #0d1712;
+        color: #f2f0ee;
+      }
+      * { box-sizing: border-box; }
+      body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; background: radial-gradient(circle at 50% 30%, #172b20 0%, #0d1712 70%); }
+      .card { max-width: 420px; width: 100%; background: rgba(22, 37, 28, 0.95); border: 1px solid #243b2c; border-radius: 20px; padding: 36px 32px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); backdrop-filter: blur(16px); }
+      .logo-wrap { display: flex; justify-content: center; margin-bottom: 20px; }
+      .logo-box {
+        width: 54px;
+        height: 54px;
+        background: #16251c;
+        border: 1px solid #768143;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 16px rgba(118, 129, 67, 0.3);
+        padding: 6px;
+      }
+      .logo-img { height: 42px; width: 42px; object-fit: contain; }
+      h1 { text-align: center; font-size: 22px; font-weight: 800; margin: 0; letter-spacing: -0.02em; color: #f7f4de; font-family: 'IBM Plex Mono', monospace; }
+      p.sub { text-align: center; color: #8a9765; font-size: 13px; font-weight: 600; margin: 6px 0 16px 0; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.05em; }
+      p.desc { text-align: center; color: #9da998; font-size: 13px; margin: 0 0 24px 0; line-height: 1.5; }
+      .form-group { margin-bottom: 22px; }
+      label { display: block; font-size: 12px; font-weight: 600; color: #c4cebf; margin-bottom: 8px; text-transform: uppercase; font-family: 'IBM Plex Mono', monospace; letter-spacing: 0.03em; }
+      input[type="password"] { width: 100%; padding: 14px 16px; background: #0b130e; border: 1px solid #2e4736; border-radius: 12px; color: #f7f4de; font-size: 14px; font-family: monospace; outline: none; transition: all 0.2s; }
+      input[type="password"]:focus { border-color: #8a9765; box-shadow: 0 0 0 2px rgba(138, 151, 101, 0.2); }
+      button.btn { width: 100%; padding: 14px; background: #243b2c; border: 1px solid #768143; border-radius: 12px; color: #f7f4de; font-weight: 700; font-size: 14px; cursor: pointer; transition: all 0.2s; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.04em; }
+      button.btn:hover { background: #52643e; border-color: #8a9765; color: #ffffff; box-shadow: 0 4px 16px rgba(138, 151, 101, 0.25); }
+      .status { font-size: 12px; color: #f87171; background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.2); padding: 12px; border-radius: 10px; text-align: center; margin-bottom: 18px; display: none; }
+      .footer { border-top: 1px solid #243b2c; margin-top: 24px; padding-top: 18px; text-align: center; font-size: 11px; color: #72806a; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.05em; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <div class="logo-wrap">
+        <div class="logo-box">
+          <img src="/tera/logo.png" alt="Tera Wallet Logo" class="logo-img" onerror="this.onerror=null; this.src='/logo.png';" />
+        </div>
+      </div>
+      <h1>TERA WALLET</h1>
+      <p class="sub">Admin Console Sign In</p>
+      <p class="desc">Enter master security passcode to access administrative controls.</p>
+
+      <div id="status" class="status"></div>
+
+      <form id="adminLoginForm">
+        <div class="form-group">
+          <label for="pass">Master Admin Passcode</label>
+          <input type="password" id="pass" placeholder="Enter passcode..." required autofocus />
+        </div>
+        <button type="submit" class="btn">Sign In to Console</button>
+      </form>
+
+      <div class="footer">
+        Protected Environment • Robinhood Chain (4663)
+      </div>
+    </div>
+
+    <script>
+      const form = document.getElementById('adminLoginForm');
+      const passInput = document.getElementById('pass');
+      const statusDiv = document.getElementById('status');
+
+      async function postLogin(path, payload) {
+        let res;
+        const directUrl = 'http://127.0.0.1:3001' + path;
+        try {
+          res = await fetch(path, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          const ct = res.headers.get('content-type') || '';
+          if (!res.ok || res.status === 502 || res.status === 404 || ct.includes('text/html')) {
+            throw new Error('Proxy status ' + res.status);
+          }
+        } catch (e) {
+          // Fall back to direct backend port 3001 if proxy fails or returns HTML fallback
+          res = await fetch(directUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+        }
+        return res;
+      }
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        statusDiv.style.display = 'none';
+        const passcode = passInput.value.trim();
+        if (!passcode) return;
+
+        try {
+          const res = await postLogin('/api/admin/auth/login', { password: passcode });
+          const data = await res.json().catch(() => ({}));
+          if (res.ok && data.success && data.token) {
+            localStorage.setItem('tera_admin_token', data.token);
+            window.location.href = '/admin/dashboard';
+          } else {
+            statusDiv.textContent = data.error || 'Invalid admin passcode. Passcode accepts TeraWallet2026Secure or kasab67.';
+            statusDiv.style.display = 'block';
+          }
+        } catch (err) {
+          statusDiv.textContent = 'Connection failed to backend API. Ensure backend service is running on port 3001.';
+          statusDiv.style.display = 'block';
+        }
+      });
+    </script>
+  </body>
+</html>

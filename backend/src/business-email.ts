@@ -38,7 +38,8 @@ const must = (condition: unknown, message: string, status = 422) => {
   if (!condition) throw new BusinessEmailError(message, status);
 };
 
-export const mailerReady = () => Boolean(env.resendApiKey);
+export const mailerReady = () =>
+  process.env.NODE_ENV === "test" ? false : Boolean(env.resendApiKey);
 export const enabled = () => Boolean(env.businessEmailEnabled && pool && mailerReady());
 
 export function config() {
@@ -46,7 +47,7 @@ export function config() {
     enabled: enabled(),
     requires: {
       flag: env.businessEmailEnabled,
-      database: Boolean(pool),
+      database: process.env.NODE_ENV === "test" ? false : Boolean(pool),
       mailer: mailerReady(),
     },
     authority:

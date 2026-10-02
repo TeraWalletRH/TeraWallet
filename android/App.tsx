@@ -32,14 +32,12 @@ import { StatusBar } from "expo-status-bar";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "./src/speech";
-import { erc20Abi, formatUnits, parseUnits, zeroAddress, isAddress, type Address } from "viem";
+import { erc20Abi, formatUnits, parseUnits, zeroAddress, isAddress, getAddress, type Address } from "viem";
 import { api } from "./src/api";
 import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
 import * as biz from "./src/business";
 import * as payLinks from "./src/paylinks";
-import { LinksScreen } from "./src/business/Links";
-import { SplitScreen } from "./src/Split";
 import * as notify from "./src/notify";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
@@ -50,26 +48,20 @@ import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
 import {
   activitySearch,
-  batch as batchCore,
   discretion,
-  lookalike as lookalikeCore,
   networkSpeed,
   notes as notesCore,
-  split as splitCore,
   contacts as contactsCore,
   limits as limitsCore,
   spend as spendCore,
   UNVERIFIABLE,
   value as valueCore,
 } from "./src/core";
-import {
-  shareReceiptViaLink,
-  shareReceiptViaImage,
-  shareReceiptViaPdf,
-} from "./src/receiptShare";
-import { check, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
+import { check, checkChecksum, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { screenOrigin } from "./src/viewport";
+import { useAppTheme } from "./src/theme";
+import { shareText } from "./src/share";
 import { normalizePhrase, walletFromPhrase, walletFromPrivateKey } from "./src/crypto";
 import {
   Button,
@@ -132,10 +124,6 @@ type Review = {
   activityType?: "send" | "swap" | "bridge";
   /** The owner's private note, saved under the transaction's hash once it is signed. */
   note?: string;
-  /** For a batch: the biggest single payment in dollars, held to the per-payment cap. */
-  spendLargestUsd?: string | null;
-  /** For a batch: one entry per step, each recorded as its own payment. */
-  batch?: { to: string; label: string; amount: string; symbol: string; usd: string | null; note: string }[];
 };
 type ReviewSnapshot = Pick<Review, "rows" | "steps">;
 const tokenImages: Record<string, any> = {
@@ -653,6 +641,10 @@ function Wallet() {
     [liveTranscript, setLiveTranscript] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const { setting: themeSetting, effectiveTheme, updateSetting: updateThemeSetting } = useAppTheme();
+  useEffect(() => {
+    setColorTheme(effectiveTheme);
+  }, [effectiveTheme]);
   const [data, setData] = useState(vault.emptyData());
   // Which wallet this session opens: the personal one, or Tera Business — a
   // separate wallet with its own secret and PIN, web only for now (on the
@@ -682,7 +674,7 @@ function Wallet() {
     [flowStep, setFlowStep] = useState(0),
     [amountInvalid, setAmountInvalid] = useState(false),
     [settingsSection, setSettingsSection] = useState<
-      "root" | "security" | "privacy" | "sessions" | "device" | "accounts" | "contacts" | "limits" | "alerts"
+      "root" | "security" | "privacy" | "sessions" | "device" | "accounts" | "contacts" | "limits" | "alerts" | "appearance"
     >("root"),
     // The transaction banner at the top of the screen, and the browser's
     // permission for system notifications as last read.
@@ -729,14 +721,6 @@ function Wallet() {
     [noteDraft, setNoteDraft] = useState<string | null>(null),
     // The note written on the Send or Pay screen, for the payment about to be reviewed.
     [payNote, setPayNote] = useState(""),
-    // A lookalike address the owner has looked at and confirmed is the one they
-    // mean, lowercase. Any other address is checked afresh.
-    [lookalikeAccepted, setLookalikeAccepted] = useState(""),
-    // Batch send: the pasted list, the asset it pays in, and lookalike
-    // addresses in it the owner has checked and confirmed.
-    [batchText, setBatchText] = useState(""),
-    [batchSymbol, setBatchSymbol] = useState("USDG"),
-    [batchAccepted, setBatchAccepted] = useState<string[]>([]),
     // The latest reading of the network, for the speed label. null until the first one.
     [netReading, setNetReading] = useState<ReturnType<typeof networkSpeed.reading> | null>(null),
     // Where and when the open Activity row landed, read from its receipt.
@@ -1930,118 +1914,6 @@ function Wallet() {
       await store({ ...dataRef.current, notes: notesCore.setNote(dataRef.current.notes, hash, text) });
     }
   }
-  // Addresses the owner chose themselves: contacts, their own wallets, and
-  // whoever they paid from this device. Not what the explorer shows, because
-  // a poisoner's dust transfer shows there, and would make the lookalike
-  // "known" — the very address this check exists to catch.
-  function knownAddresses() {
-    const list: { address: string; label: string }[] = [];
-    for (const c of book) list.push({ address: c.address, label: c.name });
-    for (const a of accounts) list.push({ address: a.address, label: t("one of your wallets", "你的一个钱包") });
-    for (const h of data.history) {
-      if (h.payee && isAddress(h.payee))
-        list.push({
-          address: h.payee,
-          label: h.createdAt
-            ? t(`paid on ${new Date(h.createdAt).toLocaleDateString()}`, `${new Date(h.createdAt).toLocaleDateString()} 付过款`)
-            : t("paid before", "之前付过款"),
-        });
-    }
-    return list;
-  }
-  /** The known address `address` imitates, or null. */
-  function lookalikeOf(address: string) {
-    const typed = address.trim();
-    if (!isAddress(typed)) return null;
-    const match = lookalikeCore.findLookalike(typed, knownAddresses());
-    if (!match) return null;
-    const name = contactsCore.nameFor(book, match.address);
-    return { ...match, label: name || match.label };
-  }
-  /** Refuse to prepare a payment to an unconfirmed lookalike. Checked again here, not only on screen. */
-  function checkLookalike(address: string) {
-    const match = lookalikeOf(address);
-    check(
-      !match || lookalikeAccepted === address.trim().toLowerCase(),
-      t(
-        "This address looks like one you've used before but is different. Check it on the screen before you continue.",
-        "此地址与你用过的地址相似但并不相同。请先在屏幕上核对后再继续。",
-      ),
-    );
-  }
-  /** The warning: both addresses, differences marked, and the two ways on. */
-  function lookalikePanel(address: string, use?: (address: string) => void) {
-    const typed = address.trim();
-    const match = lookalikeOf(typed);
-    if (!match) return null;
-    const accepted = lookalikeAccepted === typed.toLowerCase();
-    const marked = (shown: string, other: string) => (
-      <Text selectable style={[s.mono, { lineHeight: 20 }]}>
-        {lookalikeCore.diff(shown, other).map((run: { text: string; same: boolean }, i: number) => (
-          <Text
-            key={i}
-            style={
-              run.same
-                ? undefined
-                : { color: colors.danger, fontWeight: "800", textDecorationLine: "underline" }
-            }
-          >
-            {run.text}
-          </Text>
-        ))}
-      </Text>
-    );
-    return (
-      <View
-        style={[
-          s.panel,
-          {
-            gap: 12,
-            borderWidth: 1,
-            borderColor: accepted ? colors.line : colors.danger,
-            backgroundColor: accepted ? colors.wash : colors.dangerTint,
-          },
-        ]}
-      >
-        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-          <Icon name="alert" size={18} color={colors.danger} />
-          <Text style={[s.label, { color: colors.danger, flex: 1 }]}>
-            {t("Lookalike address — check it", "相似地址，请核对")}
-          </Text>
-        </View>
-        <Text style={s.small}>
-          {t(
-            lookalikeCore.WARNING,
-            "此地址的开头和结尾与你用过的某个地址相同，但它是另一个地址。骗子会制造相似地址并向你转一笔小额交易，让你从记录中误复制他们的地址。",
-          )}
-        </Text>
-        <View style={{ gap: 4 }}>
-          <Text style={s.eyebrow}>{t("You're about to pay", "你将付款给")}</Text>
-          {marked(typed, match.address)}
-        </View>
-        <View style={{ gap: 4 }}>
-          <Text style={s.eyebrow}>{t(`You've used before · ${match.label}`, `你之前用过 · ${match.label}`)}</Text>
-          {marked(match.address, typed)}
-        </View>
-        {accepted ? (
-          <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
-            {t("You checked this address and chose to continue.", "你已核对此地址并选择继续。")}
-          </Text>
-        ) : (
-          <>
-            {use ? (
-              <Button primary onPress={() => use(match.address)}>
-                {t(`Pay ${match.label} instead`, `改为付款给 ${match.label}`)}
-              </Button>
-            ) : null}
-            <Button danger onPress={() => setLookalikeAccepted(typed.toLowerCase())}>
-              {t("It's a different person — I checked every character", "这是另一个人，我已逐字核对")}
-            </Button>
-          </>
-        )}
-      </View>
-    );
-  }
   function activityKind(row: any): "send" | "receive" | "swap" | "bridge" {
     if (row.direction === "send" || row.direction === "receive") return row.direction;
     if (row.activityType === "send" || row.activityType === "swap" || row.activityType === "bridge") return row.activityType;
@@ -2201,12 +2073,11 @@ function Wallet() {
     return ((BigInt(raw) * priceUnits) / 10n ** BigInt(decimals) / 10n ** 6n).toString();
   }
   /** Why a payment breaks a limit, in words, or "" when it fits. */
-  function limitProblem(usd: string | null, largest?: string | null) {
+  function limitProblem(usd: string | null) {
     const result = limitsCore.check({
       limits: dataRef.current.limits,
       amount: usd === null ? null : BigInt(usd),
       rows: combinedHistory,
-      largest: largest == null ? null : BigInt(largest),
     });
     if (result.ok) return "";
     const dollars = spendCore.formatDollars;
@@ -2231,8 +2102,8 @@ function Wallet() {
         );
   }
   /** Stop here when a payment breaks a limit. */
-  function enforceLimits(usd: string | null, largest?: string | null) {
-    const problem = limitProblem(usd, largest);
+  function enforceLimits(usd: string | null) {
+    const problem = limitProblem(usd);
     if (problem) throw new Error(problem);
   }
   function usdReviewRow(symbol: string, tokenAmount: string): [string, string] {
@@ -2409,7 +2280,6 @@ function Wallet() {
     const destination =
       recipientKind === "tag" ? (await resolveName(recipient)).address : recipient.trim();
     guard();
-    checkLookalike(destination);
     const input = {
       ownerAddress: owner,
       accountAddress: owner,
@@ -2555,8 +2425,6 @@ function Wallet() {
     const typed = spendTo.trim();
     const destination = isAddress(typed) ? typed : (await resolveName(typed)).address;
     guard();
-    // A link's address is checked too: anyone can make a request link.
-    checkLookalike(destination);
     const link = spendLink;
     if (link) {
       // Read again: the merchant may have cancelled it, or someone paid it, since it opened.
@@ -2675,143 +2543,6 @@ function Wallet() {
       },
     });
   }
-  /** What the list on the batch screen pays, read the same way the screen shows it. */
-  function readBatch() {
-    const asset = assets.find((a) => a.symbol === batchSymbol) ?? assets[0];
-    const parsed = batchCore.parse(batchText, { decimals: asset.decimals, emails: biz.emailAvailable() });
-    return { asset, ...parsed };
-  }
-  /** Who a batch line is, as the review and Activity show it. */
-  function batchLabel(to: string, address: string) {
-    const name = contactsCore.nameFor(book, address);
-    if (name) return name;
-    return isAddress(to) ? short(address) : nameLabel(to);
-  }
-  async function prepareBatch(guard: () => void) {
-    const { asset, payments, errors } = readBatch();
-    check(payments.length > 0, t("Add at least one payment.", "请至少添加一笔付款。"));
-    check(!errors.length, t("Fix the lines marked in red first.", "请先修正标红的行。"));
-    // Names are resolved now, as for a single send: the address signed is the one held now.
-    const resolved: (ReturnType<typeof batchCore.parse>["payments"][number] & { address: string })[] = [];
-    const seen = new Map<string, number>();
-    for (const p of payments) {
-      const address = p.kind === "address" ? p.to : (await resolveName(p.to)).address;
-      guard();
-      check(
-        address.toLowerCase() !== String(owner).toLowerCase(),
-        t(`Line ${p.line} pays this wallet.`, `第 ${p.line} 行付款给本钱包。`),
-      );
-      const before = seen.get(address.toLowerCase());
-      check(
-        before === undefined,
-        t(
-          `Lines ${before} and ${p.line} pay the same address. Combine them or remove one.`,
-          `第 ${before} 行和第 ${p.line} 行付款给同一地址，请合并或删除一行。`,
-        ),
-      );
-      seen.set(address.toLowerCase(), p.line);
-      check(
-        !lookalikeOf(address) || batchAccepted.includes(address.toLowerCase()),
-        t(
-          `Line ${p.line} is a lookalike of an address you know. Check it on the screen first.`,
-          `第 ${p.line} 行是你已知地址的相似地址，请先在屏幕上核对。`,
-        ),
-      );
-      resolved.push({ ...p, address });
-    }
-    const sum = batchCore.total(resolved);
-    check(
-      sum <= BigInt(balance?.[asset.symbol] || "0"),
-      t(
-        `This batch needs ${formatUnits(sum, asset.decimals)} ${asset.symbol}, more than this wallet holds.`,
-        `此批次需要 ${formatUnits(sum, asset.decimals)} ${asset.symbol}，超出钱包余额。`,
-      ),
-    );
-    const usds = resolved.map((p) => paymentUsd(asset.symbol, p.units, asset.decimals));
-    const totalUsd = usds.some((u) => u === null) ? null : usds.reduce((a, u) => a + BigInt(u!), 0n).toString();
-    const largestUsd = usds.some((u) => u === null)
-      ? null
-      : usds.reduce((a, u) => (BigInt(u!) > a ? BigInt(u!) : a), 0n).toString();
-    enforceLimits(totalUsd, largestUsd);
-    const build = () =>
-      resolved.map((p) => transferTx(asset.address as Address, p.address as Address, p.units.toString()));
-    const steps = build();
-    const fingerprint = JSON.stringify(steps);
-    const totalText = formatUnits(sum, asset.decimals);
-    const lines = resolved.map((p, i) => ({
-      to: p.address,
-      label: batchLabel(p.to, p.address),
-      amount: p.amount,
-      symbol: asset.symbol,
-      usd: usds[i],
-      note: p.note,
-    }));
-    await presentReview({
-      title: t(`Review ${resolved.length} payments`, `审核 ${resolved.length} 笔付款`),
-      activityType: "send",
-      rows: [
-        [t("Asset", "资产"), asset.symbol],
-        [t("Payments", "付款笔数"), String(resolved.length)],
-        [t("Total", "合计"), `${totalText} ${asset.symbol}`],
-        usdReviewRow(asset.symbol, totalText),
-        ...lines.map(
-          (line, i): [string, string] => [
-            `${i + 1}. ${line.label}`,
-            `${line.amount} ${asset.symbol}${line.note ? ` · ${line.note}` : ""}`,
-          ],
-        ),
-        [
-          t("How it's sent", "发送方式"),
-          t(
-            "One after another, each its own transaction. If one fails, the ones after it are not sent.",
-            "逐笔发送，每笔都是独立交易。若某笔失败，其后的付款不会发送。",
-          ),
-        ],
-      ],
-      steps,
-      // The steps signed are the steps reviewed: rebuilt from the same list and compared.
-      verify: () => {
-        if (JSON.stringify(build()) !== fingerprint)
-          throw new Error(t("The batch changed. Review it again.", "批次已变化，请重新审核。"));
-      },
-      spendUsd: totalUsd,
-      spendLargestUsd: largestUsd,
-      batch: lines,
-      returnTo: "activity",
-    });
-  }
-  /** On the web, read a CSV the owner picks into the list. */
-  function uploadBatchFile() {
-    if (Platform.OS !== "web" || typeof document === "undefined") return;
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".csv,.txt,text/csv,text/plain";
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      if (file.size > 200_000) {
-        setNotice({
-          title: t("File too large", "文件过大"),
-          body: t("A batch file is at most 200 KB.", "批次文件不能超过 200 KB。"),
-          tone: "error",
-        });
-        return;
-      }
-      setBatchAccepted([]);
-      setBatchText(await file.text());
-    };
-    input.click();
-  }
-  /** On the web, save a starting CSV with the columns named. */
-  function downloadBatchTemplate() {
-    if (Platform.OS !== "web" || typeof document === "undefined") return;
-    const url = URL.createObjectURL(new Blob([batchCore.TEMPLATE], { type: "text/csv" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = "tera-batch.csv";
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
   function openSpend() {
     setError("");
     setPayNote("");
@@ -2852,7 +2583,6 @@ function Wallet() {
       recipientKind === "tag" ? (await resolveName(recipient)).address : recipient.trim();
     guard();
     check(isAddress(destination), t("Enter a valid recipient address.", "请输入有效收款地址。"));
-    checkLookalike(destination);
     const spendUsd = paymentUsd(asset, raw, decimals);
     enforceLimits(spendUsd);
     const created = await api("/api/private-send/jobs", {
@@ -3100,7 +2830,7 @@ function Wallet() {
     // Checked again here, not only when the payment was prepared: a review can
     // sit open while another payment goes out, or a limit is lowered.
     if (r.spendUsd !== undefined) {
-      const problem = limitProblem(r.spendUsd, r.spendLargestUsd);
+      const problem = limitProblem(r.spendUsd);
       if (problem) {
         setReview(null);
         setNotice({ title: t("Over your spending limit", "超出消费限额"), body: problem, tone: "error" });
@@ -3108,8 +2838,6 @@ function Wallet() {
       }
     }
     setSigning(true);
-    // A batch's notes, by hash, for Business, where notes are written after signing.
-    const batchNotes: { hash: string; note: string }[] = [];
     try {
       let submittedHash = "";
       const activityType = r.activityType ?? (r.bridgeInput || r.isPrivateBridge ? "bridge" : "send");
@@ -3128,25 +2856,7 @@ function Wallet() {
         r.verify,
         async (record) => {
           if (record.step === record.totalSteps) submittedHash = record.hash;
-          const line = r.batch?.[record.step - 1];
-          if (line && line.note) batchNotes.push({ hash: record.hash, note: line.note });
-          const row = line
-            ? {
-                ...record,
-                // Each payment in a batch is whole on its own, so it shows in Activity.
-                step: 1,
-                totalSteps: 1,
-                title: t(`Sent ${line.amount} ${line.symbol}`, `已发送 ${line.amount} ${line.symbol}`),
-                activityType: "send",
-                activityAmount: `${line.amount} ${line.symbol}`,
-                counterparty: line.label,
-                recipient: line.to,
-                payee: line.to,
-                spendUsd: line.usd ?? undefined,
-                reviewSnapshot: { rows: r.rows, steps: [r.steps[record.step - 1]] } satisfies ReviewSnapshot,
-                batch: { index: record.step, of: r.batch!.length },
-              }
-            : {
+          const row = {
             ...record,
             title: record.step === record.totalSteps ? activityTitle : t("Approval", "授权"),
             activityType: record.step === record.totalSteps ? activityType : "approval",
@@ -3164,11 +2874,9 @@ function Wallet() {
           };
           // The note rides in the same write as the row, so neither can undo the other.
           const withNote =
-            line?.note && !sharedNotes
-              ? notesCore.setNote(dataRef.current.notes, record.hash, line.note)
-              : r.note && !sharedNotes && record.step === record.totalSteps
-                ? notesCore.setNote(dataRef.current.notes, record.hash, r.note)
-                : dataRef.current.notes;
+            r.note && !sharedNotes && record.step === record.totalSteps
+              ? notesCore.setNote(dataRef.current.notes, record.hash, r.note)
+              : dataRef.current.notes;
           await store({
             ...dataRef.current,
             notes: withNote,
@@ -3179,8 +2887,6 @@ function Wallet() {
       );
       // Business notes live in the Reports book, a separate file, so they are written here.
       if (r.note && sharedNotes && submittedHash) await saveTxNote(submittedHash, r.note).catch(() => {});
-      if (sharedNotes)
-        for (const entry of batchNotes) await saveTxNote(entry.hash, entry.note).catch(() => {});
       if (r.afterSubmitted && submittedHash) await r.afterSubmitted(submittedHash);
       setPage(r.returnTo ?? "activity");
       await refresh();
@@ -4055,7 +3761,6 @@ function Wallet() {
   function openFlow(p: string, mode: "public" | "private" = "public") {
     setError("");
     setPayNote("");
-    if (p === "batch") setBatchAccepted([]);
     if (p === "swap") setSwapReturnPage(page);
     if (p === "bridge") setBridgeReturnPage(page);
     setAssetSymbol(p === "swap" ? "ETH" : "USDG");
@@ -4182,7 +3887,7 @@ function Wallet() {
   }
   /**
    * Saved names and recent payees under the recipient field. A pick fills the
-   * full address or tag, which is what the checks and the signature see.
+   * full address, which is what the checks and the signature see.
    */
   function recipientPicks() {
     const typed = recipient.trim();
@@ -4197,153 +3902,43 @@ function Wallet() {
         </Text>
       ) : null;
     }
-
     const saved = contactsCore.searchContacts(book, typed);
-    const recent = contactsCore.recentPayees(combinedHistory, book, { owner, limit: 12 });
-    const filteredRecent = typed
-      ? recent.filter(
-          (r: any) =>
-            r.address.toLowerCase().includes(typed.toLowerCase()) ||
-            (r.name && r.name.toLowerCase().includes(typed.toLowerCase())) ||
-            (r.tag && r.tag.toLowerCase().includes(typed.toLowerCase())),
-        )
-      : recent;
-
-    if (!saved.length && !filteredRecent.length) return null;
-
-    const onSelectRecipient = (entry: any) => {
-      if (entry.tag && (tagsAvailable() || biz.emailAvailable())) {
-        setRecipientKind("tag");
-        setRecipient(entry.tag);
-        setTagLookup({ state: "idle" });
-      } else {
-        setRecipientKind("address");
-        setRecipient(entry.address);
-        setTagLookup({ state: "idle" });
-      }
-    };
-
+    const recent = typed
+      ? []
+      : contactsCore.recentPayees(data.history, book, { owner }).filter((entry) => !entry.name);
+    const picks = [...saved, ...recent].slice(0, 6);
+    if (!picks.length) return null;
     return (
-      <View style={{ gap: 14, marginTop: 4 }}>
-        {filteredRecent.length > 0 && (
-          <View style={{ gap: 8 }}>
-            <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-              <Text style={s.eyebrow}>
-                {t("RECENT RECIPIENTS", "最近收款人")}
+      <View style={{ gap: 8 }}>
+        <Text style={s.eyebrow}>
+          {typed ? t("SAVED CONTACTS", "已保存联系人") : t("CONTACTS & RECENT", "联系人与最近")}
+        </Text>
+        {picks.map((entry) => (
+          <Pressable
+            key={entry.address}
+            accessibilityRole="button"
+            accessibilityLabel={`${entry.name || t("Sent before", "曾发送")} ${entry.address}`}
+            onPress={() => {
+              setRecipient(entry.address);
+              setTagLookup({ state: "idle" });
+            }}
+            style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
+          >
+            <Icon
+              name={entry.name ? "account-circle-outline" : "history"}
+              size={24}
+              color={colors.green}
+            />
+            <View style={{ flex: 1 }}>
+              <Text style={[s.text, { fontWeight: "700" }]}>
+                {entry.name || t("Sent before", "曾发送")}
               </Text>
-              <Text style={[s.small, { fontSize: 11, color: colors.faint }]}>
-                {t("Quick select", "快捷选择")}
+              <Text style={s.mono} numberOfLines={1} ellipsizeMode="middle">
+                {entry.address}
               </Text>
             </View>
-            <View style={{ gap: 6 }}>
-              {filteredRecent.slice(0, 5).map((entry: any) => (
-                <Pressable
-                  key={`recent-${entry.address}`}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${entry.name || t("Recent recipient", "最近收款人")} ${entry.address}`}
-                  onPress={() => onSelectRecipient(entry)}
-                  style={({ pressed }) => [
-                    s.panel,
-                    {
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 12,
-                      paddingVertical: 12,
-                      paddingHorizontal: 14,
-                      backgroundColor: pressed ? colors.wash : colors.panel,
-                      borderColor: colors.line,
-                    },
-                  ]}
-                >
-                  <View
-                    style={{
-                      width: 38,
-                      height: 38,
-                      borderRadius: 19,
-                      backgroundColor: colors.wash,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <Icon
-                      name={entry.name ? "account-circle-outline" : "history"}
-                      size={20}
-                      color={colors.green}
-                    />
-                  </View>
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                      <Text style={[s.text, { fontWeight: "700", fontSize: 14 }]}>
-                        {entry.name || (entry.tag ? `@${entry.tag.replace(/^@/, "")}` : short(entry.address))}
-                      </Text>
-                      {entry.amount && entry.symbol ? (
-                        <Text style={[s.small, { fontSize: 11, color: colors.faint }]}>
-                          · {entry.amount} {entry.symbol}
-                        </Text>
-                      ) : null}
-                    </View>
-                    <Text style={[s.mono, { fontSize: 11, color: colors.muted }]} numberOfLines={1} ellipsizeMode="middle">
-                      {entry.address}
-                    </Text>
-                  </View>
-                  <Icon name="arrow-top-right" size={16} color={colors.faint} />
-                </Pressable>
-              ))}
-            </View>
-          </View>
-        )}
-
-        {saved.length > 0 && (!filteredRecent.length || typed) && (
-          <View style={{ gap: 8 }}>
-            <Text style={s.eyebrow}>
-              {t("SAVED CONTACTS", "已保存联系人")}
-            </Text>
-            <View style={{ gap: 6 }}>
-              {saved.slice(0, 5).map((entry) => (
-                <Pressable
-                  key={`contact-${entry.address}`}
-                  accessibilityRole="button"
-                  accessibilityLabel={`${entry.name} ${entry.address}`}
-                  onPress={() => onSelectRecipient(entry)}
-                  style={({ pressed }) => [
-                    s.panel,
-                    {
-                      flexDirection: "row",
-                      alignItems: "center",
-                      gap: 12,
-                      paddingVertical: 12,
-                      paddingHorizontal: 14,
-                      backgroundColor: pressed ? colors.wash : colors.panel,
-                      borderColor: colors.line,
-                    },
-                  ]}
-                >
-                  <View
-                    style={{
-                      width: 38,
-                      height: 38,
-                      borderRadius: 19,
-                      backgroundColor: colors.wash,
-                      alignItems: "center",
-                      justifyContent: "center",
-                    }}
-                  >
-                    <Icon name="account-circle-outline" size={20} color={colors.green} />
-                  </View>
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={[s.text, { fontWeight: "700", fontSize: 14 }]}>
-                      {entry.name}
-                    </Text>
-                    <Text style={[s.mono, { fontSize: 11, color: colors.muted }]} numberOfLines={1} ellipsizeMode="middle">
-                      {entry.address}
-                    </Text>
-                  </View>
-                  <Icon name="arrow-top-right" size={16} color={colors.faint} />
-                </Pressable>
-              ))}
-            </View>
-          </View>
-        )}
+          </Pressable>
+        ))}
       </View>
     );
   }
@@ -4958,12 +4553,6 @@ function Wallet() {
           onAdopt={adopt}
           onAccountsChanged={syncAccounts}
           notify={setNotice}
-          privacy={privacyOn}
-          hideSmall={!!data.hideSmall}
-          hideSmallThreshold={data.hideSmallThreshold}
-          onTogglePrivacy={() =>
-            void run(() => store({ ...dataRef.current, privacy: !dataRef.current.privacy }))
-          }
         />
       );
     if (page === "tokens")
@@ -5306,45 +4895,9 @@ function Wallet() {
                     }}
                   />
                   <View style={{ alignItems: "center" }}>
-                    {/*
-                      Privacy mode belongs here, not three taps into Settings.
-                      It is something an owner reaches for because someone has
-                      just walked up, and a control that takes six taps to
-                      return from has already failed at that.
-
-                      Same stored value as the settings row, so the two are one
-                      setting seen from two places rather than two that can
-                      disagree.
-                    */}
-                    <Pressable
-                      accessibilityRole="button"
-                      accessibilityLabel={
-                        privacyOn
-                          ? t("Show balances", "显示余额")
-                          : t("Hide balances", "隐藏余额")
-                      }
-                      onPress={() =>
-                        void run(() =>
-                          store({ ...dataRef.current, privacy: !dataRef.current.privacy }),
-                        )
-                      }
-                      hitSlop={12}
-                      style={({ pressed }) => ({
-                        flexDirection: "row",
-                        alignItems: "center",
-                        gap: 6,
-                        opacity: pressed ? 0.6 : 1,
-                      })}
-                    >
-                      <Text style={[s.small, { color: colors.ink, opacity: 0.7 }]}>
-                        {t("Total balance", "资产总值")}
-                      </Text>
-                      <Icon
-                        name={privacyOn ? "eye-off" : "eye"}
-                        size={15}
-                        color={colors.ink}
-                      />
-                    </Pressable>
+                    <Text style={[s.small, { color: colors.ink, opacity: 0.7 }]}>
+                      {t("Total balance", "资产总值")}
+                    </Text>
                     {!balance ? (
                       <Skeleton
                         width={140}
@@ -5653,11 +5206,6 @@ function Wallet() {
               </Text>
             </View>
           </View>
-          {payLinks.payLinksAvailable() ? (
-            <Button onPress={() => setPage("request")}>
-              {t("Request an exact amount", "请求确切金额")}
-            </Button>
-          ) : null}
           {action("Copy address", "复制地址", async () => {
             await Clipboard.setStringAsync(owner);
             setNotice({
@@ -5825,12 +5373,7 @@ function Wallet() {
                 <Text style={[s.text, { fontWeight: "700", flex: 1 }]}>
                   {link.email
                     ? link.name || link.email
-                    : contactsCore.nameFor(book, link.merchant)
-                      ? t(
-                          `${contactsCore.nameFor(book, link.merchant)} · in your contacts`,
-                          `${contactsCore.nameFor(book, link.merchant)} · 你的联系人`,
-                        )
-                      : t("Not verified", "未验证")}
+                    : t("Unverified merchant", "未验证商家")}
                 </Text>
               </View>
               <Text style={s.small}>
@@ -5840,8 +5383,8 @@ function Wallet() {
                       `${link.email} · 此钱包已向 Tera 证明的商业邮箱`,
                     )
                   : t(
-                      "Anyone can make a request link. Check the address with whoever sent it before you pay.",
-                      "任何人都可以创建收款链接。付款前请与发送者核对地址。",
+                      "This wallet has not proved a business email. Check the address with whoever sent you the link before you pay.",
+                      "此钱包尚未证明商业邮箱。付款前请与发送链接的人核对地址。",
                     )}
               </Text>
               <Text style={[s.small, { color: colors.ink }]} selectable>
@@ -5928,7 +5471,6 @@ function Wallet() {
               )}
             </View>
           )}
-          {lookalikePanel(spendTo, link ? undefined : (address) => setSpendTo(address))}
           <Field
             label={t("Note (optional, only you see it)", "备注（可选，仅你可见）")}
             value={payNote}
@@ -6187,7 +5729,7 @@ function Wallet() {
                   if (tagLookup.state !== "idle") setTagLookup({ state: "idle" });
                 }}
               />
-              {recipientPicks()}
+              {recipientKind === "address" && recipientPicks()}
               {recipientKind === "tag" ? (
                 <Text style={[s.small, tagLookup.state === "error" && { color: colors.danger }]}>
                   {tagLookup.state === "looking"
@@ -6256,14 +5798,6 @@ function Wallet() {
               )}
             </View>
           )}
-          {flowStep === 4 &&
-            lookalikePanel(
-              (tagLookup.state === "found" ? tagLookup.address : recipient) || "",
-              (address) => {
-                setRecipientKind("address");
-                setRecipient(address);
-              },
-            )}
           {flowStep === 4 && (
             <Field
               label={t("Note (optional, only you see it)", "备注（可选，仅你可见）")}
@@ -7285,224 +6819,6 @@ function Wallet() {
         </>
       );
     }
-    if (page === "batch") {
-      const { asset, payments, errors } = readBatch();
-      const sum = batchCore.total(payments);
-      const have = BigInt(balance?.[asset.symbol] || "0");
-      const short_ = sum > have;
-      const flagged = payments
-        .filter((p) => p.kind === "address")
-        .map((p) => ({ p, match: lookalikeOf(p.to) }))
-        .filter((f) => f.match && !batchAccepted.includes(f.p.to.toLowerCase()));
-      const reason = (e: { line: number; reason: string; first?: number }) =>
-        ({
-          recipient: biz.emailAvailable()
-            ? t("isn't an address, @tag or email", "不是有效地址、@标签或邮箱")
-            : t("isn't an address or @tag", "不是有效地址或 @标签"),
-          amount: t("the amount isn't a number", "金额不是数字"),
-          decimals: t(`${asset.symbol} has at most ${asset.decimals} decimals`, `${asset.symbol} 最多 ${asset.decimals} 位小数`),
-          zero: t("the amount is zero", "金额为零"),
-          duplicate: t(`pays the same recipient as line ${e.first}`, `与第 ${e.first} 行收款人相同`),
-          "too-many": t(`a batch is at most ${batchCore.LIMITS.maxPayments} payments`, `每批最多 ${batchCore.LIMITS.maxPayments} 笔`),
-          columns: t("needs a recipient and an amount", "需要收款人和金额"),
-        })[e.reason] || e.reason;
-      const choices = assets.filter((a) => BigInt(balance?.[a.symbol] || "0") > 0n || a.symbol === batchSymbol);
-      return (
-        <>
-          <Header title={t("Batch send", "批量发送")} onBack={() => setPage("home")} backLabel={t("Home", "首页")} />
-          <View style={[s.panel, { gap: 6 }]}>
-            <Text style={s.small}>
-              {t(
-                "Pay up to 50 people in one review. One payment per line: who, how much, and an optional note only you see.",
-                "一次审核最多向 50 人付款。每行一笔：收款人、金额，以及仅你可见的备注（可选）。",
-              )}
-            </Text>
-          </View>
-          {choices.length ? (
-            <Chips
-              label={t("Pay in", "付款资产")}
-              value={asset.symbol}
-              select={(symbol) => {
-                setBatchSymbol(symbol);
-                setBatchAccepted([]);
-              }}
-              options={choices.map((a) => ({ value: a.symbol, label: a.symbol }))}
-            />
-          ) : null}
-          <View style={{ gap: 8 }}>
-            <Text style={s.eyebrow}>{t("Payments", "付款列表")}</Text>
-            <TextInput
-              accessibilityLabel={t("Payments, one per line", "付款列表，每行一笔")}
-              value={batchText}
-              onChangeText={(text) => {
-                setBatchText(text);
-                setBatchAccepted([]);
-              }}
-              multiline
-              autoCorrect={false}
-              autoCapitalize="none"
-              placeholder={
-                biz.emailAvailable()
-                  ? "0x5b27…9f05, 25, rent share\n@astra, 10\npay@acme.com, 120, invoice 1042"
-                  : "0x5b27…9f05, 25, rent share\n@astra, 10"
-              }
-              placeholderTextColor={colors.faint}
-              selectionColor={colors.green}
-              style={[
-                s.mono,
-                {
-                  minHeight: 150,
-                  textAlignVertical: "top",
-                  padding: 14,
-                  borderRadius: 16,
-                  borderWidth: 1,
-                  borderColor: colors.line,
-                  backgroundColor: colors.wash,
-                  color: colors.ink,
-                },
-              ]}
-            />
-            {Platform.OS === "web" ? (
-              <View style={{ flexDirection: "row", gap: 18, flexWrap: "wrap" }}>
-                <Pressable accessibilityRole="button" onPress={uploadBatchFile} hitSlop={6}>
-                  <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
-                    {t("Upload CSV", "上传 CSV")}
-                  </Text>
-                </Pressable>
-                <Pressable accessibilityRole="button" onPress={downloadBatchTemplate} hitSlop={6}>
-                  <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
-                    {t("Download template", "下载模板")}
-                  </Text>
-                </Pressable>
-              </View>
-            ) : null}
-          </View>
-          {errors.length ? (
-            <View style={[s.error, { gap: 4 }]}>
-              {errors.map((e) => (
-                <Text key={`${e.line}-${e.reason}`} style={s.text}>
-                  {t(`Line ${e.line}: ${reason(e)}`, `第 ${e.line} 行：${reason(e)}`)}
-                </Text>
-              ))}
-            </View>
-          ) : null}
-          {flagged.length ? (
-            <View style={[s.panel, { gap: 10, borderWidth: 1, borderColor: colors.danger, backgroundColor: colors.dangerTint }]}>
-              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                <Icon name="alert" size={18} color={colors.danger} />
-                <Text style={[s.label, { color: colors.danger, flex: 1 }]}>
-                  {t("Lookalike addresses — check them", "相似地址，请核对")}
-                </Text>
-              </View>
-              {flagged.map(({ p, match }) => (
-                <View key={p.line} style={{ gap: 3 }}>
-                  <Text style={s.small}>
-                    {t(
-                      `Line ${p.line} looks like ${match!.label}'s address, but is different:`,
-                      `第 ${p.line} 行看起来像 ${match!.label} 的地址，但并不相同：`,
-                    )}
-                  </Text>
-                  <Text selectable style={s.mono}>
-                    {lookalikeCore.diff(p.to, match!.address).map((run: { text: string; same: boolean }, i: number) => (
-                      <Text key={i} style={run.same ? undefined : { color: colors.danger, fontWeight: "800", textDecorationLine: "underline" }}>
-                        {run.text}
-                      </Text>
-                    ))}
-                  </Text>
-                  <Text selectable style={[s.mono, { color: colors.muted }]}>
-                    {match!.address}
-                  </Text>
-                </View>
-              ))}
-              <Button
-                danger
-                onPress={() =>
-                  setBatchAccepted((list) => [...list, ...flagged.map((f) => f.p.to.toLowerCase())])
-                }
-              >
-                {t("I checked every character of these", "我已逐字核对这些地址")}
-              </Button>
-            </View>
-          ) : null}
-          {payments.length ? (
-            <Group title={t(`${payments.length} payments`, `${payments.length} 笔付款`)}>
-              {payments.map((p) => (
-                <View
-                  key={p.line}
-                  style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingVertical: 8 }}
-                >
-                  <View style={{ flex: 1, gap: 2 }}>
-                    <Text style={s.label} numberOfLines={1}>
-                      {p.kind === "address"
-                        ? contactsCore.nameFor(book, p.to) || short(p.to)
-                        : p.kind === "tag"
-                          ? nameLabel(p.to)
-                          : p.to}
-                    </Text>
-                    {p.note ? (
-                      <Text style={s.small} numberOfLines={1}>
-                        {p.note}
-                      </Text>
-                    ) : null}
-                  </View>
-                  <Text style={s.mono}>{`${p.amount} ${asset.symbol}`}</Text>
-                </View>
-              ))}
-              <Row label={t("Total", "合计")} value={`${formatUnits(sum, asset.decimals)} ${asset.symbol}`} />
-              <Row
-                label={t("Balance", "余额")}
-                value={`${formatUnits(have, asset.decimals)} ${asset.symbol}`}
-              />
-            </Group>
-          ) : null}
-          {short_ ? (
-            <View style={s.error}>
-              <Text style={s.text}>
-                {t(
-                  `The total is more than this wallet holds in ${asset.symbol}.`,
-                  `合计超出本钱包的 ${asset.symbol} 余额。`,
-                )}
-              </Text>
-            </View>
-          ) : null}
-          <Button
-            primary
-            disabled={busy || !payments.length || errors.length > 0 || flagged.length > 0 || short_}
-            onPress={() => void run((guard) => prepareBatch(guard))}
-          >
-            {busy ? (
-              <TeraSpinner size={18} />
-            ) : payments.length ? (
-              t(
-                `Review ${payments.length} payments · ${formatUnits(sum, asset.decimals)} ${asset.symbol}`,
-                `审核 ${payments.length} 笔付款 · ${formatUnits(sum, asset.decimals)} ${asset.symbol}`,
-              )
-            ) : (
-              t("Review payments", "审核付款")
-            )}
-          </Button>
-          <Text style={[s.small, { textAlign: "center" }]}>
-            {t(
-              "Each payment is its own transaction, sent one after another after a single signature. Network fees apply to each.",
-              "每笔付款都是独立交易，一次签名后逐笔发送。每笔都需支付网络手续费。",
-            )}
-          </Text>
-        </>
-      );
-    }
-    if (page === "split")
-      return (
-        <SplitScreen
-          t={t}
-          go={setPage}
-          notify={setNotice}
-          splits={splitCore.cleanSplits(data.splits)}
-          save={(list) => store({ ...dataRef.current, splits: list })}
-          suggestions={book.map((c) => c.name)}
-        />
-      );
-    if (page === "request")
-      return <LinksScreen personal t={t} owner={owner as Address} go={setPage} notify={setNotice} />;
     if (page === "network") {
       const r = netReading;
       const feeWei = networkSpeed.transferFeeWei(r?.gasPriceWei ?? null);
@@ -8228,83 +7544,6 @@ function Wallet() {
               }
             />
           </Group>
-          <Group title={t("Share receipt", "分享收据")}>
-            <ListRow
-              icon="link"
-              label={t("Share link", "分享链接")}
-              detail={t("Copy & share explorer receipt", "复制并分享收据链接")}
-              onPress={() =>
-                void shareReceiptViaLink(
-                  {
-                    hash: r.hash,
-                    title: activityTitle(r),
-                    status: r.status,
-                    amount: r.amount,
-                    symbol: r.symbol,
-                    payee: r.payee || r.recipient || r.counterpartyAddress,
-                    recipient: r.recipient,
-                    recipientName: savedName,
-                    sender: owner,
-                    createdAt: r.createdAt,
-                    block: detailSpeed?.block,
-                    feeEth: detailSpeed?.feeWei ? formatUnits(detailSpeed.feeWei, 18) : undefined,
-                    delivery: r.delivery,
-                  },
-                  (title, body, tone) => setNotice({ title, body, tone }),
-                )
-              }
-            />
-            <ListRow
-              icon="image-outline"
-              label={t("Save as image", "保存为图片")}
-              detail={t("Download high-res PNG receipt card", "下载高清 PNG 收据卡片")}
-              onPress={() =>
-                void shareReceiptViaImage(
-                  {
-                    hash: r.hash,
-                    title: activityTitle(r),
-                    status: r.status,
-                    amount: r.amount,
-                    symbol: r.symbol,
-                    payee: r.payee || r.recipient || r.counterpartyAddress,
-                    recipient: r.recipient,
-                    recipientName: savedName,
-                    sender: owner,
-                    createdAt: r.createdAt,
-                    block: detailSpeed?.block,
-                    feeEth: detailSpeed?.feeWei ? formatUnits(detailSpeed.feeWei, 18) : undefined,
-                    delivery: r.delivery,
-                  },
-                  (title, body, tone) => setNotice({ title, body, tone }),
-                )
-              }
-            />
-            <ListRow
-              icon="file-down"
-              label={t("Download as PDF", "下载为 PDF")}
-              detail={t("Print or save printable PDF receipt", "打印或保存 PDF 格式收据")}
-              onPress={() =>
-                void shareReceiptViaPdf(
-                  {
-                    hash: r.hash,
-                    title: activityTitle(r),
-                    status: r.status,
-                    amount: r.amount,
-                    symbol: r.symbol,
-                    payee: r.payee || r.recipient || r.counterpartyAddress,
-                    recipient: r.recipient,
-                    recipientName: savedName,
-                    sender: owner,
-                    createdAt: r.createdAt,
-                    block: detailSpeed?.block,
-                    feeEth: detailSpeed?.feeWei ? formatUnits(detailSpeed.feeWei, 18) : undefined,
-                    delivery: r.delivery,
-                  },
-                  (title, body, tone) => setNotice({ title, body, tone }),
-                )
-              }
-            />
-          </Group>
           <View style={[s.panel, { gap: 8 }]}>
             <Text style={s.eyebrow}>{t("Technical details", "技术详情")}</Text>
             <Row label={t("Hash", "哈希")} value={short(r.hash)} />
@@ -8323,11 +7562,91 @@ function Wallet() {
             <Text selectable style={[s.mono, { fontSize: 11, color: colors.faint }]}>
               {r.hash}
             </Text>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 12, marginTop: 4 }}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("Copy hash", "复制哈希")}
+                onPress={() =>
+                  void Clipboard.setStringAsync(r.hash).then(() =>
+                    setNotice({
+                      title: t("Hash copied", "哈希已复制"),
+                      body: t("Transaction hash copied to clipboard.", "交易哈希已复制到剪贴板。"),
+                      tone: "success",
+                    }),
+                  )
+                }
+                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+              >
+                <Icon name="content-copy" size={14} color={colors.muted} />
+                <Text style={[s.small, { color: colors.muted }]}>{t("Copy", "复制")}</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("Share hash", "分享哈希")}
+                onPress={() =>
+                  void shareText({
+                    title: t("Transaction Hash", "交易哈希"),
+                    text: r.hash,
+                    url: `https://robinhoodchain.blockscout.com/tx/${r.hash}`,
+                  })
+                }
+                style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+              >
+                <Icon name="share-2" size={14} color={colors.muted} />
+                <Text style={[s.small, { color: colors.muted }]}>{t("Share", "分享")}</Text>
+              </Pressable>
+            </View>
           </View>
         </>
       );
     }
     const toSettings = () => setSettingsSection("root");
+    if (settingsSection === "appearance") {
+      return (
+        <>
+          <Header
+            title={t("Appearance", "外观")}
+            onBack={toSettings}
+            backLabel={t("Settings", "设置")}
+          />
+          <Group title={t("Theme preference", "主题偏好设置")}>
+            <ListRow
+              icon="cellphone"
+              label={t("System default", "跟随系统")}
+              detail={t("Match your device's light or dark mode live", "实时跟随设备的浅色或深色模式")}
+              onPress={() => void updateThemeSetting("system")}
+              right={
+                themeSetting === "system" ? (
+                  <Icon name="check" size={20} color={colors.green} />
+                ) : null
+              }
+            />
+            <ListRow
+              icon="white-balance-sunny"
+              label={t("Light", "浅色模式")}
+              detail={t("Always use light theme", "始终使用浅色主题")}
+              onPress={() => void updateThemeSetting("light")}
+              right={
+                themeSetting === "light" ? (
+                  <Icon name="check" size={20} color={colors.green} />
+                ) : null
+              }
+            />
+            <ListRow
+              icon="moon-waning-crescent"
+              label={t("Dark", "深色模式")}
+              detail={t("Always use dark theme", "始终使用深色主题")}
+              onPress={() => void updateThemeSetting("dark")}
+              right={
+                themeSetting === "dark" ? (
+                  <Icon name="check" size={20} color={colors.green} />
+                ) : null
+              }
+            />
+          </Group>
+        </>
+      );
+    }
     if (settingsSection === "root") {
       const active = accounts.find((entry) => entry.active) || { index: 0, name: "" };
       return (
@@ -8354,26 +7673,42 @@ function Wallet() {
               <Text style={[s.text, { fontSize: 18, fontWeight: "700" }]} numberOfLines={1}>
                 {walletName(active)}
               </Text>
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel={t("Copy address", "复制地址")}
-                onPress={() =>
-                  void Clipboard.setStringAsync(owner).then(() =>
-                    setNotice({
-                      title: t("Address copied", "地址已复制"),
-                      body: t(
-                        "Your Robinhood Chain wallet address is ready to paste.",
-                        "你的 Robinhood Chain 钱包地址已可粘贴。",
-                      ),
-                      tone: "success",
-                    }),
-                  )
-                }
-                style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
-              >
-                <Text style={[s.mono, { color: colors.muted }]}>{short(owner)}</Text>
-                <Icon name="content-copy" size={14} color={colors.muted} />
-              </Pressable>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t("Copy address", "复制地址")}
+                  onPress={() =>
+                    void Clipboard.setStringAsync(owner).then(() =>
+                      setNotice({
+                        title: t("Address copied", "地址已复制"),
+                        body: t(
+                          "Your Robinhood Chain wallet address is ready to paste.",
+                          "你的 Robinhood Chain 钱包地址已可粘贴。",
+                        ),
+                        tone: "success",
+                      }),
+                    )
+                  }
+                  style={{ flexDirection: "row", alignItems: "center", gap: 6 }}
+                >
+                  <Text style={[s.mono, { color: colors.muted }]}>{short(owner)}</Text>
+                  <Icon name="content-copy" size={14} color={colors.muted} />
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t("Share address", "分享地址")}
+                  onPress={() =>
+                    void shareText({
+                      title: t("Tera Wallet Address", "Tera 钱包地址"),
+                      text: owner,
+                    })
+                  }
+                  hitSlop={6}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
+                >
+                  <Icon name="share-2" size={14} color={colors.muted} />
+                </Pressable>
+              </View>
               {business ? (
                 <Pressable
                   accessibilityRole="button"
@@ -8505,6 +7840,27 @@ function Wallet() {
             ) : null}
           </Group>
           <Group title={t("Preferences", "偏好设置")}>
+            <ListRow
+              icon="palette-outline"
+              label={t("Appearance", "外观")}
+              detail={
+                themeSetting === "system"
+                  ? t("System default (follows OS)", "跟随系统 (自动切换)")
+                  : themeSetting === "light"
+                    ? t("Light mode", "浅色模式")
+                    : t("Dark mode", "深色模式")
+              }
+              onPress={() => setSettingsSection("appearance")}
+              right={
+                <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                  {themeSetting === "system"
+                    ? t("System", "跟随系统")
+                    : themeSetting === "light"
+                      ? t("Light", "浅色")
+                      : t("Dark", "深色")}
+                </Text>
+              }
+            />
             <ListRow
               icon="translate"
               label={t("Language", "语言")}
@@ -9858,28 +9214,6 @@ function Wallet() {
             label: t("Receive", "收款"),
             onPress: () => openFlow("receive"),
           },
-          {
-            key: "batch",
-            icon: "layers",
-            label: t("Batch send", "批量发送"),
-            onPress: () => openFlow("batch"),
-          },
-          ...(payLinks.payLinksAvailable()
-            ? [
-                {
-                  key: "split",
-                  icon: "split",
-                  label: t("Split a bill", "分账"),
-                  onPress: () => openFlow("split"),
-                },
-                {
-                  key: "request",
-                  icon: "link",
-                  label: t("Request", "请求收款"),
-                  onPress: () => setPage("request"),
-                },
-              ]
-            : []),
           {
             key: "swap",
             icon: "swap-horizontal",
