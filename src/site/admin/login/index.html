@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>TERA Admin Console - Login</title>
-    <link rel="icon" href="/logo.png" />
+    <link rel="icon" href="/tera/logo.png" />
     <style>
       :root {
         font-family: Inter, system-ui, -apple-system, sans-serif;
@@ -15,8 +15,20 @@
       body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 16px; background: radial-gradient(circle at 50% 30%, #172b20 0%, #0d1712 70%); }
       .card { max-width: 420px; width: 100%; background: rgba(22, 37, 28, 0.95); border: 1px solid #243b2c; border-radius: 20px; padding: 36px 32px; box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.7); backdrop-filter: blur(16px); }
       .logo-wrap { display: flex; justify-content: center; margin-bottom: 20px; }
-      .logo-img { height: 52px; width: auto; object-fit: contain; filter: drop-shadow(0 4px 12px rgba(138, 151, 101, 0.3)); }
-      h1 { text-align: center; font-size: 22px; font-weight: 700; margin: 0; letter-spacing: -0.02em; color: #f7f4de; }
+      .logo-box {
+        width: 54px;
+        height: 54px;
+        background: #16251c;
+        border: 1px solid #768143;
+        border-radius: 14px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 4px 16px rgba(118, 129, 67, 0.3);
+        padding: 6px;
+      }
+      .logo-img { height: 42px; width: 42px; object-fit: contain; }
+      h1 { text-align: center; font-size: 22px; font-weight: 800; margin: 0; letter-spacing: -0.02em; color: #f7f4de; font-family: 'IBM Plex Mono', monospace; }
       p.sub { text-align: center; color: #8a9765; font-size: 13px; font-weight: 600; margin: 6px 0 16px 0; font-family: 'IBM Plex Mono', monospace; text-transform: uppercase; letter-spacing: 0.05em; }
       p.desc { text-align: center; color: #9da998; font-size: 13px; margin: 0 0 24px 0; line-height: 1.5; }
       .form-group { margin-bottom: 22px; }
@@ -32,7 +44,9 @@
   <body>
     <div class="card">
       <div class="logo-wrap">
-        <img src="/logo.png" alt="Tera Wallet Logo" class="logo-img" onerror="this.onerror=null; this.src='/tera/logo.png';" />
+        <div class="logo-box">
+          <img src="/tera/logo.png" alt="Tera Wallet Logo" class="logo-img" onerror="this.onerror=null; this.src='/logo.png';" />
+        </div>
       </div>
       <h1>TERA WALLET</h1>
       <p class="sub">Admin Console Sign In</p>
