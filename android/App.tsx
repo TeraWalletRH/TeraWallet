@@ -1372,15 +1372,24 @@ function Wallet() {
       // Do not discard signing state for that transient condition.
       if (state === "background" && !vault.authenticating) {
         if (backgroundLock.current) clearTimeout(backgroundLock.current);
-        backgroundLock.current = setTimeout(() => {
-          if (AppState.currentState === "background" && !pending.current) forget();
-        }, 60_000);
+        const lockMins = dataRef.current.autoLockMinutes ?? 15;
+        if (lockMins > 0) {
+          backgroundLock.current = setTimeout(() => {
+            if (AppState.currentState === "background" && !pending.current) forget();
+          }, Math.min(lockMins * 60_000, 60_000));
+        }
       }
     });
     const timer = setInterval(() => {
-      if (vault.isUnlocked() && !pending.current && Date.now() - inactivity.current > 15 * 60_000)
+      const lockMins = dataRef.current.autoLockMinutes ?? 15;
+      if (
+        lockMins > 0 &&
+        vault.isUnlocked() &&
+        !pending.current &&
+        Date.now() - inactivity.current > lockMins * 60_000
+      )
         forget();
-    }, 30_000);
+    }, 10_000);
     return () => {
       subscription.remove();
       clearInterval(timer);
@@ -7907,6 +7916,23 @@ function Wallet() {
               }
             />
             <ListRow
+              icon="clock"
+              label={t("Auto-lock timer", "自动锁定定时器")}
+              detail={
+                (data.autoLockMinutes ?? 15) === 0
+                  ? t("Never lock automatically", "从不自动锁定")
+                  : t(`Lock after ${data.autoLockMinutes ?? 15} min of inactivity`, `无操作 ${data.autoLockMinutes ?? 15} 分钟后锁定`)
+              }
+              onPress={() => setSettingsSection("autolock")}
+              right={
+                <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                  {(data.autoLockMinutes ?? 15) === 0
+                    ? t("Never", "永不")
+                    : `${data.autoLockMinutes ?? 15}m`}
+                </Text>
+              }
+            />
+            <ListRow
               icon="translate"
               label={t("Language", "语言")}
               onPress={toggleLanguage}
@@ -8152,6 +8178,48 @@ function Wallet() {
                   )}
             </Text>
           </View>
+        </>
+      );
+    }
+    if (settingsSection === "autolock") {
+      const currentTimer = data.autoLockMinutes ?? 15;
+      const timerLabels: Record<number, string> = {
+        1: t("1 minute", "1 分钟"),
+        5: t("5 minutes", "5 分钟"),
+        15: t("15 minutes", "15 分钟"),
+        30: t("30 minutes", "30 分钟"),
+        0: t("Never", "永不"),
+      };
+      return (
+        <>
+          <Header title={t("Auto-lock timer", "自动锁定定时器")} onBack={toSettings} backLabel={t("Settings", "设置")} />
+          <View style={[s.panel, { gap: 8 }]}>
+            <Text style={s.small}>
+              {t(
+                "Choose how long Tera waits before automatically locking the wallet due to inactivity.",
+                "选择 Tera 在因无操作而自动锁定钱包之前等待的时长。",
+              )}
+            </Text>
+          </View>
+          <Choices
+            options={[
+              t("1 minute", "1 分钟"),
+              t("5 minutes", "5 分钟"),
+              t("15 minutes", "15 分钟"),
+              t("30 minutes", "30 分钟"),
+              t("Never", "永不"),
+            ]}
+            value={timerLabels[currentTimer] || t("15 minutes", "15 分钟")}
+            select={(choice) => {
+              let selected = 15;
+              if (choice === t("1 minute", "1 分钟")) selected = 1;
+              else if (choice === t("5 minutes", "5 分钟")) selected = 5;
+              else if (choice === t("15 minutes", "15 分钟")) selected = 15;
+              else if (choice === t("30 minutes", "30 分钟")) selected = 30;
+              else if (choice === t("Never", "永不")) selected = 0;
+              void run(() => store({ ...dataRef.current, autoLockMinutes: selected }));
+            }}
+          />
         </>
       );
     }
