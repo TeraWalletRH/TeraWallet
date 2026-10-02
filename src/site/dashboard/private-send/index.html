@@ -78,6 +78,7 @@
       <input class="i" id="amount" inputmode="decimal" placeholder="Amount (e.g. 1.5)">
       <input class="i" id="recipient" placeholder="Recipient 0x address">
     </div>
+    <div id="recent-recipients-wrap" style="margin-top: 10px; display: none;"></div>
 
     <div class="row" style="margin-top: 18px;">
       <button class="b" id="route">Review private route</button>
@@ -288,6 +289,40 @@ q('#connect').onclick = async () => {
   }
 };
 
+function renderRecentRecipients() {
+  const wrap = q('#recent-recipients-wrap');
+  if (!wrap) return;
+  let recents = [];
+  try {
+    recents = JSON.parse(localStorage.getItem('tera-recent-recipients') || '[]');
+  } catch {}
+  const history = getHistory();
+  for (const h of history) {
+    const to = h.recipientAddress || h.recipient;
+    if (to && !recents.includes(to)) recents.push(to);
+  }
+  if (!recents.length) {
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = 'flex';
+  wrap.style.flexWrap = 'wrap';
+  wrap.style.alignItems = 'center';
+  wrap.style.gap = '8px';
+  wrap.innerHTML = `<span class="ey" style="font-size: 11px;">Recent:</span>` +
+    recents.slice(0, 5).map(addr => `
+      <button type="button" class="b b-sec recent-btn" data-addr="${addr}" style="padding: 4px 10px; font-size: 12px; font-family: monospace; border-radius: 6px;">
+        ${addr.slice(0, 6)}...${addr.slice(-4)}
+      </button>
+    `).join('');
+  wrap.querySelectorAll('.recent-btn').forEach(btn => {
+    btn.onclick = () => {
+      q('#recipient').value = btn.dataset.addr;
+      updateAvailableText();
+    };
+  });
+}
+
 q('#route').onclick = async () => {
   try {
     if (!owner) throw Error('Connect your wallet first.');
@@ -295,6 +330,13 @@ q('#route').onclick = async () => {
 
     const recipient = q('#recipient').value.trim();
     if (!/^0x[a-fA-F0-9]{40}$/.test(recipient)) throw Error('Enter a valid 0x recipient address.');
+
+    try {
+      let recents = JSON.parse(localStorage.getItem('tera-recent-recipients') || '[]');
+      recents = [recipient, ...recents.filter(a => a.toLowerCase() !== recipient.toLowerCase())].slice(0, 10);
+      localStorage.setItem('tera-recent-recipients', JSON.stringify(recents));
+      renderRecentRecipients();
+    } catch {}
 
     const rawAmount = parseUnits(q('#amount').value, selectedAsset.decimals);
     say('Preparing private route…');
@@ -349,6 +391,7 @@ q('#route').onclick = async () => {
 loadConfigAssets().then(() => {
   renderAssets();
   renderHistory();
+  renderRecentRecipients();
   setInterval(pollPendingJobs, 10000);
 });
 </script>
