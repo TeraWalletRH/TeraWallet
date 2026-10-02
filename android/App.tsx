@@ -57,7 +57,7 @@ import {
   UNVERIFIABLE,
   value as valueCore,
 } from "./src/core";
-import { check, checkChecksum, parseQrAddress, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
+import { check, checkChecksum, isTrustedRecipient, parseQrAddress, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { screenOrigin } from "./src/viewport";
 import { useAppTheme } from "./src/theme";
@@ -2289,6 +2289,15 @@ function Wallet() {
     const destination =
       recipientKind === "tag" ? (await resolveName(recipient)).address : recipient.trim();
     guard();
+    if (dataRef.current.trustedOnlyMode) {
+      check(
+        isTrustedRecipient(destination, book),
+        t(
+          "Trusted-only mode is active. Recipient address must be saved in your contacts.",
+          "受信任模式已启用。收款地址必须保存到联系人中。",
+        ),
+      );
+    }
     const input = {
       ownerAddress: owner,
       accountAddress: owner,
@@ -7929,6 +7938,23 @@ function Wallet() {
                   {(data.autoLockMinutes ?? 15) === 0
                     ? t("Never", "永不")
                     : `${data.autoLockMinutes ?? 15}m`}
+                </Text>
+              }
+            />
+            <ListRow
+              icon="shield-check"
+              label={t("Trusted-only mode", "受信任模式")}
+              detail={
+                data.trustedOnlyMode
+                  ? t("Transfers restricted to saved contacts", "仅允许向保存的联系人转账")
+                  : t("Transfers allowed to any address", "允许向任何地址转账")
+              }
+              onPress={() =>
+                run(() => store({ ...dataRef.current, trustedOnlyMode: !dataRef.current.trustedOnlyMode }))
+              }
+              right={
+                <Text style={[s.small, { color: data.trustedOnlyMode ? colors.green : colors.sub, fontWeight: "600" }]}>
+                  {data.trustedOnlyMode ? t("Enabled", "已启用") : t("Disabled", "已禁用")}
                 </Text>
               }
             />

@@ -39,6 +39,12 @@ export function parseQrAddress(text: string): string | null {
 }
 export const same = (a: unknown, b: unknown) =>
   typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
+export function isTrustedRecipient(recipient: string, contacts?: Array<{ address: string }>): boolean {
+  if (typeof recipient !== "string" || !/^0x[a-fA-F0-9]{40}$/i.test(recipient.trim())) return false;
+  if (!Array.isArray(contacts) || contacts.length === 0) return false;
+  const target = recipient.trim().toLowerCase();
+  return contacts.some((c) => typeof c.address === "string" && c.address.trim().toLowerCase() === target);
+}
 export function check(
   ok: unknown,
   why = "Transaction does not match your review. / 交易与审核内容不符。",
