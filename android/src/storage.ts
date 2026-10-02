@@ -51,7 +51,7 @@ export type LocalData = {
   retention: number;
   language: "en" | "zh";
   theme: "light" | "dark";
-  /** Auto-lock timer in minutes (0 for disabled/never, defaults to 15). */
+  /** Auto lock timer in minutes (0 for disabled/never, defaults to 15). */
   autoLockMinutes?: number;
   /** Whether transfers are restricted to saved contacts only. */
   trustedOnlyMode?: boolean;
