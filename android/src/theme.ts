@@ -1,15 +1,23 @@
 import { useEffect, useState } from 'react';
 import { Appearance, ColorSchemeName } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export type ThemeSetting = 'system' | 'light' | 'dark';
 export const MOBILE_THEME_KEY = 'tera_theme';
 
+const memoryThemeStorage: Record<string, string> = {};
+
 export async function getStoredMobileTheme(): Promise<ThemeSetting> {
   try {
-    const val = await AsyncStorage.getItem(MOBILE_THEME_KEY);
-    if (val === 'light' || val === 'dark' || val === 'system') {
-      return val;
+    if (typeof localStorage !== 'undefined') {
+      const val = localStorage.getItem(MOBILE_THEME_KEY);
+      if (val === 'light' || val === 'dark' || val === 'system') {
+        return val;
+      }
+    } else {
+      const val = memoryThemeStorage[MOBILE_THEME_KEY];
+      if (val === 'light' || val === 'dark' || val === 'system') {
+        return val;
+      }
     }
   } catch {
     // Ignore storage read error
@@ -20,9 +28,15 @@ export async function getStoredMobileTheme(): Promise<ThemeSetting> {
 export async function setStoredMobileTheme(setting: ThemeSetting): Promise<void> {
   try {
     if (setting === 'system') {
-      await AsyncStorage.removeItem(MOBILE_THEME_KEY);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.removeItem(MOBILE_THEME_KEY);
+      }
+      delete memoryThemeStorage[MOBILE_THEME_KEY];
     } else {
-      await AsyncStorage.setItem(MOBILE_THEME_KEY, setting);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(MOBILE_THEME_KEY, setting);
+      }
+      memoryThemeStorage[MOBILE_THEME_KEY] = setting;
     }
   } catch {
     // Ignore storage write error

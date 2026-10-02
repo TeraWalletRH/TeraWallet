@@ -23,6 +23,20 @@ export function checkChecksum(address: string): { isAddress: boolean; isChecksum
     return { isAddress: false, isChecksummed: false, checksummed: null };
   }
 }
+export function parseQrAddress(text: string): string | null {
+  if (typeof text !== "string") return null;
+  const raw = text.trim();
+  if (!raw) return null;
+  const match = raw.match(/(0x[a-fA-F0-9]{40})/);
+  if (match && match[1] && isAddress(match[1], { strict: false })) {
+    try {
+      return getAddress(match[1]);
+    } catch {
+      return match[1];
+    }
+  }
+  return null;
+}
 export const same = (a: unknown, b: unknown) =>
   typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
 export function check(

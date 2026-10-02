@@ -18,7 +18,7 @@
 | 1 | #23 | Follow system dark/light theme | Done | Yes | Yes | Yes |
 | 2 | #1 | Copy and share buttons | Done | Yes | Yes | Yes |
 | 3 | #7 | Address checksum warning [SHARED] | Done | Yes | Yes | Yes |
-| 4 | #4 | QR code scanner on Send | Not Started | No | No | No |
+| 4 | #4 | QR code scanner on Send | Done | Yes | Yes | Yes |
 | 5 | #18 | Auto-lock timer | Not Started | No | No | No |
 | 7 | #19 | Trusted-only mode | Not Started | No | No | No |
 | 10 | #10 | Pending transaction nudge | Not Started | No | No | No |
