@@ -22,6 +22,21 @@ export function checkAddressChecksum(address) {
   }
 }
 
+export function parseQrAddress(text) {
+  if (typeof text !== "string") return null;
+  const raw = text.trim();
+  if (!raw) return null;
+  const match = raw.match(/(0x[a-fA-F0-9]{40})/);
+  if (match && match[1] && isAddress(match[1], { strict: false })) {
+    try {
+      return getAddress(match[1]);
+    } catch (_) {
+      return match[1];
+    }
+  }
+  return null;
+}
+
 export const GATE_LABELS = {
   asset_registry: "Asset registry",
   eligibility_preflight: "Eligibility preflight",

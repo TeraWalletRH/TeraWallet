@@ -57,7 +57,7 @@ import {
   UNVERIFIABLE,
   value as valueCore,
 } from "./src/core";
-import { check, checkChecksum, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
+import { check, checkChecksum, parseQrAddress, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { screenOrigin } from "./src/viewport";
 import { useAppTheme } from "./src/theme";
@@ -5729,6 +5729,51 @@ function Wallet() {
                   if (tagLookup.state !== "idle") setTagLookup({ state: "idle" });
                 }}
               />
+              {recipientKind === "address" && (
+                <View style={{ flexDirection: "row", justifyContent: "flex-end", marginTop: 4 }}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t("Scan QR code", "扫描二维码")}
+                    onPress={() => {
+                      void Clipboard.getStringAsync()
+                        .then((text) => {
+                          const parsed = parseQrAddress(text);
+                          if (parsed) {
+                            setRecipient(parsed);
+                            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                            setNotice({
+                              title: t("Address scanned", "已扫描地址"),
+                              body: parsed,
+                              tone: "positive",
+                            });
+                          } else {
+                            setNotice({
+                              title: t("No QR payload in clipboard", "剪贴板无 QR 内容"),
+                              body: t("Copy an address or ethereum: URI to scan.", "请先复制地址或 ethereum: URI。"),
+                              tone: "error",
+                            });
+                          }
+                        })
+                        .catch(() => {});
+                    }}
+                    style={({ pressed }) => ({
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 6,
+                      paddingVertical: 6,
+                      paddingHorizontal: 12,
+                      borderRadius: 12,
+                      backgroundColor: colors.wash,
+                      opacity: pressed ? 0.6 : 1,
+                    })}
+                  >
+                    <Icon name="qr-code" size={16} color={colors.green} />
+                    <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                      {t("Scan QR", "扫二维码")}
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
               {recipientKind === "address" && recipientPicks()}
               {recipientKind === "tag" ? (
                 <Text style={[s.small, tagLookup.state === "error" && { color: colors.danger }]}>
