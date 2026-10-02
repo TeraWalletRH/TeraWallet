@@ -525,6 +525,7 @@ const state = {
   vaultKeyEpoch: 1,
   autoLockMinutes: 15,
   trustedOnlyMode: false,
+  fiatCurrency: "USD",
   recovery: null,
   demo: false,
   guide: 0,
@@ -553,6 +554,27 @@ function autoLockSettingsKey() {
 }
 function trustedOnlySettingsKey() {
   return `${storageKey()}:trustedonly`;
+}
+function fiatSettingsKey() {
+  return `${storageKey()}:fiat`;
+}
+const FIAT_RATES = {
+  USD: { symbol: "$", rate: 1.0 },
+  EUR: { symbol: "€", rate: 0.92 },
+  GBP: { symbol: "£", rate: 0.78 },
+  JPY: { symbol: "¥", rate: 150.0 },
+  CAD: { symbol: "CA$", rate: 1.36 },
+  AUD: { symbol: "A$", rate: 1.52 },
+};
+function formatFiat(usdAmount, currency = state?.fiatCurrency || "USD") {
+  const code = (currency || "USD").toUpperCase();
+  const meta = FIAT_RATES[code] || FIAT_RATES.USD;
+  const num = typeof usdAmount === "number" ? usdAmount : parseFloat(usdAmount || "0") || 0;
+  const converted = num * meta.rate;
+  if (code === "JPY") {
+    return `${meta.symbol}${Math.round(converted).toLocaleString()}`;
+  }
+  return `${meta.symbol}${converted.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 function keyInfoStorageKey() {
   return `${storageKey()}:keyinfo`;
@@ -597,6 +619,7 @@ function vaultPayload() {
     rpcEndpoints: state.rpcEndpoints,
     autoLockMinutes: state.autoLockMinutes,
     trustedOnlyMode: state.trustedOnlyMode,
+    fiatCurrency: state.fiatCurrency,
   };
 }
 async function persist() {
@@ -635,6 +658,8 @@ function loadRecords() {
   const storedAutoLock = Number(localStorage.getItem(autoLockSettingsKey()));
   state.autoLockMinutes = [0, 5, 15, 30, 60].includes(storedAutoLock) ? storedAutoLock : 15;
   state.trustedOnlyMode = localStorage.getItem(trustedOnlySettingsKey()) === "true";
+  const storedFiat = localStorage.getItem(fiatSettingsKey());
+  state.fiatCurrency = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD"].includes(storedFiat) ? storedFiat : "USD";
 }
 async function unlockEncryptedStorage(passphrase = "") {
   connected();
@@ -662,6 +687,9 @@ async function unlockEncryptedStorage(passphrase = "") {
   }
   if (typeof vault?.trustedOnlyMode === "boolean") {
     state.trustedOnlyMode = vault.trustedOnlyMode;
+  }
+  if (typeof vault?.fiatCurrency === "string" && ["USD", "EUR", "GBP", "JPY", "CAD", "AUD"].includes(vault.fiatCurrency)) {
+    state.fiatCurrency = vault.fiatCurrency;
   }
   state.records = Array.isArray(vault?.records)
     ? vault.records.filter(
@@ -2391,7 +2419,8 @@ async function saveBalanceEndpoint() {
 
 function appearancePanel() {
   const current = themeManager.getSetting();
-  return `<section class="panel" id="appearance-settings"><h2>Appearance</h2><p>Theme follows the OS live, or can be pinned to Light or Dark.</p><div class="field"><label for="theme-select">Theme</label><select id="theme-select"><option value="system" ${current === "system" ? "selected" : ""}>System (default)</option><option value="light" ${current === "light" ? "selected" : ""}>Light</option><option value="dark" ${current === "dark" ? "selected" : ""}>Dark</option></select></div></section>`;
+  const currentFiat = state.fiatCurrency || "USD";
+  return `<section class="panel" id="appearance-settings"><h2>Appearance & Currency</h2><p>Theme follows the OS live or can be pinned. Values can be displayed in your local currency.</p><div class="field"><label for="theme-select">Theme</label><select id="theme-select"><option value="system" ${current === "system" ? "selected" : ""}>System (default)</option><option value="light" ${current === "light" ? "selected" : ""}>Light</option><option value="dark" ${current === "dark" ? "selected" : ""}>Dark</option></select></div><div class="field"><label for="fiat-currency-select">Fiat display currency</label><select id="fiat-currency-select">${["USD", "EUR", "GBP", "JPY", "CAD", "AUD"].map((code) => `<option value="${code}" ${currentFiat === code ? "selected" : ""}>${code} (${FIAT_RATES[code].symbol})</option>`).join("")}</select></div></section>`;
 }
 
 function settings() {
@@ -4556,6 +4585,15 @@ document.addEventListener("change", (event) => {
       themeManager.applyToDocument();
       render();
     }
+    return;
+  }
+  if (event.target?.id === "fiat-currency-select") {
+    const val = event.target.value;
+    if (!["USD", "EUR", "GBP", "JPY", "CAD", "AUD"].includes(val)) return;
+    state.fiatCurrency = val;
+    if (state.owner) localStorage.setItem(fiatSettingsKey(), val);
+    void persist();
+    render();
     return;
   }
   if (event.target?.id === "auto-lock-timer") {

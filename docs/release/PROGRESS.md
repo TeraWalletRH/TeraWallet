@@ -22,7 +22,7 @@
 | 5 | #18 | Auto-lock timer | Done | Yes | Yes | Yes |
 | 7 | #19 | Trusted-only mode | Done | Yes | Yes | Yes |
 | 10 | #10 | Pending transaction nudge | Done | Yes | Yes | Yes |
-| 11 | #24 | Fiat currency display [SHARED] | Not Started | No | No | No |
+| 11 | #24 | Fiat currency display [SHARED] | Done | Yes | Yes | Yes |
 | 12 | #2 | CSV export of activity | Not Started | No | No | No |
 | 13 | #8 | Monthly spending summary | Not Started | No | No | No |
 | 14 | #22 | Portfolio chart | Not Started | No | No | No |

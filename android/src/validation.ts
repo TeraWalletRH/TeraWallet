@@ -45,6 +45,26 @@ export function isTrustedRecipient(recipient: string, contacts?: Array<{ address
   const target = recipient.trim().toLowerCase();
   return contacts.some((c) => typeof c.address === "string" && c.address.trim().toLowerCase() === target);
 }
+export const FIAT_RATES: Record<string, { symbol: string; rate: number }> = {
+  USD: { symbol: "$", rate: 1.0 },
+  EUR: { symbol: "€", rate: 0.92 },
+  GBP: { symbol: "£", rate: 0.78 },
+  JPY: { symbol: "¥", rate: 150.0 },
+  CAD: { symbol: "CA$", rate: 1.36 },
+  AUD: { symbol: "A$", rate: 1.52 },
+};
+
+export function formatFiat(usdAmount: number | string, currency = "USD"): string {
+  const code = (currency || "USD").toUpperCase();
+  const meta = FIAT_RATES[code] || FIAT_RATES.USD;
+  const num = typeof usdAmount === "number" ? usdAmount : parseFloat(usdAmount || "0") || 0;
+  const converted = num * meta.rate;
+  if (code === "JPY") {
+    return `${meta.symbol}${Math.round(converted).toLocaleString()}`;
+  }
+  return `${meta.symbol}${converted.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 export function check(
   ok: unknown,
   why = "Transaction does not match your review. / 交易与审核内容不符。",
