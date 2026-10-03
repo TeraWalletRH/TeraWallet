@@ -4411,7 +4411,7 @@ function Wallet() {
         </View>
         <View style={{ alignItems: "flex-end", gap: 2 }}>
           <Text style={s.label}>
-            {shownValue(valueCore.format(valueCore.valueOf(amount, prices[asset.symbol])))}
+            {shownValue(formatFiat(valueCore.valueOf(amount, prices[asset.symbol]), data.fiatCurrency || "USD"))}
           </Text>
           {trendTag(asset.symbol)}
         </View>
@@ -4428,7 +4428,7 @@ function Wallet() {
    */
   function hiddenBalancesRow() {
     if (!smallHidden.hidden.length) return null;
-    const worth = shownValue(valueCore.format(smallHidden.hiddenValue));
+    const worth = shownValue(formatFiat(smallHidden.hiddenValue, data.fiatCurrency || "USD"));
     return (
       <Pressable
         key="hidden-balances"
@@ -4934,7 +4934,7 @@ function Wallet() {
                           letterSpacing: -1,
                         }}
                       >
-                        {shownValue(valueCore.format(valuation.total))}
+                        {shownValue(formatFiat(valuation.total, data.fiatCurrency || "USD"))}
                       </Text>
                     )}
                     {valuation.coverage !== valueCore.COMPLETE ? (
