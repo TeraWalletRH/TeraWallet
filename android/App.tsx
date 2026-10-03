@@ -7413,8 +7413,9 @@ function Wallet() {
               {calculateMonthlySpending(combinedHistory).slice(0, 3).map((m) => (
                 <ListRow
                   key={m.month}
-                  title={m.month}
-                  subtitle={`${m.totalTxCount} ${t("transactions", "笔交易")} (${m.transferCount} ${t("transfers", "转账")}, ${m.swapCount} ${t("swaps", "兑换")})`}
+                  icon="calendar-month-outline"
+                  label={m.month}
+                  detail={`${m.totalTxCount} ${t("transactions", "笔交易")} (${m.transferCount} ${t("transfers", "转账")}, ${m.swapCount} ${t("swaps", "兑换")})`}
                 />
               ))}
             </Group>
