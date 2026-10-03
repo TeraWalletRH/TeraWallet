@@ -25,7 +25,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 
-export const Route = createFileRoute("/admin/dashboard" as any)({
+export const Route = createFileRoute("/admin/dashboard")({
   component: AdminDashboardOverview,
 });
 

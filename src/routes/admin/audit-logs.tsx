@@ -4,7 +4,7 @@ import { adminApi } from "@/lib/admin-api";
 import { FileText, RefreshCw, ChevronLeft, ChevronRight, Eye } from "lucide-react";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/admin/audit-logs" as any)({
+export const Route = createFileRoute("/admin/audit-logs")({
   component: AuditLogsModule,
 });
 

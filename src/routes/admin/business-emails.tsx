@@ -15,7 +15,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/admin/business-emails" as any)({
+export const Route = createFileRoute("/admin/business-emails")({
   component: BusinessEmailsModule,
 });
 

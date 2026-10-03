@@ -51,7 +51,7 @@ async function proxy({ request, params }: { request: Request; params: { _splat?:
   }
 }
 
-export const Route = createFileRoute("/api/admin/$" as any)({
+export const Route = createFileRoute("/api/admin/$")({
   server: {
     handlers: {
       GET: proxy,

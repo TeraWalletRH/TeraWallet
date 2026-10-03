@@ -4,7 +4,7 @@ import { adminApi, setAdminToken } from "@/lib/admin-api";
 import { Shield, Lock, ArrowRight, Loader2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/admin/login" as any)({
+export const Route = createFileRoute("/admin/login")({
   component: AdminLogin,
 });
 
