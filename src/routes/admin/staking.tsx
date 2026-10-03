@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Coins, RefreshCw, Plus, Play, Pause, Square, Send, CheckCircle, X } from "lucide-react";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/admin/staking" as any)({
+export const Route = createFileRoute("/admin/staking")({
   component: StakingModule,
 });
 

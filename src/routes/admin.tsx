@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import { Toaster, toast } from "sonner";
 
-export const Route = createFileRoute("/admin" as any)({
+export const Route = createFileRoute("/admin")({
   component: AdminLayout,
 });
 

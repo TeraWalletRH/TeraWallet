@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/admin/payment-links" as any)({
+export const Route = createFileRoute("/admin/payment-links")({
   component: PaymentLinksModule,
 });
 
