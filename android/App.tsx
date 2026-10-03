@@ -675,7 +675,18 @@ function Wallet() {
     [flowStep, setFlowStep] = useState(0),
     [amountInvalid, setAmountInvalid] = useState(false),
     [settingsSection, setSettingsSection] = useState<
-      "root" | "security" | "privacy" | "sessions" | "device" | "accounts" | "contacts" | "limits" | "alerts" | "appearance"
+      | "root"
+      | "security"
+      | "privacy"
+      | "sessions"
+      | "device"
+      | "accounts"
+      | "contacts"
+      | "limits"
+      | "alerts"
+      | "appearance"
+      | "autolock"
+      | "currency"
     >("root"),
     // The transaction banner at the top of the screen, and the browser's
     // permission for system notifications as last read.
@@ -1325,7 +1336,10 @@ function Wallet() {
   useEffect(() => {
     // Asked once, on launch, and never retried in a loop: an update is not
     // urgent enough to keep a phone talking to the network about it.
-    void upd.checkForUpdate().then(setUpdate);
+    // Preview only: production is distributed through Google Play, which
+    // does not grant the install-packages permission this flow needs and
+    // handles updates itself (see app.config.js).
+    if (upd.installedChannel() === "preview") void upd.checkForUpdate().then(setUpdate);
     // Whether this deployment keeps a tag register at all. Off until it says
     // yes, so a failed call hides the controls rather than offering ones that
     // cannot work.
@@ -5797,7 +5811,7 @@ function Wallet() {
                             setNotice({
                               title: t("Address scanned", "已扫描地址"),
                               body: parsed,
-                              tone: "positive",
+                              tone: "success",
                             });
                           } else {
                             setNotice({
@@ -7399,8 +7413,9 @@ function Wallet() {
               {calculateMonthlySpending(combinedHistory).slice(0, 3).map((m) => (
                 <ListRow
                   key={m.month}
-                  title={m.month}
-                  subtitle={`${m.totalTxCount} ${t("transactions", "笔交易")} (${m.transferCount} ${t("transfers", "转账")}, ${m.swapCount} ${t("swaps", "兑换")})`}
+                  icon="calendar-month-outline"
+                  label={m.month}
+                  detail={`${m.totalTxCount} ${t("transactions", "笔交易")} (${m.transferCount} ${t("transfers", "转账")}, ${m.swapCount} ${t("swaps", "兑换")})`}
                 />
               ))}
             </Group>
@@ -8040,7 +8055,7 @@ function Wallet() {
                 run(() => store({ ...dataRef.current, trustedOnlyMode: !dataRef.current.trustedOnlyMode }))
               }
               right={
-                <Text style={[s.small, { color: data.trustedOnlyMode ? colors.green : colors.sub, fontWeight: "600" }]}>
+                <Text style={[s.small, { color: data.trustedOnlyMode ? colors.green : colors.muted, fontWeight: "600" }]}>
                   {data.trustedOnlyMode ? t("Enabled", "已启用") : t("Disabled", "已禁用")}
                 </Text>
               }
@@ -8140,7 +8155,11 @@ function Wallet() {
                 }
               />
             ) : null}
-            {Platform.OS !== "web" && (
+            {/* Production has no in-app updater (see app.config.js) — Google
+                Play handles its updates, the same way the App Store does on
+                iOS, so this row would otherwise always read "Not checked"
+                and never explain why. */}
+            {Platform.OS !== "web" && upd.installedChannel() === "preview" && (
               <ListRow
                 icon="update"
                 label={t("Updates", "更新")}
