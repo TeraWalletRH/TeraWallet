@@ -567,12 +567,13 @@ const FIAT_RATES = {
   AUD: { symbol: "A$", rate: 1.52 },
 };
 function formatFiat(usdAmount, currency = state?.fiatCurrency || "USD") {
+  if (usdAmount === null || usdAmount === undefined || usdAmount === "—") return "—";
   const code = (currency || "USD").toUpperCase();
   const meta = FIAT_RATES[code] || FIAT_RATES.USD;
-  const num = typeof usdAmount === "number" ? usdAmount : parseFloat(usdAmount || "0") || 0;
+  const num = typeof usdAmount === "number" ? usdAmount : parseFloat(String(usdAmount || "0")) || 0;
   const converted = num * meta.rate;
   if (code === "JPY") {
-    return `${meta.symbol}${Math.round(converted).toLocaleString()}`;
+    return `${meta.symbol}${Math.round(converted).toLocaleString("en-US")}`;
   }
   return `${meta.symbol}${converted.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
@@ -1062,12 +1063,12 @@ function valueBlock() {
   const result = holdingsValue();
   const when = state.pricesAt ? new Date(state.pricesAt).toLocaleTimeString() : "";
   if (result.coverage === VALUE_NONE)
-    return `<div class="metric"><strong>${esc(formatValue(null))}</strong><small>${esc(
+    return `<div class="metric"><strong>${esc(formatFiat(null))}</strong><small>${esc(
       state.pricesError
         ? `No prices could be read: ${state.pricesError} Your balances above come from the chain and are unaffected.`
         : summariseValue(result),
     )}</small></div>`;
-  return `<div class="metric"><strong>${esc(formatValue(result.total))}</strong>${
+  return `<div class="metric"><strong>${esc(formatFiat(result.total))}</strong>${
     result.coverage === VALUE_PARTIAL ? chip("Subtotal", true) : ""
   }<small>${esc(summariseValue(result, { asOf: when }))}</small></div>`;
 }
@@ -1079,7 +1080,7 @@ function overview() {
       // being invisible. A holding that contributes nothing to the total shows a dash
       // next to its balance rather than being silently folded in at zero.
       const value = valueOf(state.balances[a.address], state.prices[a.symbol]);
-      return `<div class="asset-mini"><span class="asset-symbol">${esc(a.symbol.slice(0, 2))}</span><div><b>${esc(a.symbol)}</b><small>${esc(a.category)}</small></div><div class="val">${state.hide ? "••••" : esc(state.balances[a.address])}${state.hide ? "" : `<small>${esc(formatValue(value))}</small>`}</div></div>`;
+      return `<div class="asset-mini"><span class="asset-symbol">${esc(a.symbol.slice(0, 2))}</span><div><b>${esc(a.symbol)}</b><small>${esc(a.category)}</small></div><div class="val">${state.hide ? "••••" : esc(state.balances[a.address])}${state.hide ? "" : `<small>${esc(formatFiat(value))}</small>`}</div></div>`;
     })
     .join("");
   return `${!state.owner ? accountPrompt() : ""}<div class="workspace"><aside class="column"><div class="section-label"><span>Your holdings</span>${button(state.hide ? "Show" : "Hide", "privacy")}</div>${state.owner ? valueBlock() : ""}${balanceRows || empty(state.owner ? "Balances load on the selected network." : "Connect to view your holdings.")}${state.errors.balances ? `<p class="micro">${esc(state.errors.balances)}</p>` : ""}<details class="gate-detail"><summary><span class="gate-name">How this is valued</span></summary><div class="gate-body"><ul class="micro">${PRICE_SOURCES.map((source) => `<li><b>${esc(source.label)}</b> — ${esc(source.detail)}</li>`).join("")}</ul><p class="micro">What a valuation does not establish:</p><ul class="micro">${VALUE_LIMITS.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div></details><img class="portfolio-art" src="/tera/art/02-case-stairway.jpg" alt="Architectural stairway collage"></aside><section class="column"><div class="section-label"><span>Action inbox</span>${button("+ New proposal", "create")}</div>${state.drafts.length ? state.drafts.map(proposalCard).join("") : empty("No proposals in this session. Prepare an action to review it here.")}</section><aside class="column">${chat()}</aside></div><div class="lower-row"><section><div class="section-label"><span>Account activity</span><a href="${href("receipts")}">View history ↗</a></div>${state.errors.account ? empty(state.errors.account) : pair("Confirmed intents reported by Tera", state.account?.stats?.intents?.confirmed_intents ?? "—")}${pair("Transactions tracked on this device", state.records.length)}</section><section><div class="section-label">Your control surface</div><div class="quick-grid"><a href="${href("approvals")}">Approvals ↗</a><a href="${href("sessions")}">Agent sessions ↗</a><a href="${href("policy")}">Private policy ↗</a><a href="/dashboard/private-send/">Private routing ↗</a><a href="${href("assets")}">Asset registry ↗</a></div></section></div>`;
