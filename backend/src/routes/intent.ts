@@ -1,17 +1,60 @@
 import { Router, type Request, type Response } from "express";
-import { type UserIntent } from "../pipeline/types";
+import { type GateResult, type PreparedTransaction, type UserIntent } from "../pipeline/types";
 import { runGatePipeline } from "../pipeline/gates";
 import { buildPreparedTransaction, UnsupportedActionError } from "../pipeline/builder";
 import pool from "../db";
 import { env } from "../env";
-import { keccak256, stringToBytes } from "viem";
+import { createPublicClient, http, isHash, keccak256, stringToBytes, type Hex } from "viem";
 import { logger } from "../logging";
+import { matchesPreparedReceipt } from "../intent-receipt";
 
 const router = Router();
 
 // In-memory intent & receipt fallback
 const memoryIntents: Record<string, any> = {};
 const memoryReceipts: Array<Record<string, unknown>> = [];
+
+/** Persist the exact call the owner is offered, including agent proposals. */
+export async function savePreparedIntent(
+  intent: UserIntent,
+  accountAddress: `0x${string}`,
+  preparedTransaction: PreparedTransaction,
+  gates: GateResult[],
+): Promise<string> {
+  let intentId = keccak256(stringToBytes(preparedTransaction.actionHash)).slice(0, 18);
+  if (pool) {
+    await pool.query(
+      `INSERT INTO accounts (owner_address, account_address, chain_id)
+       VALUES ($1, $2, $3) ON CONFLICT (account_address) DO NOTHING`,
+      [intent.ownerAddress, accountAddress, env.rhcChainId],
+    );
+    const saved = await pool.query(
+      `INSERT INTO intents (account_address, agent_id, intent_type, status, asset_address,
+         raw_intent, action_hash, prepared_tx)
+       VALUES ($1, $2, $3, 'prepared', $4, $5, $6, $7)
+       ON CONFLICT (action_hash) DO UPDATE
+         SET prepared_tx = EXCLUDED.prepared_tx, updated_at = NOW()
+       RETURNING id`,
+      [accountAddress, "tera-agent-supervised", intent.actionType, intent.assetAddress,
+        JSON.stringify(intent), preparedTransaction.actionHash, JSON.stringify(preparedTransaction)],
+    );
+    intentId = saved.rows[0].id;
+    const preflightGate = gates.find((g) => g.gate === "eligibility_preflight");
+    const policyGate = gates.find((g) => g.gate === "policy_vault");
+    const riskGate = gates.find((g) => g.gate === "risk_engine");
+    await pool.query(
+      `INSERT INTO preflight_checks (intent_id, token_standard, can_transfer,
+         compliance_details, policy_passed, risk_passed) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [intentId, "ERC-3643", preflightGate?.passed ?? false,
+        JSON.stringify(preflightGate?.details ?? {}), policyGate?.passed ?? false, riskGate?.passed ?? false],
+    );
+  }
+  memoryIntents[preparedTransaction.actionHash] = {
+    intentId, intent, accountAddress, preparedTransaction, gates,
+    status: "prepared", createdAt: new Date().toISOString(),
+  };
+  return intentId;
+}
 
 /**
  * POST /api/intent/prepare
@@ -61,80 +104,7 @@ router.post("/api/intent/prepare", async (req: Request, res: Response) => {
     // Build the prepared transaction payload for user wallet popup
     const preparedTransaction = await buildPreparedTransaction(intent, accountAddress, gates);
 
-    let intentId: string | null = null;
-
-    // Persist to PostgreSQL if available
-    try {
-      if (pool) {
-        // Ensure account exists
-        await pool.query(
-          `INSERT INTO accounts (owner_address, account_address, chain_id)
-           VALUES ($1, $2, $3)
-           ON CONFLICT (account_address) DO NOTHING`,
-          [intent.ownerAddress, accountAddress, env.rhcChainId]
-        );
-
-        // Insert intent record
-        const intentRes = await pool.query(
-          `INSERT INTO intents (
-             account_address, agent_id, intent_type, status, asset_address,
-             raw_intent, action_hash, prepared_tx
-           ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-           ON CONFLICT (action_hash) DO UPDATE
-             SET status = 'prepared', prepared_tx = $8, updated_at = NOW()
-           RETURNING id`,
-          [
-            accountAddress,
-            "tera-agent-supervised",
-            intent.actionType,
-            "prepared",
-            intent.assetAddress,
-            JSON.stringify(intent),
-            preparedTransaction.actionHash,
-            JSON.stringify(preparedTransaction),
-          ]
-        );
-
-        if (intentRes.rows.length > 0) {
-          intentId = intentRes.rows[0].id;
-
-          // Record preflight check results
-          const preflightGate = gates.find((g) => g.gate === "eligibility_preflight");
-          const policyGate = gates.find((g) => g.gate === "policy_vault");
-          const riskGate = gates.find((g) => g.gate === "risk_engine");
-
-          await pool.query(
-            `INSERT INTO preflight_checks (
-               intent_id, token_standard, can_transfer, compliance_details, policy_passed, risk_passed
-             ) VALUES ($1, $2, $3, $4, $5, $6)`,
-            [
-              intentId,
-              "ERC-3643",
-              preflightGate?.passed ?? false,
-              JSON.stringify(preflightGate?.details ?? {}),
-              policyGate?.passed ?? false,
-              riskGate?.passed ?? false,
-            ]
-          );
-        }
-      }
-    } catch (dbErr) {
-      logger.warn(req, "intent.persistence_fallback", dbErr);
-    }
-
-    if (!intentId) {
-      intentId = keccak256(stringToBytes(preparedTransaction.actionHash)).slice(0, 18);
-    }
-
-    memoryIntents[preparedTransaction.actionHash] = {
-      intentId,
-      intent,
-      accountAddress,
-      preparedTransaction,
-      gates,
-      status: "prepared",
-      createdAt: new Date().toISOString(),
-    };
+    const intentId = await savePreparedIntent(intent, accountAddress, preparedTransaction, gates);
 
     res.status(200).json({
       success: true,
@@ -213,86 +183,142 @@ router.get("/api/intent/:actionHash", async (req: Request, res: Response) => {
 
 /**
  * POST /api/intent/receipt
- * Records the transaction hash broadcast by the owner wallet.
+ * Records a successful on-chain call matching the stored prepared transaction.
  */
 router.post("/api/intent/receipt", async (req: Request, res: Response) => {
   try {
-    const { actionHash, txHash, recipient, intentId: passedIntentId } = req.body;
-
-    if (!actionHash || !txHash) {
-      res.status(400).json({
-        success: false,
-        error: "actionHash and txHash are required to record a receipt",
-      });
+    const { actionHash, txHash, intentId: suppliedIntentId } = req.body ?? {};
+    if (typeof actionHash !== "string" || !isHash(actionHash) ||
+        typeof txHash !== "string" || !isHash(txHash)) {
+      res.status(400).json({ success: false, error: "Valid actionHash and txHash are required." });
+      return;
+    }
+    if (!pool && env.nodeEnv === "production") {
+      res.status(503).json({ success: false, error: "Receipt ledger is unavailable." });
       return;
     }
 
-    const receiptId = keccak256(stringToBytes(`${actionHash}-${txHash}-${Date.now()}`)).slice(0, 18);
+    const record = pool
+      ? (await pool.query(
+          "SELECT id, status, prepared_tx, created_at FROM intents WHERE action_hash = $1",
+          [actionHash],
+        )).rows[0]
+      : memoryIntents[actionHash];
+    if (!record) {
+      res.status(404).json({ success: false, error: "Prepared intent not found." });
+      return;
+    }
+    const intentId = String(record.id ?? record.intentId);
+    if (suppliedIntentId !== undefined && suppliedIntentId !== intentId) {
+      res.status(422).json({ success: false, error: "intentId does not match actionHash." });
+      return;
+    }
+    const prepared = (record.prepared_tx ?? record.preparedTransaction) as PreparedTransaction | undefined;
+    if (!prepared || prepared.actionHash?.toLowerCase() !== actionHash.toLowerCase()) {
+      res.status(422).json({ success: false, error: "Stored prepared transaction is invalid." });
+      return;
+    }
 
-    try {
-      if (pool) {
-        let resolvedIntentId = passedIntentId;
+    const client = createPublicClient({ transport: http(env.rhcRpcUrl, { timeout: 10_000, retryCount: 1 }) });
+    const [chainId, transaction, receipt] = await Promise.all([
+      client.getChainId(),
+      client.getTransaction({ hash: txHash as Hex }),
+      client.getTransactionReceipt({ hash: txHash as Hex }).catch(() => null),
+    ]);
+    if (!receipt) {
+      res.status(409).json({ success: false, error: "Transaction is not confirmed." });
+      return;
+    }
+    if (chainId !== env.rhcChainId || !matchesPreparedReceipt(
+      prepared, transaction, receipt, txHash as Hex, env.rhcChainId,
+    )) {
+      res.status(422).json({ success: false, error: "Transaction does not match the prepared intent." });
+      return;
+    }
+    const block = await client.request({ method: "eth_getBlockByHash", params: [receipt.blockHash, false] });
+    const preparedAt = Date.parse(String(record.created_at ?? record.createdAt));
+    const minedAt = block?.timestamp ? Number(BigInt(block.timestamp)) * 1000 : NaN;
+    if (!block || block.hash?.toLowerCase() !== receipt.blockHash.toLowerCase() ||
+        !Number.isFinite(preparedAt) || !Number.isFinite(minedAt) ||
+        minedAt < Math.floor(preparedAt / 1000) * 1000) {
+      res.status(422).json({ success: false, error: "Transaction predates the prepared intent." });
+      return;
+    }
 
-        // If intentId not passed, resolve from intents table by action_hash
-        if (!resolvedIntentId) {
-          const findIntent = await pool.query(
-            `SELECT id FROM intents WHERE action_hash = $1 LIMIT 1`,
-            [actionHash]
-          );
-          if (findIntent.rows.length > 0) {
-            resolvedIntentId = findIntent.rows[0].id;
-          }
-        }
-
-        // Update intent status to 'confirmed' if intent exists
-        if (resolvedIntentId) {
-          await pool.query(
-            `UPDATE intents SET status = 'confirmed', updated_at = NOW() WHERE id = $1`,
-            [resolvedIntentId]
-          );
-        } else {
-          await pool.query(
-            `UPDATE intents SET status = 'confirmed', updated_at = NOW() WHERE action_hash = $1`,
-            [actionHash]
-          );
-        }
-
-        // Insert into audit_receipts
-        await pool.query(
-          `INSERT INTO audit_receipts (intent_id, action_hash, tx_hash, recipient)
-           VALUES ($1, $2, $3, $4)`,
-          [resolvedIntentId ?? null, actionHash, txHash, recipient ?? ""]
+    let receiptId: string;
+    let alreadyRecorded = false;
+    if (pool) {
+      const db = await pool.connect();
+      try {
+        await db.query("BEGIN");
+        await db.query("SELECT pg_advisory_xact_lock(hashtext($1))", [txHash.toLowerCase()]);
+        const locked = await db.query(
+          "SELECT id, status, prepared_tx, created_at FROM intents WHERE action_hash = $1 FOR UPDATE",
+          [actionHash],
         );
+        const current = locked.rows[0];
+        if (!current || String(current.id) !== intentId || !current.prepared_tx ||
+            Date.parse(String(current.created_at)) !== preparedAt ||
+            !matchesPreparedReceipt(current.prepared_tx, transaction, receipt, txHash as Hex, env.rhcChainId)) {
+          throw new Error("Prepared intent changed during confirmation.");
+        }
+        const existing = await db.query(
+          "SELECT id, intent_id, tx_hash FROM audit_receipts WHERE intent_id = $1 OR LOWER(tx_hash) = LOWER($2) FOR UPDATE",
+          [intentId, txHash],
+        );
+        if (existing.rows.some((row) => String(row.intent_id) !== intentId ||
+            String(row.tx_hash).toLowerCase() !== txHash.toLowerCase())) {
+          await db.query("ROLLBACK");
+          res.status(409).json({ success: false, error: "Intent or transaction already has a different receipt." });
+          return;
+        }
+        if (existing.rows.length) {
+          receiptId = String(existing.rows[0].id);
+          alreadyRecorded = true;
+        } else {
+          if (current.status !== "prepared") {
+            await db.query("ROLLBACK");
+            res.status(409).json({ success: false, error: "Intent is not awaiting confirmation." });
+            return;
+          }
+          const inserted = await db.query(
+            `INSERT INTO audit_receipts (intent_id, action_hash, tx_hash, recipient)
+             VALUES ($1, $2, $3, $4) RETURNING id`,
+            [intentId, actionHash, txHash, prepared.intent.recipient ?? prepared.intent.ownerAddress],
+          );
+          receiptId = String(inserted.rows[0].id);
+          await db.query("UPDATE intents SET status = 'confirmed', updated_at = NOW() WHERE id = $1", [intentId]);
+        }
+        await db.query("COMMIT");
+      } catch (error) {
+        await db.query("ROLLBACK").catch(() => {});
+        throw error;
+      } finally {
+        db.release();
       }
-    } catch (dbErr) {
-      logger.warn(req, "intent.receipt_persistence_fallback", dbErr);
+    } else {
+      const existing = memoryReceipts.find((row) => row.actionHash === actionHash || row.txHash === txHash);
+      if (existing && (existing.actionHash !== actionHash || existing.txHash !== txHash)) {
+        res.status(409).json({ success: false, error: "Intent or transaction already has a different receipt." });
+        return;
+      }
+      if (record.status !== "prepared" && !existing) {
+        res.status(409).json({ success: false, error: "Intent is not awaiting confirmation." });
+        return;
+      }
+      receiptId = existing ? String(existing.receiptId) : keccak256(stringToBytes(`${actionHash}-${txHash}`)).slice(0, 18);
+      alreadyRecorded = Boolean(existing);
+      if (!existing) memoryReceipts.push({ receiptId, actionHash, txHash });
+      record.status = "confirmed";
+      record.txHash = txHash;
     }
 
-    if (memoryIntents[actionHash]) {
-      memoryIntents[actionHash].status = "confirmed";
-      memoryIntents[actionHash].txHash = txHash;
-    }
-
-    memoryReceipts.push({
-      receiptId,
-      actionHash,
-      txHash,
-      recipient,
-      timestamp: new Date().toISOString(),
-    });
-
-    res.status(201).json({
-      success: true,
-      receiptId,
-      actionHash,
-      txHash,
-      status: "CONFIRMED",
-    });
+    res.status(alreadyRecorded ? 200 : 201).json({ success: true, receiptId, actionHash, txHash, status: "CONFIRMED" });
   } catch (error) {
     logger.error(req, "intent.receipt_failed", error);
-    res.status(500).json({
+    res.status(503).json({
       success: false,
-      error: "Failed to record transaction receipt",
+      error: "Unable to verify or record transaction receipt.",
     });
   }
 });

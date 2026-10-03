@@ -7,6 +7,7 @@ import { buildPreparedTransaction, UnsupportedActionError } from "../pipeline/bu
 import { type UserIntent } from "../pipeline/types";
 import { logger } from "../logging";
 import { authorizeServiceSession, ServiceSessionAuthorizationError } from "./session";
+import { savePreparedIntent } from "./intent";
 
 const router = Router();
 
@@ -175,6 +176,7 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
       walletAddress,
       gates
     );
+    await savePreparedIntent(fullIntent, walletAddress, preparedTransaction, gates);
 
     res.status(200).json({
       success: true,
