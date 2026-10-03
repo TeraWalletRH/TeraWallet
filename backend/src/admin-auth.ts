@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import pool from "./db";
 import { env } from "./env";
@@ -17,25 +17,21 @@ export const memoryAdminAuditLogs: Array<{
 }> = [];
 
 export function hashToken(token: string): string {
-  return createHash("sha256").update(token).digest("hex");
+  return createHmac("sha256", getEffectiveAdminKey()).update(token).digest("hex");
 }
 
 export function getEffectiveAdminKey(): string {
-  return env.masterAdminKey || process.env.MASTER_ADMIN_KEY || "TeraWallet2026Secure";
+  return env.masterAdminKey.trim();
 }
 
 export function verifyAdminPassword(input: string): boolean {
-  if (!input) return false;
+  if (typeof input !== "string" || !input) return false;
   const cleanInput = input.trim();
-  const masterKey = getEffectiveAdminKey().trim();
-  const validKeys = Array.from(new Set([masterKey, "TeraWallet2026Secure", "kasab67"].filter(Boolean)));
-
-  return validKeys.some((key) => {
-    const inputBuf = Buffer.from(cleanInput);
-    const keyBuf = Buffer.from(key);
-    if (inputBuf.length !== keyBuf.length) return false;
-    return timingSafeEqual(inputBuf, keyBuf);
-  });
+  const masterKey = getEffectiveAdminKey();
+  if (!cleanInput || !masterKey) return false;
+  const inputBuf = Buffer.from(cleanInput);
+  const keyBuf = Buffer.from(masterKey);
+  return inputBuf.length === keyBuf.length && timingSafeEqual(inputBuf, keyBuf);
 }
 
 export function getAdminTokenFromRequest(req: Request): string | null {
@@ -87,7 +83,7 @@ export async function createAdminSession(req: Request): Promise<{ token: string;
 }
 
 export async function isValidAdminSession(token: string): Promise<boolean> {
-  if (!token) return false;
+  if (!token || !getEffectiveAdminKey()) return false;
   const tokenHash = hashToken(token);
 
   if (pool) {
