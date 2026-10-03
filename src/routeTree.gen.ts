@@ -11,6 +11,19 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SplatRouteImport } from './routes/$'
+import { Route as AdminRouteImport } from './routes/admin'
+import { Route as AdminIndexRouteImport } from './routes/admin/index'
+import { Route as AdminAccountsRouteImport } from './routes/admin/accounts'
+import { Route as AdminAuditLogsRouteImport } from './routes/admin/audit-logs'
+import { Route as AdminBusinessEmailsRouteImport } from './routes/admin/business-emails'
+import { Route as AdminDashboardRouteImport } from './routes/admin/dashboard'
+import { Route as AdminLoginRouteImport } from './routes/admin/login'
+import { Route as AdminPaymentLinksRouteImport } from './routes/admin/payment-links'
+import { Route as AdminPrivateJobsRouteImport } from './routes/admin/private-jobs'
+import { Route as AdminStakingRouteImport } from './routes/admin/staking'
+import { Route as AdminTagsRouteImport } from './routes/admin/tags'
+import { Route as AdminTeamsRouteImport } from './routes/admin/teams'
+import { Route as ApiAdminSplatRouteImport } from './routes/api/admin/$'
 import { Route as ApiStakingAdminSplatRouteImport } from './routes/api/staking-admin/$'
 
 const IndexRoute = IndexRouteImport.update({
@@ -23,6 +36,71 @@ const SplatRoute = SplatRouteImport.update({
   path: '/$',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminRoute = AdminRouteImport.update({
+  id: '/admin',
+  path: '/admin',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AdminIndexRoute = AdminIndexRouteImport.update({
+  id: '/',
+  path: '/',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminAccountsRoute = AdminAccountsRouteImport.update({
+  id: '/accounts',
+  path: '/accounts',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminAuditLogsRoute = AdminAuditLogsRouteImport.update({
+  id: '/audit-logs',
+  path: '/audit-logs',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminBusinessEmailsRoute = AdminBusinessEmailsRouteImport.update({
+  id: '/business-emails',
+  path: '/business-emails',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminDashboardRoute = AdminDashboardRouteImport.update({
+  id: '/dashboard',
+  path: '/dashboard',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminLoginRoute = AdminLoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminPaymentLinksRoute = AdminPaymentLinksRouteImport.update({
+  id: '/payment-links',
+  path: '/payment-links',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminPrivateJobsRoute = AdminPrivateJobsRouteImport.update({
+  id: '/private-jobs',
+  path: '/private-jobs',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminStakingRoute = AdminStakingRouteImport.update({
+  id: '/staking',
+  path: '/staking',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminTagsRoute = AdminTagsRouteImport.update({
+  id: '/tags',
+  path: '/tags',
+  getParentRoute: () => AdminRoute,
+} as any)
+const AdminTeamsRoute = AdminTeamsRouteImport.update({
+  id: '/teams',
+  path: '/teams',
+  getParentRoute: () => AdminRoute,
+} as any)
+const ApiAdminSplatRoute = ApiAdminSplatRouteImport.update({
+  id: '/api/admin/$',
+  path: '/api/admin/$',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiStakingAdminSplatRoute = ApiStakingAdminSplatRouteImport.update({
   id: '/api/staking-admin/$',
   path: '/api/staking-admin/$',
@@ -32,30 +110,118 @@ const ApiStakingAdminSplatRoute = ApiStakingAdminSplatRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/admin': typeof AdminRouteWithChildren
+  '/admin/accounts': typeof AdminAccountsRoute
+  '/admin/audit-logs': typeof AdminAuditLogsRoute
+  '/admin/business-emails': typeof AdminBusinessEmailsRoute
+  '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/login': typeof AdminLoginRoute
+  '/admin/payment-links': typeof AdminPaymentLinksRoute
+  '/admin/private-jobs': typeof AdminPrivateJobsRoute
+  '/admin/staking': typeof AdminStakingRoute
+  '/admin/tags': typeof AdminTagsRoute
+  '/admin/teams': typeof AdminTeamsRoute
+  '/admin/': typeof AdminIndexRoute
+  '/api/admin/$': typeof ApiAdminSplatRoute
   '/api/staking-admin/$': typeof ApiStakingAdminSplatRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/admin/accounts': typeof AdminAccountsRoute
+  '/admin/audit-logs': typeof AdminAuditLogsRoute
+  '/admin/business-emails': typeof AdminBusinessEmailsRoute
+  '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/login': typeof AdminLoginRoute
+  '/admin/payment-links': typeof AdminPaymentLinksRoute
+  '/admin/private-jobs': typeof AdminPrivateJobsRoute
+  '/admin/staking': typeof AdminStakingRoute
+  '/admin/tags': typeof AdminTagsRoute
+  '/admin/teams': typeof AdminTeamsRoute
+  '/admin': typeof AdminIndexRoute
+  '/api/admin/$': typeof ApiAdminSplatRoute
   '/api/staking-admin/$': typeof ApiStakingAdminSplatRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/$': typeof SplatRoute
+  '/admin': typeof AdminRouteWithChildren
+  '/admin/accounts': typeof AdminAccountsRoute
+  '/admin/audit-logs': typeof AdminAuditLogsRoute
+  '/admin/business-emails': typeof AdminBusinessEmailsRoute
+  '/admin/dashboard': typeof AdminDashboardRoute
+  '/admin/login': typeof AdminLoginRoute
+  '/admin/payment-links': typeof AdminPaymentLinksRoute
+  '/admin/private-jobs': typeof AdminPrivateJobsRoute
+  '/admin/staking': typeof AdminStakingRoute
+  '/admin/tags': typeof AdminTagsRoute
+  '/admin/teams': typeof AdminTeamsRoute
+  '/admin/': typeof AdminIndexRoute
+  '/api/admin/$': typeof ApiAdminSplatRoute
   '/api/staking-admin/$': typeof ApiStakingAdminSplatRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/$' | '/api/staking-admin/$'
+  fullPaths:
+    | '/'
+    | '/$'
+    | '/admin'
+    | '/admin/accounts'
+    | '/admin/audit-logs'
+    | '/admin/business-emails'
+    | '/admin/dashboard'
+    | '/admin/login'
+    | '/admin/payment-links'
+    | '/admin/private-jobs'
+    | '/admin/staking'
+    | '/admin/tags'
+    | '/admin/teams'
+    | '/admin/'
+    | '/api/admin/$'
+    | '/api/staking-admin/$'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/$' | '/api/staking-admin/$'
-  id: '__root__' | '/' | '/$' | '/api/staking-admin/$'
+  to:
+    | '/'
+    | '/$'
+    | '/admin/accounts'
+    | '/admin/audit-logs'
+    | '/admin/business-emails'
+    | '/admin/dashboard'
+    | '/admin/login'
+    | '/admin/payment-links'
+    | '/admin/private-jobs'
+    | '/admin/staking'
+    | '/admin/tags'
+    | '/admin/teams'
+    | '/admin'
+    | '/api/admin/$'
+    | '/api/staking-admin/$'
+  id:
+    | '__root__'
+    | '/'
+    | '/$'
+    | '/admin'
+    | '/admin/accounts'
+    | '/admin/audit-logs'
+    | '/admin/business-emails'
+    | '/admin/dashboard'
+    | '/admin/login'
+    | '/admin/payment-links'
+    | '/admin/private-jobs'
+    | '/admin/staking'
+    | '/admin/tags'
+    | '/admin/teams'
+    | '/admin/'
+    | '/api/admin/$'
+    | '/api/staking-admin/$'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   SplatRoute: typeof SplatRoute
+  AdminRoute: typeof AdminRouteWithChildren
+  ApiAdminSplatRoute: typeof ApiAdminSplatRoute
   ApiStakingAdminSplatRoute: typeof ApiStakingAdminSplatRoute
 }
 
@@ -75,6 +241,97 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SplatRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin': {
+      id: '/admin'
+      path: '/admin'
+      fullPath: '/admin'
+      preLoaderRoute: typeof AdminRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/admin/': {
+      id: '/admin/'
+      path: '/'
+      fullPath: '/admin/'
+      preLoaderRoute: typeof AdminIndexRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/accounts': {
+      id: '/admin/accounts'
+      path: '/accounts'
+      fullPath: '/admin/accounts'
+      preLoaderRoute: typeof AdminAccountsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/audit-logs': {
+      id: '/admin/audit-logs'
+      path: '/audit-logs'
+      fullPath: '/admin/audit-logs'
+      preLoaderRoute: typeof AdminAuditLogsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/business-emails': {
+      id: '/admin/business-emails'
+      path: '/business-emails'
+      fullPath: '/admin/business-emails'
+      preLoaderRoute: typeof AdminBusinessEmailsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/dashboard': {
+      id: '/admin/dashboard'
+      path: '/dashboard'
+      fullPath: '/admin/dashboard'
+      preLoaderRoute: typeof AdminDashboardRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/login': {
+      id: '/admin/login'
+      path: '/login'
+      fullPath: '/admin/login'
+      preLoaderRoute: typeof AdminLoginRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/payment-links': {
+      id: '/admin/payment-links'
+      path: '/payment-links'
+      fullPath: '/admin/payment-links'
+      preLoaderRoute: typeof AdminPaymentLinksRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/private-jobs': {
+      id: '/admin/private-jobs'
+      path: '/private-jobs'
+      fullPath: '/admin/private-jobs'
+      preLoaderRoute: typeof AdminPrivateJobsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/staking': {
+      id: '/admin/staking'
+      path: '/staking'
+      fullPath: '/admin/staking'
+      preLoaderRoute: typeof AdminStakingRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/tags': {
+      id: '/admin/tags'
+      path: '/tags'
+      fullPath: '/admin/tags'
+      preLoaderRoute: typeof AdminTagsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/admin/teams': {
+      id: '/admin/teams'
+      path: '/teams'
+      fullPath: '/admin/teams'
+      preLoaderRoute: typeof AdminTeamsRouteImport
+      parentRoute: typeof AdminRoute
+    }
+    '/api/admin/$': {
+      id: '/api/admin/$'
+      path: '/api/admin/$'
+      fullPath: '/api/admin/$'
+      preLoaderRoute: typeof ApiAdminSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/staking-admin/$': {
       id: '/api/staking-admin/$'
       path: '/api/staking-admin/$'
@@ -85,9 +342,41 @@ declare module '@tanstack/react-router' {
   }
 }
 
+interface AdminRouteChildren {
+  AdminAccountsRoute: typeof AdminAccountsRoute
+  AdminAuditLogsRoute: typeof AdminAuditLogsRoute
+  AdminBusinessEmailsRoute: typeof AdminBusinessEmailsRoute
+  AdminDashboardRoute: typeof AdminDashboardRoute
+  AdminLoginRoute: typeof AdminLoginRoute
+  AdminPaymentLinksRoute: typeof AdminPaymentLinksRoute
+  AdminPrivateJobsRoute: typeof AdminPrivateJobsRoute
+  AdminStakingRoute: typeof AdminStakingRoute
+  AdminTagsRoute: typeof AdminTagsRoute
+  AdminTeamsRoute: typeof AdminTeamsRoute
+  AdminIndexRoute: typeof AdminIndexRoute
+}
+
+const AdminRouteChildren: AdminRouteChildren = {
+  AdminAccountsRoute: AdminAccountsRoute,
+  AdminAuditLogsRoute: AdminAuditLogsRoute,
+  AdminBusinessEmailsRoute: AdminBusinessEmailsRoute,
+  AdminDashboardRoute: AdminDashboardRoute,
+  AdminLoginRoute: AdminLoginRoute,
+  AdminPaymentLinksRoute: AdminPaymentLinksRoute,
+  AdminPrivateJobsRoute: AdminPrivateJobsRoute,
+  AdminStakingRoute: AdminStakingRoute,
+  AdminTagsRoute: AdminTagsRoute,
+  AdminTeamsRoute: AdminTeamsRoute,
+  AdminIndexRoute: AdminIndexRoute,
+}
+
+const AdminRouteWithChildren = AdminRoute._addFileChildren(AdminRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   SplatRoute: SplatRoute,
+  AdminRoute: AdminRouteWithChildren,
+  ApiAdminSplatRoute: ApiAdminSplatRoute,
   ApiStakingAdminSplatRoute: ApiStakingAdminSplatRoute,
 }
 export const routeTree = rootRouteImport

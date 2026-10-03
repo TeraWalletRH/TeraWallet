@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/admin/tags" as any)({
+export const Route = createFileRoute("/admin/tags")({
   component: TagsModule,
 });
 

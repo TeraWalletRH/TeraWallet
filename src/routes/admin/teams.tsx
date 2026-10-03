@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
-export const Route = createFileRoute("/admin/teams" as any)({
+export const Route = createFileRoute("/admin/teams")({
   component: TeamsModule,
 });
 
