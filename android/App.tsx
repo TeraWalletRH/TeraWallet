@@ -62,6 +62,7 @@ import * as vault from "./src/storage";
 import { screenOrigin } from "./src/viewport";
 import { useAppTheme } from "./src/theme";
 import { generateActivityCsv, shareText } from "./src/share";
+import { calculateMonthlySpending } from "./src/spending";
 import { normalizePhrase, walletFromPhrase, walletFromPrivateKey } from "./src/crypto";
 import {
   Button,
@@ -7407,6 +7408,17 @@ function Wallet() {
               </Text>
             </View>
           )}
+          {combinedHistory.length && !searching ? (
+            <Group title={t("Monthly summary", "月度统计")}>
+              {calculateMonthlySpending(combinedHistory).slice(0, 3).map((m) => (
+                <ListRow
+                  key={m.month}
+                  title={m.month}
+                  subtitle={`${m.totalTxCount} ${t("transactions", "笔交易")} (${m.transferCount} ${t("transfers", "转账")}, ${m.swapCount} ${t("swaps", "兑换")})`}
+                />
+              ))}
+            </Group>
+          ) : null}
           {shown.map((r: any) => {
             const kind = activityKind(r);
             return (

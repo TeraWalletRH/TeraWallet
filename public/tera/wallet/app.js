@@ -1729,9 +1729,47 @@ function contactDialog(address = "") {
     render();
   };
 }
+function calculateMonthlySpending(records = [], history = []) {
+  const map = new Map();
+  const all = [
+    ...records.map((r) => ({
+      date: r.createdAt || "",
+      action: r.action || "TRANSFER",
+    })),
+    ...history.map((h) => ({
+      date: h.created_at || h.createdAt || "",
+      action: h.intent_type || h.action || "TRANSFER",
+    })),
+  ];
+
+  for (const item of all) {
+    if (!item.date) continue;
+    const month = String(item.date).slice(0, 7);
+    if (!/^\d{4}-\d{2}$/.test(month)) continue;
+
+    let entry = map.get(month);
+    if (!entry) {
+      entry = { month, count: 0, transfers: 0, swaps: 0, bridges: 0 };
+      map.set(month, entry);
+    }
+    const act = String(item.action).toUpperCase();
+    entry.count += 1;
+    if (act.includes("SWAP")) entry.swaps += 1;
+    else if (act.includes("BRIDGE")) entry.bridges += 1;
+    else entry.transfers += 1;
+  }
+  return Array.from(map.values()).sort((a, b) => b.month.localeCompare(a.month));
+}
+
+function monthlySpendingPanel() {
+  const items = calculateMonthlySpending(state.records, state.history);
+  if (!items.length) return "";
+  return `<div class="section-label">Monthly activity summary</div><div class="panel"><div class="table-scroll"><table><thead><tr><th>Month</th><th>Total Tx</th><th>Transfers</th><th>Swaps</th><th>Bridges</th></tr></thead><tbody>${items.map((m) => `<tr><td><b>${esc(m.month)}</b></td><td>${m.count}</td><td>${m.transfers}</td><td>${m.swaps}</td><td>${m.bridges}</td></tr>`).join("")}</tbody></table></div></div>`;
+}
+
 function receipts() {
   if (!state.owner) return accountPrompt();
-  return `<div class="section-label"><span>Transactions tracked on this device</span>${button("Export CSV", "export-activity-csv")}</div>${state.records.map((r, i) => `<article class="panel live-record"><div class="proposal-top"><b>${esc(r.action || "Transaction")}</b>${chip(r.status === "confirmed" ? (r.recorded ? "Confirmed · recorded" : "Confirmed · audit sync pending") : r.status, r.status === "reverted")}</div>${pair("Submitted", r.createdAt)}${r.payee ? pair("To", contactLabel(r.payee)) : ""}<p>${explorer(r.txHash)}</p>${r.error ? `<p class="micro">${esc(r.error)}</p>` : ""}<div class="actions">${r.status !== "reverted" && !r.recorded ? button("Check status / retry audit sync", "receipt-check", `data-index="${i}" ${state.busy ? "disabled" : ""}`) : ""}${button("Export receipt", "receipt-export", `data-index="${i}"`)}${r.payee ? button(contactBook.nameFor(state.contacts, r.payee) ? "Rename address" : "Name this address", "contact-edit", `data-address="${esc(r.payee)}"`) : ""}</div></article>`).join("") || empty("No transactions tracked on this device.")}
+  return `${monthlySpendingPanel()}<div class="section-label"><span>Transactions tracked on this device</span>${button("Export CSV", "export-activity-csv")}</div>${state.records.map((r, i) => `<article class="panel live-record"><div class="proposal-top"><b>${esc(r.action || "Transaction")}</b>${chip(r.status === "confirmed" ? (r.recorded ? "Confirmed · recorded" : "Confirmed · audit sync pending") : r.status, r.status === "reverted")}</div>${pair("Submitted", r.createdAt)}${r.payee ? pair("To", contactLabel(r.payee)) : ""}<p>${explorer(r.txHash)}</p>${r.error ? `<p class="micro">${esc(r.error)}</p>` : ""}<div class="actions">${r.status !== "reverted" && !r.recorded ? button("Check status / retry audit sync", "receipt-check", `data-index="${i}" ${state.busy ? "disabled" : ""}`) : ""}${button("Export receipt", "receipt-export", `data-index="${i}"`)}${r.payee ? button(contactBook.nameFor(state.contacts, r.payee) ? "Rename address" : "Name this address", "contact-edit", `data-address="${esc(r.payee)}"`) : ""}</div></article>`).join("") || empty("No transactions tracked on this device.")}
     <div class="section-label live-history-heading">Account history from Tera</div>${state.errors.history ? empty(state.errors.history) : `<div class="table-scroll"><table><thead><tr><th>Action</th><th>Service status</th><th>Created</th><th>Transaction</th></tr></thead><tbody>${state.history.map((r) => `<tr><td>${esc(r.intent_type || r.intent?.actionType || "—")}</td><td>${esc(r.status)}</td><td>${esc(r.created_at || r.createdAt)}</td><td>${r.tx_hash ? explorer(r.tx_hash) : "—"}</td></tr>`).join("")}</tbody></table>${state.history.length ? "" : empty("No history returned by the service.")}</div>`}`;
 }
 // The egress panel is derived once so the view and the export can never
