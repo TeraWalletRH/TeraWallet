@@ -59,6 +59,7 @@ import {
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
+import { evaluatePriceAlerts, type PriceAlert } from "./src/alerts";
 import { screenOrigin } from "./src/viewport";
 import { useAppTheme } from "./src/theme";
 import { generateActivityCsv, shareText } from "./src/share";
@@ -1261,7 +1262,28 @@ function Wallet() {
     [contactName, setContactName] = useState(""),
     [contactAddress, setContactAddress] = useState(""),
     [contactError, setContactError] = useState(""),
-    [contactQuery, setContactQuery] = useState("");
+    [contactQuery, setContactQuery] = useState(""),
+    [alertPriceInput, setAlertPriceInput] = useState(""),
+    [alertCondition, setAlertCondition] = useState<"above" | "below">("above");
+
+  useEffect(() => {
+    const alertList = data.priceAlerts;
+    if (!Array.isArray(alertList) || !alertList.length || !prices || !Object.keys(prices).length) return;
+    const { updatedAlerts, triggeredAlerts } = evaluatePriceAlerts(alertList, prices);
+    if (triggeredAlerts.length > 0) {
+      triggeredAlerts.forEach((alert) => {
+        setNotice({
+          title: t(`Price Alert: ${alert.symbol}`, `价格预警：${alert.symbol}`),
+          body: t(
+            `${alert.symbol} target price of $${alert.targetPrice.toLocaleString()} reached! (${alert.condition === "above" ? "≥" : "≤"} current price: ${prices[alert.symbol] ? "$" + prices[alert.symbol].toLocaleString() : ""})`,
+            `${alert.symbol} 目标价格 $${alert.targetPrice.toLocaleString()} 已到达！（${alert.condition === "above" ? "≥" : "≤"} 当前价格：${prices[alert.symbol] ? "$" + prices[alert.symbol].toLocaleString() : ""}）`,
+          ),
+          tone: "success",
+        });
+      });
+      void run(() => store({ ...dataRef.current, priceAlerts: updatedAlerts }));
+    }
+  }, [prices, data.priceAlerts]);
   // Saved names, cleaned on every read: the stored list is whatever the file held.
   const book = contactsCore.cleanBook(data.contacts);
   const inactivity = useRef(Date.now());
@@ -6080,6 +6102,7 @@ function Wallet() {
       // "not enough history") are left out instead of implying they might
       // fill in later.
       const noMarket = tokenDetailSymbol === "ARC";
+      const symbolAlerts = (data.priceAlerts || []).filter((a: any) => a.symbol === tokenDetailSymbol);
       return (
         <>
           <Header
@@ -6179,6 +6202,153 @@ function Wallet() {
               </View>
             </View>
           ) : null}
+          {!noMarket && (
+            <View style={[s.panel, { gap: 12 }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Icon name="bell-outline" size={18} color={colors.green} />
+                  <Text style={[s.eyebrow, { color: colors.ink }]}>{t("Set Price Alert", "设置价格预警")}</Text>
+                </View>
+                {symbolAlerts.length > 0 && (
+                  <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                    {symbolAlerts.length} {t("active", "进行中")}
+                  </Text>
+                )}
+              </View>
+              <Text style={s.small}>
+                {t(
+                  `Set a target price alert for ${tokenDetailSymbol}. You'll be notified when price goes ${alertCondition} target.`,
+                  `为 ${tokenDetailSymbol} 设置目标价格预警。当价格${alertCondition === "above" ? "高于" : "低于"}目标价时，你将收到提醒。`,
+                )}
+              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <View style={{ flex: 1 }}>
+                  <TextInput
+                    value={alertPriceInput}
+                    onChangeText={(val) => setAlertPriceInput(val.replace(",", "."))}
+                    keyboardType="decimal-pad"
+                    placeholder={Number.isFinite(price) && price! > 0 ? String(price) : "0.00"}
+                    placeholderTextColor={colors.muted}
+                    style={{
+                      height: 44,
+                      borderRadius: 12,
+                      borderWidth: 1,
+                      borderColor: colors.line,
+                      backgroundColor: colors.wash,
+                      paddingHorizontal: 12,
+                      fontSize: 16,
+                      fontWeight: "600",
+                      color: colors.ink,
+                    }}
+                  />
+                </View>
+                <View style={{ flexDirection: "row", gap: 4, backgroundColor: colors.wash, borderRadius: 12, padding: 3, borderWidth: 1, borderColor: colors.line }}>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setAlertCondition("above")}
+                    style={{
+                      paddingVertical: 7,
+                      paddingHorizontal: 12,
+                      borderRadius: 9,
+                      backgroundColor: alertCondition === "above" ? colors.green : "transparent",
+                    }}
+                  >
+                    <Text style={{ fontSize: 13, fontWeight: "700", color: alertCondition === "above" ? colors.paper : colors.muted }}>
+                      {t("≥ Above", "≥ 高于")}
+                    </Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setAlertCondition("below")}
+                    style={{
+                      paddingVertical: 7,
+                      paddingHorizontal: 12,
+                      borderRadius: 9,
+                      backgroundColor: alertCondition === "below" ? colors.green : "transparent",
+                    }}
+                  >
+                    <Text style={{ fontSize: 13, fontWeight: "700", color: alertCondition === "below" ? colors.paper : colors.muted }}>
+                      {t("≤ Below", "≤ 低于")}
+                    </Text>
+                  </Pressable>
+                </View>
+              </View>
+              <Button
+                primary
+                onPress={() => {
+                  const targetNum = Number(alertPriceInput || price || 0);
+                  if (!Number.isFinite(targetNum) || targetNum <= 0) {
+                    setNotice({
+                      title: t("Invalid Price", "无效价格"),
+                      body: t("Please enter a valid target price.", "请输入有效的目标价格。"),
+                      tone: "error",
+                    });
+                    return;
+                  }
+                  const newAlert: PriceAlert = {
+                    id: "pa_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+                    symbol: tokenDetailSymbol,
+                    targetPrice: targetNum,
+                    condition: alertCondition,
+                    createdAt: new Date().toISOString(),
+                  };
+                  const updated = [...(dataRef.current.priceAlerts || []), newAlert];
+                  void run(() => store({ ...dataRef.current, priceAlerts: updated }));
+                  setAlertPriceInput("");
+                  setNotice({
+                    title: t("Price Alert Set", "价格预警已设置"),
+                    body: t(
+                      `Alert set for ${tokenDetailSymbol} when price is ${alertCondition} $${targetNum.toLocaleString()}.`,
+                      `已设置 ${tokenDetailSymbol} 当价格 ${alertCondition === "above" ? "≥" : "≤"} $${targetNum.toLocaleString()} 时预警。`,
+                    ),
+                    tone: "success",
+                  });
+                }}
+              >
+                {t("Set Price Alert", "设置价格预警")}
+              </Button>
+              {symbolAlerts.length > 0 && (
+                <View style={{ gap: 8, marginTop: 4 }}>
+                  <Text style={s.eyebrow}>{t("Active Alerts", "活跃预警")}</Text>
+                  {symbolAlerts.map((alert: any) => (
+                    <View
+                      key={alert.id}
+                      style={{
+                        flexDirection: "row",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        paddingVertical: 8,
+                        paddingHorizontal: 12,
+                        borderRadius: 10,
+                        backgroundColor: colors.wash,
+                        borderWidth: 1,
+                        borderColor: colors.line,
+                      }}
+                    >
+                      <View style={{ gap: 2 }}>
+                        <Text style={[s.text, { fontWeight: "700" }]}>
+                          {alert.condition === "above" ? "≥" : "≤"} ${Number(alert.targetPrice).toLocaleString()}
+                        </Text>
+                        <Text style={s.small}>
+                          {new Date(alert.createdAt).toLocaleDateString()}
+                        </Text>
+                      </View>
+                      <Pressable
+                        accessibilityRole="button"
+                        onPress={() => {
+                          const updated = (dataRef.current.priceAlerts || []).filter((a: any) => a.id !== alert.id);
+                          void run(() => store({ ...dataRef.current, priceAlerts: updated }));
+                        }}
+                        hitSlop={8}
+                      >
+                        <Icon name="trash-can-outline" size={18} color={colors.danger} />
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              )}
+            </View>
+          )}
           <View style={[s.panel, { gap: 6 }]}>
             <Text style={s.eyebrow}>{t("About", "关于")}</Text>
             <Text style={s.small}>
@@ -7947,11 +8117,11 @@ function Wallet() {
             />
             <ListRow
               icon="bell"
-              label={t("Notifications", "通知")}
+              label={t("Notifications & Price Alerts", "通知与价格预警")}
               detail={
                 data.alerts?.off
                   ? t("Off", "已关闭")
-                  : t("On — told when money moves in or out", "已开启 — 资金进出时提醒")
+                  : t("On — money movement & asset price alerts", "已开启 — 资金进出与资产价格预警")
               }
               onPress={() => {
                 setSystemAlerts(notify.systemPermission());
@@ -8268,7 +8438,7 @@ function Wallet() {
       const on = !data.alerts?.off;
       return (
         <>
-          <Header title={t("Notifications", "通知")} onBack={toSettings} backLabel={t("Settings", "设置")} />
+          <Header title={t("Notifications & Price Alerts", "通知与价格预警")} onBack={toSettings} backLabel={t("Settings", "设置")} />
           <Group>
             <ListRow
               icon="bell"
@@ -8301,6 +8471,64 @@ function Wallet() {
               />
             ) : null}
           </Group>
+          <View style={[s.panel, { gap: 10 }]}>
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Icon name="bell-ring-outline" size={18} color={colors.green} />
+              <Text style={[s.eyebrow, { color: colors.ink }]}>{t("Active Price Alerts", "活跃价格预警")}</Text>
+            </View>
+            <Text style={s.small}>
+              {t(
+                "Click on any token from your home page or market list to set or modify target price alerts for that asset.",
+                "在首页或市场列表中点击任何代币，即可为该资产设置或修改目标价格预警。",
+              )}
+            </Text>
+            {Array.isArray(data.priceAlerts) && data.priceAlerts.length > 0 ? (
+              <View style={{ gap: 8 }}>
+                {data.priceAlerts.map((alert: any) => (
+                  <View
+                    key={alert.id}
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      paddingVertical: 10,
+                      paddingHorizontal: 12,
+                      borderRadius: 10,
+                      backgroundColor: colors.wash,
+                      borderWidth: 1,
+                      borderColor: colors.line,
+                    }}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                      <TokenIcon symbol={alert.symbol} size={28} />
+                      <View style={{ gap: 2 }}>
+                        <Text style={[s.text, { fontWeight: "700" }]}>
+                          {alert.symbol} {alert.condition === "above" ? "≥" : "≤"} ${Number(alert.targetPrice).toLocaleString()}
+                        </Text>
+                        <Text style={s.small}>
+                          {new Date(alert.createdAt).toLocaleDateString()}
+                        </Text>
+                      </View>
+                    </View>
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {
+                        const updated = (dataRef.current.priceAlerts || []).filter((a: any) => a.id !== alert.id);
+                        void run(() => store({ ...dataRef.current, priceAlerts: updated }));
+                      }}
+                      hitSlop={8}
+                    >
+                      <Icon name="trash-can-outline" size={18} color={colors.danger} />
+                    </Pressable>
+                  </View>
+                ))}
+              </View>
+            ) : (
+              <Text style={[s.small, { color: colors.muted, fontStyle: "italic" }]}>
+                {t("No price alerts set yet.", "暂未设置任何价格预警。")}
+              </Text>
+            )}
+          </View>
           <View style={[s.panel, { gap: 8 }]}>
             <Text style={s.small}>
               {t(

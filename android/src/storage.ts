@@ -57,6 +57,8 @@ export type LocalData = {
   trustedOnlyMode?: boolean;
   /** Preferred fiat display currency. */
   fiatCurrency?: "USD" | "EUR" | "GBP" | "JPY" | "CAD" | "AUD";
+  /** Active price alerts set by the user. */
+  priceAlerts?: any[];
   /**
    * Names the owner gave addresses they send to. Sealed with the rest of this
    * file and never sent anywhere; `core/contacts.js` cleans it on every read.

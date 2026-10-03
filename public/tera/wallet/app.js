@@ -526,6 +526,7 @@ const state = {
   autoLockMinutes: 15,
   trustedOnlyMode: false,
   fiatCurrency: "USD",
+  priceAlerts: [],
   recovery: null,
   demo: false,
   guide: 0,
@@ -621,6 +622,7 @@ function vaultPayload() {
     autoLockMinutes: state.autoLockMinutes,
     trustedOnlyMode: state.trustedOnlyMode,
     fiatCurrency: state.fiatCurrency,
+    priceAlerts: state.priceAlerts || [],
   };
 }
 async function persist() {
@@ -692,6 +694,7 @@ async function unlockEncryptedStorage(passphrase = "") {
   if (typeof vault?.fiatCurrency === "string" && ["USD", "EUR", "GBP", "JPY", "CAD", "AUD"].includes(vault.fiatCurrency)) {
     state.fiatCurrency = vault.fiatCurrency;
   }
+  state.priceAlerts = Array.isArray(vault?.priceAlerts) ? vault.priceAlerts : [];
   state.records = Array.isArray(vault?.records)
     ? vault.records.filter(
         (r) => isHash(r.txHash) && sameAddress(r.owner, state.owner) && r.chainId === chainId,
@@ -4130,9 +4133,34 @@ function newPreset() {
 function inspectAsset(symbol) {
   const a = state.assets.find((a) => a.symbol === symbol);
   if (!a) return;
+  const price = state.prices[symbol];
+  const symbolAlerts = (state.priceAlerts || []).filter((item) => item.symbol === symbol);
+  const alertsHtml = symbolAlerts.length
+    ? `<div class="alerts-list" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">${symbolAlerts.map(alert => `<div style="display:flex;justify-content:space-between;align-items:center;background:var(--wash);padding:8px 12px;border-radius:8px;font-size:13px;"><span><strong>${esc(alert.symbol)}</strong> ${alert.condition === 'above' ? '≥' : '≤'} $${Number(alert.targetPrice).toLocaleString()}</span><button type="button" class="btn secondary sm" data-action="delete-price-alert" data-id="${esc(alert.id)}" data-symbol="${esc(symbol)}">Remove</button></div>`).join("")}</div>`
+    : `<p style="font-size:12px;color:var(--muted);font-style:italic;">No active price alerts for ${esc(symbol)}.</p>`;
+
+  const priceAlertFormHtml = `
+    <hr style="border:0;border-top:1px solid var(--line);margin:12px 0;" />
+    <div class="price-alert-box">
+      <h4 style="margin:0 0 6px 0;font-size:14px;font-weight:700;">🔔 Set Price Alert for ${esc(symbol)}</h4>
+      <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Get notified when ${esc(symbol)} crosses your target price threshold.</p>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <input type="number" id="alert-target-price" placeholder="${price ? price : '0.00'}" step="any" style="flex:1;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--wash);color:var(--ink);" />
+        <select id="alert-condition" style="padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--wash);color:var(--ink);">
+          <option value="above">≥ Above</option>
+          <option value="below">≤ Below</option>
+        </select>
+        <button type="button" class="btn primary sm" data-action="add-price-alert" data-symbol="${esc(symbol)}">Set Alert</button>
+      </div>
+      <div style="margin-top:10px;">
+        ${alertsHtml}
+      </div>
+    </div>
+  `;
+
   dialog(
     a.name,
-    `${pair("Symbol", a.symbol)}${pair("Issuer", a.issuer)}${pair("Contract", a.address)}${pair("Token precision", a.decimals)}<p>${esc(a.description)}</p><div id="asset-preflight" role="status"></div><div class="actions">${button("Check preflight", "preflight", `data-symbol="${esc(a.symbol)}" ${!state.owner || !isAddress(a.address) ? "disabled" : ""}`)}${button("Prepare action", "asset-propose", `data-symbol="${esc(a.symbol)}" ${!state.owner || !isAddress(a.address) ? "disabled" : ""}`)}</div>`,
+    `${pair("Symbol", a.symbol)}${pair("Issuer", a.issuer)}${pair("Contract", a.address)}${pair("Token precision", a.decimals)}<p>${esc(a.description)}</p>${priceAlertFormHtml}<div id="asset-preflight" role="status"></div><div class="actions">${button("Check preflight", "preflight", `data-symbol="${esc(a.symbol)}" ${!state.owner || !isAddress(a.address) ? "disabled" : ""}`)}${button("Prepare action", "asset-propose", `data-symbol="${esc(a.symbol)}" ${!state.owner || !isAddress(a.address) ? "disabled" : ""}`)}</div>`,
   );
 }
 
@@ -4162,6 +4190,35 @@ document.addEventListener("click", async (event) => {
     index = Number(target.dataset.index);
   try {
     if (action === "close") closeDialog();
+    if (action === "add-price-alert") {
+      const sym = target.dataset.symbol;
+      const priceInput = document.getElementById("alert-target-price")?.value;
+      const condition = document.getElementById("alert-condition")?.value || "above";
+      const targetNum = Number(priceInput);
+      if (!Number.isFinite(targetNum) || targetNum <= 0) {
+        showError("Please enter a valid target price.");
+        return;
+      }
+      const newAlert = {
+        id: "pa_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+        symbol: sym,
+        targetPrice: targetNum,
+        condition,
+        createdAt: new Date().toISOString(),
+      };
+      state.priceAlerts = [...(state.priceAlerts || []), newAlert];
+      void persist();
+      inspectAsset(sym);
+      state.notice = `Price alert set for ${sym} when price is ${condition} $${targetNum.toLocaleString()}.`;
+    }
+    if (action === "delete-price-alert") {
+      const id = target.dataset.id;
+      const sym = target.dataset.symbol;
+      state.priceAlerts = (state.priceAlerts || []).filter((a) => a.id !== id);
+      void persist();
+      if (sym) inspectAsset(sym);
+      else render();
+    }
     if (action === "nft-send") {
       const token = state.nft.tokens[Number(target.dataset.index)];
       if (token) reviewNftSend(token, generation);
