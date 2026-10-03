@@ -54,13 +54,14 @@ export const FIAT_RATES: Record<string, { symbol: string; rate: number }> = {
   AUD: { symbol: "A$", rate: 1.52 },
 };
 
-export function formatFiat(usdAmount: number | string, currency = "USD"): string {
+export function formatFiat(usdAmount: number | string | null | undefined, currency = "USD"): string {
+  if (usdAmount === null || usdAmount === undefined || usdAmount === "—") return "—";
   const code = (currency || "USD").toUpperCase();
   const meta = FIAT_RATES[code] || FIAT_RATES.USD;
-  const num = typeof usdAmount === "number" ? usdAmount : parseFloat(usdAmount || "0") || 0;
+  const num = typeof usdAmount === "number" ? usdAmount : parseFloat(String(usdAmount || "0")) || 0;
   const converted = num * meta.rate;
   if (code === "JPY") {
-    return `${meta.symbol}${Math.round(converted).toLocaleString()}`;
+    return `${meta.symbol}${Math.round(converted).toLocaleString("en-US")}`;
   }
   return `${meta.symbol}${converted.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
