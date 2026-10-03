@@ -26,5 +26,5 @@
 | 12 | #2 | CSV export of activity | Done | Yes | Yes | Yes |
 | 13 | #8 | Monthly spending summary | Done | Yes | Yes | Yes |
 | 14 | #22 | Portfolio chart | Done | Yes | Yes | Yes |
-| 15 | #22 | Price alerts | Not Started | No | No | No |
+| 15 | #22 | Price alerts | Done | Yes | Yes | Yes |
 | 17 | #25 | Home screen widgets and app shortcuts | Not Started | No | No | No |
