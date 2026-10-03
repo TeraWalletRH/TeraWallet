@@ -1,10 +1,21 @@
 import { describe, expect, it } from "bun:test";
-import { advanceEpoch, changeStake, reserveSummary, REWARD_SCALE, settlePosition } from "../src/staking";
+import { advanceEpoch, changeStake, claimableRewards, reserveSummary, REWARD_SCALE, settlePosition } from "../src/staking";
 import request from "supertest";
 import app from "../src/app";
 import { canTransition, payoutTotal } from "../src/staking-outbox";
 
 describe("TERA staking reward ledger", () => {
+  it("shows rewards earned for days without a ledger write, while paused rewards stay fixed", () => {
+    const epoch = {
+      startsAt: 0, endsAt: 10 * 86400, lastUpdatedAt: 0,
+      rewardRatePerSecond: 10n, totalActiveStake: 100n,
+      rewardPerToken: 0n, distributedRewards: 0n,
+    };
+    const position = { activeStake: 25n, accruedRewards: 0n, rewardDebt: 0n };
+    expect(claimableRewards(epoch, position, "active", 3 * 86400)).toBe(648000n);
+    expect(claimableRewards(epoch, position, "paused", 3 * 86400)).toBe(0n);
+    expect(claimableRewards(epoch, position, "ended", 4 * 86400)).toBe(0n);
+  });
   const epoch = {
     startsAt: 0, endsAt: 100, lastUpdatedAt: 0,
     rewardRatePerSecond: 10n, totalActiveStake: 100n,

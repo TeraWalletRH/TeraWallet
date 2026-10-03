@@ -47,6 +47,17 @@ export function settlePosition(position: StakingPosition, rewardPerToken: bigint
   return { ...position, accruedRewards: position.accruedRewards + earned, rewardDebt: rewardPerToken };
 }
 
+/** Preview claimable rewards without mutating the ledger or emitting during a pause. */
+export function claimableRewards(
+  epoch: StakingEpoch,
+  position: StakingPosition,
+  status: "active" | "paused" | "ended",
+  now: number,
+): bigint {
+  const projected = status === "active" ? advanceEpoch(epoch, now) : epoch;
+  return settlePosition(position, projected.rewardPerToken).accruedRewards;
+}
+
 /** Apply a stake or unstake after settlement. Negative balances are refused. */
 export function changeStake(
   position: StakingPosition,
