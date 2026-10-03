@@ -130,13 +130,17 @@
   <!-- FLEXIBLE EPOCH STAKING PANEL -->
   <section class="panel">
     <h2>Flexible Epoch Staking</h2>
-    <p class="note">Earn pro-rata rewards from the current funded epoch. Flexible stakes can be increased or unstaked at any time.</p>
+    <p class="note">Rewards accrue in your position while an epoch is active. Use Claim to request a wallet payout; flexible stakes can be unstaked at any time.</p>
     <div class="row" style="margin-bottom:14px">
       <input class="input" id="flexDeposit" inputmode="decimal" autocomplete="off" placeholder="0.00 TERA">
       <button class="btn" id="flexStakeBtn">Stake TERA (Flexible)</button>
     </div>
+    <div class="row" style="margin-bottom:14px">
+      <label for="flexEpochSelect">Position to claim or unstake</label>
+      <select class="input" id="flexEpochSelect" style="max-width:360px" disabled><option value="">No flexible positions</option></select>
+    </div>
     <div class="row">
-      <button class="btn alt" id="flexClaimBtn">Claim Settled Rewards</button>
+      <button class="btn alt" id="flexClaimBtn">Claim Rewards</button>
       <input class="input" id="flexUnstakeAmount" inputmode="decimal" autocomplete="off" placeholder="0.00 TERA">
       <button class="btn alt" id="flexUnstakeBtn">Unstake TERA</button>
     </div>
@@ -179,7 +183,7 @@
 <script>
 const api = window.TERA_API_BASE || 'https://api.terawallet.app';
 const q = s => document.querySelector(s), qa = s => document.querySelectorAll(s), DECIMALS = 18n, SCALE = 10n**DECIMALS;
-let wallet = '', activeEpoch = null, activeEpochId = '', flexiblePosition = null, userLocks = [];
+let wallet = '', activeEpoch = null, activeEpochId = '', selectedEpochId = '', flexiblePosition = null, flexiblePositions = [], userLocks = [];
 let selectedTier = 30, selectedBps = 600;
 
 const TIERS = {
@@ -338,7 +342,7 @@ function renderLocks(locks) {
 }
 
 function updateRewardsDisplay(maturedFixedRewards = 0n) {
-  const flexRewards = flexiblePosition ? BigInt(flexiblePosition.accrued_rewards || 0) : 0n;
+  const flexRewards = flexiblePositions.reduce((sum, position) => sum + BigInt(position.claimable_rewards || position.accrued_rewards || 0), 0n);
   const total = flexRewards + maturedFixedRewards;
   q('#totalRewards').textContent = tera(total);
 }
@@ -374,6 +378,11 @@ function renderHistory(payouts) {
       txCopy.onclick = () => copy(item.tx_hash);
       meta.append(tx, txCopy);
     }
+    if (item.failure_reason) {
+      const reason = document.createElement('span');
+      reason.textContent = `Issue: ${item.failure_reason}`;
+      meta.append(reason);
+    }
     top.append(title, amount, meta);
     card.append(top, pill);
     host.append(card);
@@ -390,17 +399,41 @@ async function load() {
     activeEpochId = activeEpoch?.id || '';
     q('#epochStatus').textContent = activeEpoch ? 'LIVE' : 'INACTIVE';
   } catch (err) {
+    activeEpoch = null;
+    activeEpochId = '';
     q('#epochStatus').textContent = '—';
   }
 
   // 2. Fetch flexible position (so user's existing tokens/position are always visible!)
   try {
     const p = await f('/api/staking/position/' + wallet);
-    flexiblePosition = p.positions?.find(x => x.epoch_id === activeEpochId) || p.positions?.[0] || null;
-    q('#flexStake').textContent = tera(flexiblePosition?.active_stake);
+    flexiblePositions = p.positions || [];
+    flexiblePosition = flexiblePositions.find(x => x.epoch_id === selectedEpochId)
+      || flexiblePositions.find(x => x.epoch_id === activeEpochId && BigInt(x.active_stake || 0) > 0n)
+      || flexiblePositions.find(x => BigInt(x.active_stake || 0) > 0n || BigInt(x.claimable_rewards || 0) > 0n)
+      || flexiblePositions[0] || null;
+    selectedEpochId = flexiblePosition?.epoch_id || '';
+    const selector = q('#flexEpochSelect');
+    selector.replaceChildren();
+    if (flexiblePositions.length) {
+      for (const position of flexiblePositions) {
+        const option = document.createElement('option');
+        option.value = position.epoch_id;
+        option.textContent = `${position.epoch_status.toUpperCase()} · ends ${new Date(position.ends_at).toLocaleDateString()} · ${tera(position.active_stake)}`;
+        selector.append(option);
+      }
+      selector.value = selectedEpochId;
+      selector.disabled = false;
+    } else {
+      selector.add(new Option('No flexible positions', ''));
+      selector.disabled = true;
+    }
+    q('#flexStake').textContent = tera(flexiblePositions.reduce((sum, position) => sum + BigInt(position.active_stake || 0), 0n));
     updateRewardsDisplay();
   } catch (err) {
     console.warn('Flexible position read:', err);
+    flexiblePosition = null;
+    flexiblePositions = [];
     q('#flexStake').textContent = '—';
   }
 
@@ -424,6 +457,10 @@ async function load() {
   }
 }
 
+setInterval(() => {
+  if (wallet && document.visibilityState === 'visible') void load();
+}, 30000);
+
 async function reconcileLock(txHash, termDays, amount) {
   if (!wallet) return;
   try {
@@ -445,16 +482,16 @@ async function reconcileLock(txHash, termDays, amount) {
   }
 }
 
-async function reconcileFlexible(txHash, amount) {
-  if (!wallet || !activeEpochId) return;
+async function reconcileFlexible(txHash, amount, epochId = activeEpochId) {
+  if (!wallet || !epochId) { msg('Select an epoch before recovering this flexible stake.'); return; }
   try {
     const out = await f('/api/staking/deposits', {
       method: 'POST',
-      body: JSON.stringify({ epochId: activeEpochId, walletAddress: wallet, txHash })
+      body: JSON.stringify({ epochId, walletAddress: wallet, txHash })
     });
     if (out.status === 'awaiting_confirmations') {
       msg('Stake submitted. Awaiting block confirmations...');
-      setTimeout(() => reconcileFlexible(txHash, amount), 12000);
+      setTimeout(() => reconcileFlexible(txHash, amount, epochId), 12000);
       return;
     }
     localStorage.removeItem(`tera.pending.flex.${wallet.toLowerCase()}`);
@@ -477,7 +514,7 @@ function resumePending() {
     const flexItem = JSON.parse(localStorage.getItem(`tera.pending.flex.${wallet.toLowerCase()}`) || 'null');
     if (flexItem && flexItem.txHash) {
       msg('Resuming verification of pending flexible stake...');
-      void reconcileFlexible(flexItem.txHash, flexItem.amount);
+      void reconcileFlexible(flexItem.txHash, flexItem.amount, flexItem.epochId || activeEpochId);
     }
   } catch {}
 }
@@ -524,6 +561,7 @@ q('#lockStakeBtn').onclick = async () => {
 q('#flexStakeBtn').onclick = async () => {
   try {
     if (!wallet || !activeEpochId) throw Error('Connect wallet and wait for an active epoch.');
+    const epochId = activeEpochId;
     const amount = parseTera(q('#flexDeposit').value);
     if (BigInt(amount) <= 0n) throw Error('Enter an amount above zero.');
 
@@ -537,9 +575,9 @@ q('#flexStakeBtn').onclick = async () => {
       params: [{ from: wallet, to: p.preparedTransaction.to, data: p.preparedTransaction.data, value: '0x0' }]
     });
 
-    localStorage.setItem(`tera.pending.flex.${wallet.toLowerCase()}`, JSON.stringify({ txHash: tx, amount }));
+    localStorage.setItem(`tera.pending.flex.${wallet.toLowerCase()}`, JSON.stringify({ txHash: tx, amount, epochId }));
     msg('Stake submitted. Awaiting confirmations...');
-    void reconcileFlexible(tx, amount);
+    void reconcileFlexible(tx, amount, epochId);
   } catch (e) {
     msg(e.message);
   }
@@ -548,11 +586,13 @@ q('#flexStakeBtn').onclick = async () => {
 // Flexible Claim & Unstake
 async function flexiblePayout(kind) {
   try {
-    if (!wallet || !activeEpochId) throw Error('Connect wallet and wait for an active epoch.');
+    if (!wallet || !selectedEpochId || !flexiblePosition) throw Error('Connect wallet and select a flexible position.');
     const amount = kind === 'unstake' ? parseTera(q('#flexUnstakeAmount').value) : '0';
     const id = crypto.randomUUID();
-    const a = { kind, walletAddress: wallet, epochId: activeEpochId, amount, idempotencyKey: id };
+    const a = { kind, walletAddress: wallet, epochId: selectedEpochId, amount, idempotencyKey: id };
     if (kind === 'unstake' && BigInt(amount) <= 0n) throw Error('Enter an amount above zero.');
+    if (kind === 'unstake' && BigInt(amount) > BigInt(flexiblePosition.active_stake || 0)) throw Error('Unstake amount exceeds this position.');
+    if (kind === 'claim' && BigInt(flexiblePosition.claimable_rewards || 0) <= 0n) throw Error('No rewards are claimable for this position yet.');
 
     const auth = await f('/api/staking/payout-authorization', { method: 'POST', body: JSON.stringify(a) });
     const signature = await ethereum.request({ method: 'personal_sign', params: [auth.message, wallet] });
@@ -566,6 +606,10 @@ async function flexiblePayout(kind) {
 }
 q('#flexClaimBtn').onclick = () => flexiblePayout('claim');
 q('#flexUnstakeBtn').onclick = () => flexiblePayout('unstake');
+q('#flexEpochSelect').onchange = () => {
+  selectedEpochId = q('#flexEpochSelect').value;
+  flexiblePosition = flexiblePositions.find(position => position.epoch_id === selectedEpochId) || null;
+};
 
 // Recover pending transaction
 q('#recoverBtn').onclick = async () => {
@@ -576,7 +620,7 @@ q('#recoverBtn').onclick = async () => {
     if (!/^0x[0-9a-fA-F]{64}$/.test(tx)) throw Error('Enter a valid 0x transaction hash.');
     msg('Verifying and recovering transaction...');
     if (type === 'flexible') {
-      void reconcileFlexible(tx, '0');
+      void reconcileFlexible(tx, '0', activeEpochId || selectedEpochId);
     } else {
       void reconcileLock(tx, Number(type), '0');
     }

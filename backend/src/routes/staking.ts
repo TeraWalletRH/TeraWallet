@@ -5,7 +5,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import pool from "../db";
 import { env } from "../env";
 import { logger } from "../logging";
-import { advanceEpoch, changeStake, calculateFixedReward, FIXED_STAKING_TIERS, isLockMature, isValidStakingTier, type StakingEpoch, type StakingPosition } from "../staking";
+import { advanceEpoch, changeStake, claimableRewards, calculateFixedReward, FIXED_STAKING_TIERS, isLockMature, isValidStakingTier, type StakingEpoch, type StakingPosition } from "../staking";
 import { lockPayoutAuthorizationMessage, payoutAuthorizationMessage, payoutTotal } from "../staking-outbox";
 import { broadcastPayout, confirmPayout } from "../staking-executor";
 
@@ -623,15 +623,37 @@ router.get("/api/staking/position/:walletAddress", async (req: Request, res: Res
       return;
     }
     const result = await pool.query(
-      `SELECT p.epoch_id, p.active_stake, p.accrued_rewards, p.reward_debt, p.updated_at,
-              e.status AS epoch_status, e.starts_at, e.ends_at, e.token_address
+       `SELECT p.epoch_id, p.active_stake, p.accrued_rewards, p.reward_debt, p.updated_at,
+               e.status AS epoch_status, e.starts_at, e.ends_at, e.token_address,
+               e.last_updated_at, e.reward_rate_per_second, e.total_active_stake,
+               e.reward_per_token, e.distributed_rewards
          FROM staking_positions p
          JOIN staking_epochs e ON e.id = p.epoch_id
         WHERE LOWER(p.wallet_address) = LOWER($1)
         ORDER BY e.ends_at DESC`,
       [walletAddress],
     );
-    res.status(200).json({ success: true, positions: result.rows, source: "ledger" });
+    const chainNow = result.rows.some((row) => row.epoch_status === "active")
+      ? Number((await client.getBlock()).timestamp)
+      : 0;
+    const positions = result.rows.map((row) => {
+      const epoch: StakingEpoch = {
+        startsAt: Math.floor(new Date(row.starts_at).getTime() / 1000),
+        endsAt: Math.floor(new Date(row.ends_at).getTime() / 1000),
+        lastUpdatedAt: Math.floor(new Date(row.last_updated_at).getTime() / 1000),
+        rewardRatePerSecond: BigInt(row.reward_rate_per_second),
+        totalActiveStake: BigInt(row.total_active_stake),
+        rewardPerToken: BigInt(row.reward_per_token),
+        distributedRewards: BigInt(row.distributed_rewards),
+      };
+      const claimable = claimableRewards(epoch, {
+        activeStake: BigInt(row.active_stake),
+        accruedRewards: BigInt(row.accrued_rewards),
+        rewardDebt: BigInt(row.reward_debt),
+      }, row.epoch_status, chainNow);
+      return { ...row, claimable_rewards: claimable.toString() };
+    });
+    res.status(200).json({ success: true, positions, source: "ledger" });
   } catch (error) {
     logger.error(req, "staking.position_read_failed", error);
     res.status(503).json({ success: false, error: "Staking ledger is unavailable." });
@@ -653,9 +675,11 @@ router.post("/api/staking/payouts", async (req, res) => {
     try {
       await db.query('BEGIN'); await db.query("SELECT pg_advisory_xact_lock(hashtext('tera_staking_pool'))");
       const er=await db.query('SELECT * FROM staking_epochs WHERE id=$1 FOR UPDATE',[epochId]), row=er.rows[0];
-      if (!row || !['active','ended'].includes(row.status)) throw new Error('Epoch cannot settle payouts.');
+       if (!row || !['active','paused','ended'].includes(row.status)) throw new Error('Epoch cannot settle payouts.');
       const epoch:StakingEpoch={startsAt:Math.floor(new Date(row.starts_at).getTime()/1000),endsAt:Math.floor(new Date(row.ends_at).getTime()/1000),lastUpdatedAt:Math.floor(new Date(row.last_updated_at).getTime()/1000),rewardRatePerSecond:BigInt(row.reward_rate_per_second),totalActiveStake:BigInt(row.total_active_stake),rewardPerToken:BigInt(row.reward_per_token),distributedRewards:BigInt(row.distributed_rewards)};
-      const advanced=advanceEpoch(epoch,chainNow);
+       // Paused and ended epochs have already settled their last active interval.
+       // They remain withdrawable, but cannot emit rewards after that point.
+       const advanced=row.status==='active'?advanceEpoch(epoch,chainNow):epoch;
       const pr=await db.query('SELECT * FROM staking_positions WHERE epoch_id=$1 AND LOWER(wallet_address)=LOWER($2) FOR UPDATE',[epochId,wallet]), prior=pr.rows[0];
       if (!prior) throw new Error('No active staking position.');
       const settled=changeStake({activeStake:BigInt(prior.active_stake),accruedRewards:BigInt(prior.accrued_rewards),rewardDebt:BigInt(prior.reward_debt)},advanced.rewardPerToken,0n);

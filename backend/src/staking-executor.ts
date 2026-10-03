@@ -1,5 +1,6 @@
 import { decodeEventLog, encodeFunctionData, erc20Abi, getAddress, http, createPublicClient, keccak256, parseAbiItem, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
+import type { PoolClient } from "pg";
 import pool from "./db";
 import { env } from "./env";
 
@@ -91,8 +92,9 @@ export async function confirmPayout(payoutId: string): Promise<Payout | null> {
 export async function runStakingPayoutExecutor() {
   if (running || !pool || !ready()) return;
   running = true;
-  const db = await pool.connect();
+  let db: PoolClient | undefined;
   try {
+    db = await pool.connect();
     const lock = await db.query("SELECT pg_try_advisory_lock(hashtext('tera_staking_payout_executor')) AS locked");
     if (!lock.rows[0]?.locked) return;
     try {
@@ -104,7 +106,9 @@ export async function runStakingPayoutExecutor() {
         } catch (error) { console.error("Staking payout executor failed for", payout.id, error instanceof Error ? error.message : error); }
       }
     } finally { await db.query("SELECT pg_advisory_unlock(hashtext('tera_staking_payout_executor'))"); }
-  } finally { db.release(); running = false; }
+  } catch (error) {
+    console.error("Staking payout executor cycle failed", error instanceof Error ? error.message : error);
+  } finally { db?.release(); running = false; }
 }
 
 export function startStakingPayoutExecutor() {
