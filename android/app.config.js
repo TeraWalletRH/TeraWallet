@@ -1,10 +1,15 @@
 // Build-time configuration.
 //
 // `REQUEST_INSTALL_PACKAGES` is what lets the app hand a downloaded APK to
-// Android's installer. It is a sensitive permission and is only worth asking
-// for because this app is distributed as an APK rather than through Play.
-// Android still shows its own install screen, and still asks the owner once to
-// allow installs from this app; the permission does not skip either.
+// Android's installer, for the in-app self-update bubble (src/update.ts).
+// Google Play's policy does not allow this permission unless installing
+// packages is the app's core purpose, so it is requested for the preview
+// channel only — preview is distributed as a direct APK download (GitHub
+// Actions artifacts/releases), which is exactly the case the permission
+// exists for. The production channel is distributed through Google Play,
+// which has its own update mechanism, so production neither requests the
+// permission nor offers the in-app updater (the App.tsx call site and the
+// Settings "Updates" row are both gated on installedChannel() === "preview").
 //
 // A signed release is the production app and every other build is the preview
 // app. Each has its own application ID, which is also how the app knows which
@@ -28,7 +33,7 @@ module.exports = ({ config }) => {
       versionCode: Number(process.env.GITHUB_RUN_NUMBER || 1),
       permissions: [
         ...(config.android.permissions ?? []),
-        "android.permission.REQUEST_INSTALL_PACKAGES",
+        ...(release ? [] : ["android.permission.REQUEST_INSTALL_PACKAGES"]),
       ],
       blockedPermissions: [
         ...config.android.blockedPermissions,
