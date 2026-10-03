@@ -41,8 +41,13 @@ describe("build channels", () => {
     expect(configUnder({ GITHUB_RUN_NUMBER: "57" }).android.versionCode).toBe(57);
   });
 
-  it("can hand a downloaded APK to Android's installer", () => {
+  it("can hand a downloaded APK to Android's installer, preview only", () => {
     expect(configUnder({}).android.permissions).toContain("android.permission.REQUEST_INSTALL_PACKAGES");
+    // Production is distributed through Google Play, which does not allow
+    // this permission unless installing packages is the app's core purpose.
+    expect(configUnder({ TERA_SIGNED_RELEASE: "true" }).android.permissions).not.toContain(
+      "android.permission.REQUEST_INSTALL_PACKAGES",
+    );
   });
 
   it("gives an unknown application ID no channel", () => {

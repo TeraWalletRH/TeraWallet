@@ -54,7 +54,13 @@ export function resolveEffectiveColorScheme(
 
 export function useAppTheme() {
   const [setting, setSettingState] = useState<ThemeSetting>('system');
-  const [systemScheme, setSystemScheme] = useState<ColorSchemeName>(Appearance.getColorScheme());
+  // getColorScheme() can return null/undefined (e.g. before the OS has
+  // reported one); ColorSchemeName itself doesn't include either, so this
+  // falls back to 'light' for that brief window rather than widening the
+  // type everywhere it's used.
+  const [systemScheme, setSystemScheme] = useState<ColorSchemeName>(
+    Appearance.getColorScheme() ?? 'light',
+  );
 
   useEffect(() => {
     getStoredMobileTheme().then(setSettingState);
