@@ -12,7 +12,9 @@ export const env = {
   databaseUrl: process.env.DATABASE_URL ?? "",
   // Robinhood Chain Mainnet (4663) — all asset addresses and frontend are mainnet.
   // Override via RHC_RPC_URL / RHC_CHAIN_ID env vars for testnet development.
-  rhcRpcUrl: process.env.RHC_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com",
+  get rhcRpcUrl(): string {
+    return process.env.RHC_RPC_URL ?? "https://rpc.mainnet.chain.robinhood.com";
+  },
   rhcChainId: Number(process.env.RHC_CHAIN_ID ?? process.env.RHC_ID ?? 4663),
   groqApiKey: process.env.GROQ_API_KEY ?? "",
   relayApiKey: process.env.RELAY_API_KEY ?? "",
