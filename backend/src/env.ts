@@ -37,7 +37,9 @@ export const env = {
     );
   },
   teraStakingPoolPrivateKey: process.env.TERA_STAKING_POOL_PRIVATE_KEY ?? "",
-  masterAdminKey: process.env.MASTER_ADMIN_KEY ?? "",
+  get masterAdminKey(): string {
+    return process.env.MASTER_ADMIN_KEY ?? "";
+  },
   teraStakingConfirmations: Number(process.env.TERA_STAKING_CONFIRMATIONS ?? 3),
   teraStakingAdminSessionHours: Number(process.env.TERA_STAKING_ADMIN_SESSION_HOURS ?? 8),
   teraStakingEnabled: process.env.TERA_STAKING_ENABLED === "true",
