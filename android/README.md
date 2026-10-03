@@ -10,18 +10,20 @@ Native Expo / React Native wallet, using Tera's cream, forest-green and monospac
 - Relay bridges from RH ETH/USDG to Base ETH/USDC, Solana SOL/USDC/USDT and Arc USDC. Destination address is pasted; source transactions are signed on the phone.
 - Encrypted local drafts, pending hashes and history, configurable retention, local deletion and signed backend proposal deletion. Assistant chat is memory-only.
 - Tags: send to `@astra` instead of an address, and claim a name for this wallet. Tera keeps the register, so resolving a name means trusting the service — unlike a balance or a receipt, there is nothing else to check it against, and the claim screen says so. The resolved address is shown on the review sheet and re-read immediately before signing, and the transfer is built from the address. Tags are not offered as bridge destinations, because a bridge sends to another chain where that address is a different account.
-- In-app updates on Android: on launch the app checks `/api/mobile/android/manifest?channel=…` for its own channel (preview or production) and offers what is published. See [Updating](#updating). Tags turn on when the API says the register is enabled. There is no equivalent on iOS — see below.
+- In-app updates on Android, preview channel only: on launch the app checks `/api/mobile/android/manifest?channel=preview` and offers what is published. See [Updating](#updating). Tags turn on when the API says the register is enabled. There is no equivalent on iOS — see below.
 
 ## Updating
 
-1. The owner opens the app. On launch it asks `/api/mobile/android/manifest?channel=…` what the published build for its channel is.
+Preview only. Production is distributed through Google Play, which handles its own updates — Play's policy does not allow `REQUEST_INSTALL_PACKAGES` unless installing packages is the app's core purpose, so production neither requests the permission nor runs any of this.
+
+1. The owner opens the (preview) app. On launch it asks `/api/mobile/android/manifest?channel=preview` what the published build is.
 2. If that build is newer, the home screen shows a bubble: a new version has been released, with its version name, notes and download size, and an **Update** button. If the installed build is below the channel's minimum supported version, the bubble says the update is required.
 3. **Update** downloads the APK inside the app, with progress in the bubble, and hashes it. The hash must equal the `sha256` in the manifest that the build workflow published beside the APK. If it does not match, the app deletes the file and installs nothing.
 4. The app hands the verified file to Android's installer. Android shows its own install screen, and the owner confirms there. The first time, Android also asks the owner to allow installs from Tera (`REQUEST_INSTALL_PACKAGES`). No app can skip either screen, and the bubble says so before the download starts. The wallet data stays, because the APK updates the same app.
 
 A published build that is not newer than the installed one is never offered, so there is no downgrade. A build that cannot read its own version code is not offered anything.
 
-This entire mechanism — the bubble, the channel manifest, the APK download and the cert-pinned install — is Android-only, and deliberately does not run on iOS at all. Apple does not allow an app to fetch and install its own executable code outside App Review, so there is no iOS equivalent to build here: `installedChannel()` (`src/update.ts`) only recognizes the two Android application IDs and returns `null` for anything else, and the check in `App.tsx` is separately gated to `Platform.OS === "android"` as well. An iOS build reaches users only through a new TestFlight/App Store submission — see [iOS](#ios).
+This entire mechanism — the bubble, the channel manifest, the APK download and the cert-pinned install — is Android preview-only, and deliberately does not run on iOS, or on Android production, at all. Apple does not allow an app to fetch and install its own executable code outside App Review, so there is no iOS equivalent to build here: `installedChannel()` (`src/update.ts`) only recognizes the two Android application IDs and returns `null` for anything else, and every call site in `App.tsx` is separately gated to `installedChannel() === "preview"`. An iOS build reaches users only through a new TestFlight/App Store submission (see [iOS](#ios)); an Android production build reaches users only through a new Google Play release.
 
 ### Channels
 
@@ -104,7 +106,7 @@ For a distribution build, add these **Actions secrets**, set `ANDROID_RELEASE_CE
 | `ANDROID_KEY_ALIAS` | Release signing alias |
 | `ANDROID_KEY_PASSWORD` | Alias password |
 
-The release produces an APK and AAB for `app.terawallet.android`; the workflow run number sets the version code. The APK and its manifest are published to the `android-production` GitHub release. The AAB is kept only as a workflow artifact. Preserve the signing keystore for future updates. Preview and production installs have separate storage; preview does not upgrade into production. This workflow does not publish to Google Play.
+The release produces an APK and AAB for `app.terawallet.android`; the workflow run number sets the version code. The APK and its manifest are published to the `android-production` GitHub release, for anyone installing directly rather than through Play — it has no updater of its own, so a manual download is a one-time install until the next release. The AAB is kept only as a workflow artifact; download it from the run and upload it to Google Play Console by hand. Preserve the signing keystore for future updates. Preview and production installs have separate storage; preview does not upgrade into production. This workflow does not submit to Google Play itself.
 
 ## iOS
 
