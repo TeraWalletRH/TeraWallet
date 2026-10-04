@@ -62,6 +62,10 @@ import {
   ROLES,
   SAFE,
   safeTxTypedData,
+  EXPIRATION_PRESETS,
+  parseExpirationSeconds,
+  isProposalExpired,
+  remainingSeconds,
   type Role,
 } from "./teams-core";
 
@@ -90,6 +94,7 @@ export function config() {
     chainId: env.rhcChainId,
     safe: SAFE,
     roles: ROLES,
+    expirationPresets: EXPIRATION_PRESETS,
     authority:
       "The treasury is a Safe: only its signers' approvals can move money, checked by the contract. Tera keeps the member list and the approval queue, and cannot execute anything.",
   };
@@ -394,6 +399,19 @@ async function reconcile(db: Db, safe: Address) {
     ]);
     if (!rejected && row.kind === "threshold") await adoptRule(db, safe, row.rule);
   }
+  // Expired proposals: auto-transition pending proposals whose expiration deadline has passed.
+  const expired = await db.query(
+    "SELECT id, nonce FROM team_proposals WHERE safe_address=$1 AND status='pending' AND expires_at IS NOT NULL AND expires_at <= NOW() ORDER BY nonce NULLS LAST",
+    [safe],
+  );
+  for (const exp of expired.rows) {
+    await db.query("UPDATE team_proposals SET status='expired', closed_at=NOW() WHERE id=$1", [
+      exp.id,
+    ]);
+    if (exp.nonce !== null && exp.nonce !== undefined) {
+      await closeGap(db, safe, BigInt(exp.nonce));
+    }
+  }
   const team = await db.query("SELECT approval_rule FROM teams WHERE safe_address=$1", [safe]);
   const startRule: number | null = team.rows[0]?.approval_rule
     ? Number(team.rows[0].approval_rule)
@@ -643,6 +661,14 @@ export async function viewTeam(body: Record<string, unknown>) {
         createdBy: getAddress(row.created_by),
         createdAt: new Date(row.created_at).toISOString(),
         status: row.status,
+        expiresAt: row.expires_at ? new Date(row.expires_at).toISOString() : null,
+        expired:
+          row.status === "expired" ||
+          Boolean(row.expires_at && new Date(row.expires_at).getTime() <= Date.now()),
+        remainingSeconds:
+          row.expires_at && row.status === "pending"
+            ? Math.max(0, Math.floor((new Date(row.expires_at).getTime() - Date.now()) / 1000))
+            : null,
         cancelRequested: row.cancel_requested,
         rebuiltAt: row.rebuilt_at ? new Date(row.rebuilt_at).toISOString() : null,
         executedTxHash: row.executed_tx_hash,
@@ -903,20 +929,29 @@ export async function propose(body: Record<string, unknown>) {
   must(nativePayment || tokenPayment, "A team proposal is a single payment.");
   must(to !== safe, "A payment cannot be sent to the treasury itself.");
   const note = cleanText(body.note, MAX_NOTE);
-  const wallet = await signed("propose", safe, body, [
+  const expirationSeconds = parseExpirationSeconds(body.expirationSeconds ?? body.expiresIn);
+  const fields: [string, unknown][] = [
     ["To", to.toLowerCase()],
     ["Value", value.toString()],
     ["Data", data],
     ["Note", note],
-  ]);
+  ];
+  if (expirationSeconds !== null) {
+    fields.push(["ExpiresIn", `${expirationSeconds}s`]);
+  }
+  const wallet = await signed("propose", safe, body, fields);
   await requireAbility(safe, wallet, "propose");
+  const expiresAt =
+    expirationSeconds !== null
+      ? new Date(Date.now() + expirationSeconds * 1000).toISOString()
+      : null;
   // No place in the queue yet: that comes with the first approval.
   const inserted = await pool!.query(
-    `INSERT INTO team_proposals(safe_address, kind, to_address, value, data, note, created_by)
-     VALUES($1,'payment',$2,$3,$4,$5,$6) RETURNING id`,
-    [safe, to, value.toString(), data, note, wallet],
+    `INSERT INTO team_proposals(safe_address, kind, to_address, value, data, note, created_by, expires_at)
+     VALUES($1,'payment',$2,$3,$4,$5,$6,$7) RETURNING id`,
+    [safe, to, value.toString(), data, note, wallet, expiresAt],
   );
-  return { id: String(inserted.rows[0].id) };
+  return { id: String(inserted.rows[0].id), expiresAt };
 }
 
 async function proposalRow(input: unknown) {
@@ -947,6 +982,15 @@ export async function approve(body: Record<string, unknown>) {
     const found = await db.query("SELECT * FROM team_proposals WHERE id=$1", [first.id]);
     const row = found.rows[0];
     must(row.status === "pending", "This proposal is no longer waiting for approvals.");
+    if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) {
+      await db.query("UPDATE team_proposals SET status='expired', closed_at=NOW() WHERE id=$1", [
+        row.id,
+      ]);
+      if (row.nonce !== null && row.nonce !== undefined) {
+        await closeGap(db, safe, BigInt(row.nonce));
+      }
+      throw new TeamServiceError("This proposal has expired.");
+    }
     must(
       state.owners.includes(wallet),
       "Only the treasury's signers can approve. Yours is still waiting to be added.",
@@ -1009,6 +1053,15 @@ export async function reject(body: Record<string, unknown>) {
     const found = await db.query("SELECT * FROM team_proposals WHERE id=$1", [first.id]);
     const row = found.rows[0];
     must(row.status === "pending", "This proposal is no longer waiting for approvals.");
+    if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) {
+      await db.query("UPDATE team_proposals SET status='expired', closed_at=NOW() WHERE id=$1", [
+        row.id,
+      ]);
+      if (row.nonce !== null && row.nonce !== undefined) {
+        await closeGap(db, safe, BigInt(row.nonce));
+      }
+      throw new TeamServiceError("This proposal has expired.");
+    }
     await requireAbility(safe, wallet, "approve");
     must(state.owners.includes(wallet), "Only the treasury's signers can reject.");
     let signature: string | null = null;
@@ -1098,6 +1151,9 @@ export async function cancel(body: Record<string, unknown>) {
 export async function executed(body: Record<string, unknown>) {
   must(enabled(), "Teams are unavailable.", 503);
   const row = await proposalRow(body.id);
+  if (row.expires_at && new Date(row.expires_at).getTime() <= Date.now()) {
+    throw new TeamServiceError("This proposal has expired.");
+  }
   const hash = String(body.txHash ?? "");
   must(/^0x[\da-fA-F]{64}$/.test(hash), "A transaction hash is required.");
   must(row.nonce !== null, "This proposal has no place in the queue yet.");
