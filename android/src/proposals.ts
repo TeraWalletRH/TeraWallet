@@ -31,6 +31,10 @@ export function verifyProposal(proposal: any, owner: string, now = Date.now()): 
   txCheck(tx);
   if (intent.actionType === "TRANSFER") {
     check(!tx.approvals?.length);
+    if (intent.transfers && Array.isArray(intent.transfers) && intent.transfers.length > 1) {
+      check(same(tx.to, "0xca11bde05977b3631167028862be2a173976ca11"));
+      return [tx];
+    }
     verifyTransfer(tx, intent.assetAddress, intent.recipient, intent.amount);
     return [tx];
   }

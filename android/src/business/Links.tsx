@@ -3,10 +3,10 @@
 
 import * as Clipboard from "expo-clipboard";
 import React, { useCallback, useEffect, useState } from "react";
-import { Linking, Pressable, TextInput, View } from "react-native";
+import { Image, Linking, Modal, Pressable, TextInput, View } from "react-native";
 import type { Address } from "viem";
 import { spend } from "../core";
-import { cancelLink, createLink, myLinks, payLinksAvailable, type PayLink } from "../paylinks";
+import { cancelLink, createLink, myLinks, payLinksAvailable, viewLink, linkUrl, type PayLink } from "../paylinks";
 import { Button, colors, Field, Header, Skeleton, styles as s, Text } from "../ui";
 import { explorerTx, short } from "./data";
 import { linkedEmail } from "./email";
@@ -57,6 +57,7 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [invoiceModal, setInvoiceModal] = useState<PayLink | null>(null);
 
   const load = useCallback(async () => {
     setError("");
@@ -75,6 +76,22 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
       .then((found) => setEmail(found?.email ?? null))
       .catch(() => setEmail(null));
   }, [load, owner]);
+
+  useEffect(() => {
+    if (!invoiceModal || invoiceModal.status === "paid") return;
+    const interval = setInterval(async () => {
+      try {
+        const latest = await viewLink(invoiceModal.id);
+        if (latest && latest.status === "paid") {
+          setInvoiceModal(latest);
+          setLinks((cur) => (cur || []).map((l) => (l.id === latest.id ? latest : l)));
+        }
+      } catch {
+        // ignore polling errors
+      }
+    }, 2500);
+    return () => clearInterval(interval);
+  }, [invoiceModal]);
 
   async function work(task: () => Promise<void>) {
     setBusy(true);
@@ -187,6 +204,7 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
               setAmount("");
               setNote("");
               setLinks((current) => [made, ...(current || [])]);
+              setInvoiceModal(made);
               copy(made);
             })
           }
@@ -249,7 +267,8 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
                       `创建于 ${new Date(link.createdAt).toLocaleString()}`,
                     )}
               </Text>
-              <View style={{ flexDirection: "row", gap: 18, flexWrap: "wrap" }}>
+              <View style={{ flexDirection: "row", gap: 18, flexWrap: "wrap", alignItems: "center" }}>
+                <Action label={t("Invoice card ↗", "收款卡片 ↗")} onPress={() => setInvoiceModal(link)} />
                 {link.status === "open" && (
                   <>
                     <Action label={t("Copy link", "复制链接")} onPress={() => copy(link)} />
@@ -280,6 +299,107 @@ export function LinksScreen({ t, owner, go, notify }: LinksProps) {
           ))
         )}
       </Card>
+      <Modal visible={!!invoiceModal} transparent animationType="fade" onRequestClose={() => setInvoiceModal(null)}>
+        <View style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "center", alignItems: "center", padding: 20 }}>
+          <View style={[s.panel, { width: "100%", maxWidth: 400, borderRadius: 24, padding: 24, gap: 16, backgroundColor: colors.sheet, borderWidth: 1, borderColor: colors.line }]}>
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View>
+                <Text style={[s.label, { fontWeight: "800" }]}>{invoiceModal?.name || "Tera Merchant"}</Text>
+                <Text style={[s.small, { color: colors.muted }]}>Robinhood Chain</Text>
+              </View>
+              <View
+                style={{
+                  paddingHorizontal: 10,
+                  paddingVertical: 4,
+                  borderRadius: 12,
+                  backgroundColor: invoiceModal?.status === "paid" ? colors.green + "20" : colors.tint,
+                  borderColor: invoiceModal?.status === "paid" ? colors.green : colors.copper,
+                  borderWidth: 1,
+                }}
+              >
+                <Text
+                  style={{
+                    color: invoiceModal?.status === "paid" ? colors.green : colors.copper,
+                    fontSize: 12,
+                    fontWeight: "700",
+                  }}
+                >
+                  {invoiceModal?.status === "paid" ? t("Paid & Verified", "已付款并验证") : t("Waiting for payment…", "等待付款…")}
+                </Text>
+              </View>
+            </View>
+
+            <View style={{ alignItems: "center", paddingVertical: 12, gap: 4 }}>
+              <Text style={{ fontSize: 36, fontWeight: "800", color: colors.ink }}>
+                {invoiceModal ? spend.formatDollars(BigInt(invoiceModal.amount)) : "$0.00"}
+              </Text>
+              <Text style={[s.small, { color: colors.muted, fontWeight: "600" }]}>USDG</Text>
+              {invoiceModal?.note ? <Text style={[s.small, { color: colors.ink, marginTop: 4 }]}>{invoiceModal.note}</Text> : null}
+            </View>
+
+            {invoiceModal?.status === "paid" ? (
+              <View style={{ alignItems: "center", padding: 16, backgroundColor: colors.wash, borderRadius: 16, gap: 8 }}>
+                <View style={{ width: 44, height: 44, borderRadius: 22, backgroundColor: colors.green, alignItems: "center", justifyContent: "center" }}>
+                  <Text style={{ color: "#fff", fontSize: 22, fontWeight: "bold" }}>✓</Text>
+                </View>
+                <Text style={[s.label, { fontWeight: "700", color: colors.green }]}>{t("Payment Received", "付款已到账")}</Text>
+                <Text style={s.small}>{t("Settled on Robinhood Chain", "已在 Robinhood Chain 上结算")}</Text>
+                {invoiceModal.payer ? (
+                  <Text style={[s.small, { color: colors.muted }]}>
+                    {t("From:", "付款人:")} {short(invoiceModal.payer)}
+                  </Text>
+                ) : null}
+                {invoiceModal.paidTx ? (
+                  <Pressable accessibilityRole="button" onPress={() => void Linking.openURL(explorerTx(invoiceModal.paidTx!))}>
+                    <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                      {t("View in Explorer ↗", "在区块浏览器中查看 ↗")}
+                    </Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : invoiceModal ? (
+              <View style={{ alignItems: "center", gap: 12 }}>
+                <View style={{ backgroundColor: "#ffffff", padding: 12, borderRadius: 16, borderWidth: 1, borderColor: colors.line }}>
+                  <Image
+                    source={{
+                      uri: `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(linkUrl(invoiceModal.id))}`,
+                    }}
+                    style={{ width: 180, height: 180 }}
+                    accessibilityLabel={t("Invoice QR Code", "账单收款二维码")}
+                  />
+                </View>
+                <Text style={[s.small, { textAlign: "center", color: colors.muted }]}>
+                  {t("Scan with camera or mobile wallet to pay", "使用相机或手机钱包扫码支付")}
+                </Text>
+                <View style={{ flexDirection: "row", gap: 8, width: "100%" }}>
+                  <View style={{ flex: 1 }}>
+                    <Button
+                      primary
+                      onPress={() => copy(invoiceModal)}
+                    >
+                      {t("Copy link", "复制链接")}
+                    </Button>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Button
+                      onPress={() => {
+                        const text = `Pay invoice of ${spend.formatDollars(BigInt(invoiceModal.amount))} USDG to ${invoiceModal.name} on Robinhood Chain via @TeraWalletRH: ${linkUrl(invoiceModal.id)}`;
+                        void Linking.openURL(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`);
+                      }}
+                    >
+                      {t("Share to X ↗", "分享至 X ↗")}
+                    </Button>
+                  </View>
+                </View>
+              </View>
+            ) : null}
+
+            <Button onPress={() => setInvoiceModal(null)}>
+              {t("Close", "关闭")}
+            </Button>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }

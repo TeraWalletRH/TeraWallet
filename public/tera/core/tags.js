@@ -259,9 +259,17 @@ export function tagPaymentUrl(tag) {
   return `https://terawallet.app/pay/@${clean}`;
 }
 
-/** Structured data for generating a shareable tag receive card and X social post. */
+/** 
+ * Structured data for generating a shareable tag receive card and X social post.
+ * @param {{ tag?: string, address?: string, network?: string }} [options]
+ */
 export function tagReceiveCardData({ tag, address, network = "Robinhood Chain" } = {}) {
-  const clean = normalise(tag);
+  let clean = "astra";
+  try {
+    clean = normalise(String(tag || "").replace(/^@+/, ""));
+  } catch {
+    clean = String(tag || "astra").replace(/^@+/, "").replace(/[^a-z0-9_]/gi, "").toLowerCase() || "astra";
+  }
   const handle = display(clean);
   const paymentUrl = tagPaymentUrl(clean);
   const shareText = `Send USDG & crypto directly to my verified handle ${handle} on @RobinhoodApp Chain via @TeraWalletRH 💳⚡️\n\nNo 42-character hex addresses. 1-click execution.\n\nClaim your handle 👇`;

@@ -25,6 +25,7 @@ import {
 } from "../ui";
 import { amountText, priceNow, short, usd } from "./data";
 import { isEmail, linkedEmail, resolveEmail } from "./email";
+import { isProposalExpired, remainingSeconds } from "../../../public/tera/core/teams.js";
 import {
   approve,
   can,
@@ -799,10 +800,26 @@ function TeamView({
                       : next
                         ? t("Next to send", "下一个发送")
                         : t(`${ahead} ahead of it`, `前面还有 ${ahead} 个`),
-                  ].join(" · ")}
+                    (proposal as any).expires_at || (proposal as any).expiresAt
+                      ? isProposalExpired((proposal as any).expires_at || (proposal as any).expiresAt)
+                        ? t("Expired", "已过期")
+                        : (() => {
+                            const sec = remainingSeconds((proposal as any).expires_at || (proposal as any).expiresAt) ?? 0;
+                            const d = Math.floor(sec / 86400);
+                            const h = Math.floor((sec % 86400) / 3600);
+                            const m = Math.floor((sec % 3600) / 60);
+                            return d > 0 ? t(`Expires in ${d}d ${h}h`, `${d}天${h}小时后过期`) : h > 0 ? t(`Expires in ${h}h ${m}m`, `${h}小时${m}分后过期`) : t(`Expires in ${m}m`, `${m}分钟后过期`);
+                          })()
+                      : null,
+                  ].filter(Boolean).join(" · ")}
                 </Text>
               </View>
             </View>
+            {(proposal as any).expires_at || (proposal as any).expiresAt
+              ? isProposalExpired((proposal as any).expires_at || (proposal as any).expiresAt)
+                ? warn(t("This proposal has expired and cannot be executed.", "此提案已过期，无法执行。"))
+                : null
+              : null}
             {rewritten
               ? warn(
                   t(
