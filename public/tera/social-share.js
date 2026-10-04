@@ -399,4 +399,261 @@
     };
     return btn;
   };
+
+  /**
+   * Generates a 1200x630 HTML5 Canvas image blob/data URL representing a Tag Receive Card.
+   */
+  function renderTagReceiveCanvas(data) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 1200;
+    canvas.height = 630;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return canvas;
+
+    const tag = (data.tag || 'owner').replace(/^@+/, '');
+    const handle = `@${tag}`;
+    const address = data.address || '';
+    const network = data.network || 'ROBINHOOD CHAIN';
+
+    // 1. Dark emerald background
+    const bgGradient = ctx.createLinearGradient(0, 0, 1200, 630);
+    bgGradient.addColorStop(0, '#0a140e');
+    bgGradient.addColorStop(0.5, '#0f2417');
+    bgGradient.addColorStop(1, '#050c08');
+    ctx.fillStyle = bgGradient;
+    ctx.fillRect(0, 0, 1200, 630);
+
+    // Glowing accents
+    const orb = ctx.createRadialGradient(1000, 120, 10, 1000, 120, 450);
+    orb.addColorStop(0, 'rgba(0, 200, 83, 0.25)');
+    orb.addColorStop(1, 'rgba(0, 200, 83, 0)');
+    ctx.fillStyle = orb;
+    ctx.fillRect(0, 0, 1200, 630);
+
+    // Card frame
+    ctx.strokeStyle = 'rgba(0, 200, 83, 0.35)';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(30, 30, 1140, 570);
+
+    // Inner Glass Panel
+    ctx.fillStyle = 'rgba(18, 30, 23, 0.75)';
+    ctx.fillRect(50, 50, 1100, 530);
+
+    // Brand logo
+    ctx.fillStyle = '#00c853';
+    ctx.beginPath();
+    ctx.arc(95, 110, 24, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.fillStyle = '#050c08';
+    ctx.font = '900 24px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('T', 95, 118);
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '700 28px system-ui, sans-serif';
+    ctx.fillText('TERA WALLET', 135, 106);
+
+    ctx.fillStyle = '#00e676';
+    ctx.font = '600 16px system-ui, sans-serif';
+    ctx.fillText(`${network.toUpperCase()} · ARBITRUM ORBIT L2`, 135, 130);
+
+    // Verified Handle badge (Top Right)
+    ctx.fillStyle = 'rgba(0, 200, 83, 0.15)';
+    ctx.strokeStyle = '#00c853';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(850, 85, 250, 48);
+    ctx.fillStyle = '#00e676';
+    ctx.font = '700 16px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('✓ VERIFIED HANDLE', 975, 115);
+
+    // Separator line
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(80, 160);
+    ctx.lineTo(1120, 160);
+    ctx.stroke();
+
+    // Body: Big handle
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#a0aec0';
+    ctx.font = '600 16px system-ui, sans-serif';
+    ctx.fillText('CLAIMED PAYMENT HANDLE', 80, 210);
+
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '800 64px system-ui, sans-serif';
+    ctx.fillText(handle, 80, 290);
+
+    if (address) {
+      ctx.fillStyle = '#00e676';
+      ctx.font = '600 22px monospace';
+      ctx.fillText(address, 80, 340);
+    }
+
+    // Callout
+    ctx.fillStyle = '#cbd5e0';
+    ctx.font = '500 20px system-ui, sans-serif';
+    ctx.fillText('Send USDG and tokens directly to this tag on Robinhood Chain.', 80, 420);
+    ctx.fillText('No complex 42-character hex addresses required.', 80, 455);
+
+    // QR Box on right
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(860, 200, 220, 220);
+    ctx.strokeStyle = '#00c853';
+    ctx.lineWidth = 4;
+    ctx.strokeRect(860, 200, 220, 220);
+
+    ctx.fillStyle = '#050c08';
+    ctx.font = '700 16px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText('SCAN TO PAY', 970, 305);
+    ctx.fillStyle = '#00c853';
+    ctx.font = '700 14px system-ui, sans-serif';
+    ctx.fillText(handle, 970, 330);
+
+    // Footer
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.1)';
+    ctx.beginPath();
+    ctx.moveTo(80, 520);
+    ctx.lineTo(1120, 520);
+    ctx.stroke();
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = '#68d391';
+    ctx.font = '600 16px system-ui, sans-serif';
+    ctx.fillText('⚡️ Powered by Tera Wallet & Robinhood Chain', 80, 555);
+
+    return canvas;
+  }
+
+  function buildTagTwitterIntentUrl(data) {
+    const clean = String(data.tag || 'owner').replace(/^@+/, '');
+    const handle = `@${clean}`;
+    const payUrl = `https://terawallet.app/pay/@${clean}`;
+    const tweetText = `Send USDG & crypto directly to my verified handle ${handle} on @RobinhoodApp Chain via @TeraWalletRH 💳⚡️\n\nNo 42-character hex addresses. 1-click execution.\n\nClaim your handle 👇`;
+    return {
+      tweetText,
+      intentUrl: `https://x.com/intent/tweet?text=${encodeURIComponent(tweetText)}&url=${encodeURIComponent(payUrl)}`,
+      payUrl,
+    };
+  }
+
+  /**
+   * Open the "Share My Tag" Modal
+   */
+  window.openTagShareModal = function (data = {}) {
+    const existing = document.getElementById('tera-tag-share-modal');
+    if (existing) existing.remove();
+
+    const { tweetText, intentUrl, payUrl } = buildTagTwitterIntentUrl(data);
+
+    const overlay = document.createElement('div');
+    overlay.id = 'tera-tag-share-modal';
+    overlay.className = 'tera-share-modal-overlay';
+
+    overlay.innerHTML = `
+      <div class="tera-share-modal-card">
+        <div class="tera-share-header">
+          <div class="tera-share-title-group">
+            <span class="tera-share-badge">Verified Handle Card</span>
+            <h3 class="tera-share-title">Share My @Tag</h3>
+          </div>
+          <button class="tera-share-close-btn" id="tera-tag-share-close">&times;</button>
+        </div>
+        
+        <div class="tera-share-body">
+          <div class="tera-card-preview-container" id="tera-tag-canvas-wrapper">
+          </div>
+
+          <div class="tera-tweet-preview-box">
+            <div class="tera-tweet-preview-label">Post on X Preview</div>
+            <div class="tera-tweet-preview-text">${tweetText.replace(/</g, '&lt;')}</div>
+          </div>
+
+          <div class="tera-share-actions">
+            <a href="${intentUrl}" target="_blank" rel="noopener noreferrer" class="tera-btn tera-btn-x" id="tera-btn-tag-x">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+              </svg>
+              Share to X
+            </a>
+
+            <button type="button" class="tera-btn tera-btn-secondary" id="tera-btn-tag-copy-img">
+              📋 Copy Image
+            </button>
+
+            <button type="button" class="tera-btn tera-btn-outline" id="tera-btn-tag-download">
+              ⬇ Download PNG
+            </button>
+
+            <button type="button" class="tera-btn tera-btn-outline" id="tera-btn-tag-copy-link">
+              🔗 Copy Payment Link
+            </button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    const canvas = renderTagReceiveCanvas(data);
+    canvas.className = 'tera-card-preview-canvas';
+    const wrapper = overlay.querySelector('#tera-tag-canvas-wrapper');
+    wrapper.appendChild(canvas);
+
+    overlay.querySelector('#tera-tag-share-close').onclick = () => overlay.remove();
+    overlay.onclick = (e) => {
+      if (e.target === overlay) overlay.remove();
+    };
+
+    overlay.querySelector('#tera-btn-tag-copy-img').onclick = async () => {
+      try {
+        canvas.toBlob(async (blob) => {
+          if (blob) {
+            await navigator.clipboard.write([
+              new ClipboardItem({ 'image/png': blob }),
+            ]);
+            showToast('Tag Card copied to clipboard! Paste directly into X.');
+          }
+        });
+      } catch (err) {
+        showToast('Direct copy unsupported on browser. Use Download PNG!');
+      }
+    };
+
+    overlay.querySelector('#tera-btn-tag-download').onclick = () => {
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.download = `tera-tag-${data.tag || 'card'}.png`;
+      link.href = dataUrl;
+      link.click();
+      showToast('Tag Card downloaded!');
+    };
+
+    overlay.querySelector('#tera-btn-tag-copy-link').onclick = () => {
+      navigator.clipboard.writeText(payUrl);
+      showToast('Tag payment link copied!');
+    };
+  };
+
+  window.createTagShareButton = function (tag, address) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'tera-share-trigger-btn tera-tag-share-btn';
+    btn.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+      </svg>
+      Share My Tag
+    `;
+    btn.onclick = (e) => {
+      e.stopPropagation();
+      window.openTagShareModal({ tag, address });
+    };
+    return btn;
+  };
 })();
+
