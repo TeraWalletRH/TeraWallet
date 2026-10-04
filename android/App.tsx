@@ -5184,6 +5184,8 @@ function Wallet() {
       );
     }
     if (page === "tag") {
+      const activeTag = myTag || (claimInput && tags.isTag(claimInput) ? claimInput : "tera");
+      const cardData = tags.tagReceiveCardData({ tag: activeTag, address: owner });
       return (
         <>
           <Header
@@ -5191,12 +5193,118 @@ function Wallet() {
             onBack={() => setPage("home")}
             backLabel={t("Back", "返回")}
           />
-          <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
-            <Icon name="at" size={30} color={colors.green} />
-            <Text style={[s.text, { fontSize: 20, fontWeight: "700" }]}>
-              {myTag ? tags.display(myTag) : t("Not claimed yet", "尚未领取")}
+          {/* Branded Emerald Tag Receive Card & Social Graphic */}
+          <View
+            style={[
+              s.panel,
+              {
+                borderRadius: 22,
+                padding: 20,
+                gap: 14,
+                backgroundColor: "#0a140e",
+                borderColor: colors.green,
+                borderWidth: 1.5,
+                overflow: "hidden",
+              },
+            ]}
+          >
+            <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <View
+                  style={{
+                    width: 26,
+                    height: 26,
+                    borderRadius: 13,
+                    backgroundColor: colors.green,
+                    alignItems: "center",
+                    justifyContent: "center",
+                  }}
+                >
+                  <Text style={{ color: "#0a140e", fontWeight: "900", fontSize: 15 }}>T</Text>
+                </View>
+                <View>
+                  <Text style={{ color: "#ffffff", fontWeight: "800", fontSize: 14 }}>TERA WALLET</Text>
+                  <Text style={{ color: colors.lime, fontWeight: "700", fontSize: 9, letterSpacing: 0.8 }}>
+                    ROBINHOOD CHAIN
+                  </Text>
+                </View>
+              </View>
+              <View
+                style={{
+                  backgroundColor: "#00c85322",
+                  borderColor: colors.green,
+                  borderWidth: 1,
+                  borderRadius: 999,
+                  paddingHorizontal: 8,
+                  paddingVertical: 3,
+                }}
+              >
+                <Text style={{ color: colors.lime, fontWeight: "700", fontSize: 10 }}>✓ VERIFIED TAG</Text>
+              </View>
+            </View>
+
+            <View style={{ marginVertical: 8 }}>
+              <Text style={{ color: colors.faint, fontSize: 10, fontWeight: "700", letterSpacing: 0.8 }}>
+                CLAIMED IDENTITY
+              </Text>
+              <Text style={{ color: "#ffffff", fontSize: 32, fontWeight: "800", marginTop: 2 }}>
+                {cardData.handle}
+              </Text>
+              <Text style={{ color: colors.lime, fontSize: 12, fontFamily: "monospace", marginTop: 4 }}>
+                {short(owner)}
+              </Text>
+            </View>
+
+            <Text style={{ color: colors.muted, fontSize: 11 }}>
+              {t("Scan or send directly via @tags on Robinhood Chain", "在 Robinhood Chain 上通过 @标签 直接扫码或付款")}
             </Text>
+
+            <View style={{ flexDirection: "row", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void Linking.openURL(cardData.intentUrl)}
+                style={{
+                  backgroundColor: "#000",
+                  borderColor: colors.line,
+                  borderWidth: 1,
+                  borderRadius: 12,
+                  paddingHorizontal: 14,
+                  paddingVertical: 9,
+                  flexDirection: "row",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>Share to X ↗</Text>
+              </Pressable>
+
+              <Pressable
+                accessibilityRole="button"
+                onPress={() =>
+                  void Clipboard.setStringAsync(cardData.paymentUrl).then(() =>
+                    notify({
+                      title: t("Payment link copied", "收款链接已复制"),
+                      body: cardData.paymentUrl,
+                      tone: "success",
+                    }),
+                  )
+                }
+                style={{
+                  backgroundColor: colors.tint,
+                  borderColor: colors.green,
+                  borderWidth: 1,
+                  borderRadius: 12,
+                  paddingHorizontal: 14,
+                  paddingVertical: 9,
+                }}
+              >
+                <Text style={{ color: colors.green, fontWeight: "700", fontSize: 12 }}>
+                  {t("Copy payment link", "复制收款链接")}
+                </Text>
+              </Pressable>
+            </View>
           </View>
+
           <Field
             label={t("Tag", "标签")}
             value={claimInput}
