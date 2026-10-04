@@ -9955,6 +9955,15 @@ function Wallet() {
           </View>
         ))}
         <Button
+          onPress={() => {
+            if (typeof window !== "undefined") {
+              window.open("/support", "_blank");
+            }
+          }}
+        >
+          {t("Help & Support ↗", "帮助与支持 ↗")}
+        </Button>
+        <Button
           disabled={busy}
           onPress={() =>
             authenticate(t("Erase wallet", "删除钱包"), async () => {
@@ -10455,6 +10464,16 @@ function Wallet() {
             onPress: () => {
               setSettingsSection("contacts");
               setPage("settings");
+            },
+          },
+          {
+            key: "support",
+            icon: "help-circle-outline",
+            label: t("Support", "支持"),
+            onPress: () => {
+              if (typeof window !== "undefined") {
+                window.open("/support", "_blank");
+              }
             },
           },
         ]}
