@@ -107,3 +107,146 @@ export function paymentIn(
   }
   return null;
 }
+
+export function formatInvoiceAmount(amountUnits: unknown): string {
+  try {
+    const bi = BigInt(String(amountUnits ?? 0));
+    const whole = bi / 1000000n;
+    const cents = (bi % 1000000n) / 10000n;
+    return `$${whole.toLocaleString("en-US")}.${cents.toString().padStart(2, "0")}`;
+  } catch {
+    return "$0.00";
+  }
+}
+
+export function invoiceStatus(link: any): "waiting" | "settled" | "cancelled" {
+  if (!link) return "waiting";
+  if (link.status === "cancelled" || link.cancelled) return "cancelled";
+  if (link.status === "paid" || Boolean(link.paidTx)) return "settled";
+  return "waiting";
+}
+
+export interface InvoiceCard {
+  id: string;
+  merchant: string;
+  name: string;
+  amount: string;
+  amountFormatted: string;
+  note: string;
+  payUrl: string;
+  status: "waiting" | "settled" | "cancelled";
+  networkName: string;
+  paidTx: string | null;
+  payer: string | null;
+  paidAt: string | null;
+  isSettled: boolean;
+}
+
+export function createInvoiceCard(
+  link: any,
+  { networkName = "Robinhood Chain" } = {},
+): InvoiceCard {
+  const status = invoiceStatus(link);
+  const id = link?.id || "";
+  const payUrl = linkUrl(id);
+  const amountFormatted = formatInvoiceAmount(link?.amount);
+  const merchant = link?.merchant || "";
+  const name = link?.name || link?.email || "Tera Merchant";
+  const note = link?.note || "";
+
+  return {
+    id,
+    merchant,
+    name,
+    amount: String(link?.amount || "0"),
+    amountFormatted,
+    note,
+    payUrl,
+    status,
+    networkName,
+    paidTx: link?.paidTx || null,
+    payer: link?.payer || null,
+    paidAt: link?.paidAt || null,
+    isSettled: status === "settled",
+  };
+}
+
+export function renderInvoiceCardHtml(invoice: InvoiceCard, { qrSvg = "" } = {}): string {
+  const isSettled = invoice.status === "settled";
+  const statusLabel = isSettled ? "Paid & Verified" : "Waiting for payment...";
+  const statusClass = isSettled ? "settled" : "waiting";
+
+  return `<div class="tera-invoice-card ${statusClass}" data-invoice-id="${invoice.id}">
+  <div class="invoice-header">
+    <div class="merchant-badge">
+      <span class="merchant-name">${invoice.name}</span>
+      <span class="network-tag">${invoice.networkName}</span>
+    </div>
+    <div class="invoice-status-pill ${statusClass}">
+      <span class="status-dot"></span>
+      <span class="status-text">${statusLabel}</span>
+    </div>
+  </div>
+
+  <div class="invoice-amount-section">
+    <span class="amount-value">${invoice.amountFormatted}</span>
+    <span class="currency-label">USDG</span>
+  </div>
+  ${invoice.note ? `<p class="invoice-note">${invoice.note}</p>` : ""}
+
+  ${
+    isSettled
+      ? `<div class="invoice-settled-view">
+          <div class="settled-icon">✓</div>
+          <h3>Payment Received</h3>
+          <p class="settled-detail">Settled on Robinhood Chain</p>
+          ${invoice.paidTx ? `<div class="tx-hash"><span>Tx:</span> <code>${invoice.paidTx.slice(0, 10)}…${invoice.paidTx.slice(-8)}</code></div>` : ""}
+          ${invoice.payer ? `<div class="payer-addr"><span>From:</span> <code>${invoice.payer.slice(0, 8)}…${invoice.payer.slice(-6)}</code></div>` : ""}
+        </div>`
+      : `<div class="invoice-qr-section">
+          <div class="qr-wrapper">
+            ${qrSvg || `<img src="/api/pay-links/qr/${invoice.id}" alt="Payment QR Code" class="qr-img" />`}
+          </div>
+          <p class="qr-instruction">Scan with camera or mobile wallet to pay</p>
+          <div class="pay-link-copy">
+            <input type="text" readonly value="${invoice.payUrl}" class="pay-url-input" />
+          </div>
+        </div>`
+  }
+</div>`;
+}
+
+export async function pollInvoiceSettlement({
+  id,
+  fetchFn,
+  intervalMs = 2000,
+  maxAttempts = 120,
+  onStatusChange,
+  signal,
+}: {
+  id: string;
+  fetchFn: (id: string) => Promise<any>;
+  intervalMs?: number;
+  maxAttempts?: number;
+  onStatusChange?: (update: { link: any; status: string; settled: boolean }) => void;
+  signal?: AbortSignal;
+}) {
+  let attempts = 0;
+  while (attempts < maxAttempts) {
+    if (signal?.aborted) return null;
+    try {
+      const res = await fetchFn(id);
+      const link = res?.link || res;
+      const status = invoiceStatus(link);
+      if (onStatusChange) onStatusChange({ link, status, settled: status === "settled" });
+      if (status === "settled") return { link, settled: true };
+      if (status === "cancelled") return { link, cancelled: true };
+    } catch {
+      // Continue polling
+    }
+    attempts++;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  return null;
+}
+

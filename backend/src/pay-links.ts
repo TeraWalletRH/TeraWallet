@@ -12,6 +12,7 @@ import { createPublicClient, getAddress, http, isAddress, verifyMessage, type He
 import { USDG } from "./bridge";
 import pool from "./db";
 import { env } from "./env";
+import QRCode from "qrcode";
 import {
   ID_ALPHABET,
   ID_LENGTH,
@@ -23,6 +24,7 @@ import {
   linkUrl,
   listMessage,
   paymentIn,
+  createInvoiceCard,
 } from "./pay-links-core";
 
 const SIGNATURE_WINDOW_MS = 5 * 60_000;
@@ -251,3 +253,26 @@ export async function markPaid(body: Record<string, unknown>) {
   );
   return { link: shape(updated) };
 }
+
+export async function invoiceLink(body: Record<string, unknown>) {
+  const id = linkId(body.id);
+  const row = await find(id);
+  const link = shape(row);
+  const invoice = createInvoiceCard(link);
+  let qrSvg = "";
+  try {
+    qrSvg = await QRCode.toString(link.link, { type: "svg", margin: 2 });
+  } catch {
+    qrSvg = "";
+  }
+  return { link, invoice, qrSvg };
+}
+
+export async function qrLink(body: Record<string, unknown>) {
+  const id = linkId(body.id);
+  const row = await find(id);
+  const link = shape(row);
+  const qrSvg = await QRCode.toString(link.link, { type: "svg", margin: 2 });
+  return { id: link.id, payUrl: link.link, qrSvg };
+}
+
