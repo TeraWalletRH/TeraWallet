@@ -128,3 +128,44 @@ export function packSignatures(list: { signer: string; signature: string }[]) {
       .join("")
   );
 }
+
+export const EXPIRATION_PRESETS = {
+  "24h": 86400,
+  "3d": 259200,
+  "7d": 604800,
+  "14d": 1209600,
+  "30d": 2592000,
+} as const;
+
+export const MIN_EXPIRATION_SECONDS = 3600; // 1 hour
+export const MAX_EXPIRATION_SECONDS = 90 * 86400; // 90 days
+
+export function parseExpirationSeconds(input: unknown): number | null {
+  if (input === null || input === undefined || input === "" || input === 0 || input === "0") {
+    return null;
+  }
+  if (typeof input === "string" && input in EXPIRATION_PRESETS) {
+    return EXPIRATION_PRESETS[input as keyof typeof EXPIRATION_PRESETS];
+  }
+  const seconds = Number(input);
+  if (!Number.isFinite(seconds) || !Number.isSafeInteger(seconds)) {
+    throw new TeamError("Invalid expiration duration.");
+  }
+  if (seconds < MIN_EXPIRATION_SECONDS) {
+    throw new TeamError(`Expiration must be at least ${MIN_EXPIRATION_SECONDS / 3600} hour.`);
+  }
+  if (seconds > MAX_EXPIRATION_SECONDS) {
+    throw new TeamError(`Expiration cannot exceed ${MAX_EXPIRATION_SECONDS / 86400} days.`);
+  }
+  return seconds;
+}
+
+export function isProposalExpired(expiresAt: string | Date | null | undefined): boolean {
+  if (!expiresAt) return false;
+  return new Date(expiresAt).getTime() <= Date.now();
+}
+
+export function remainingSeconds(expiresAt: string | Date | null | undefined): number | null {
+  if (!expiresAt) return null;
+  return Math.max(0, Math.floor((new Date(expiresAt).getTime() - Date.now()) / 1000));
+}

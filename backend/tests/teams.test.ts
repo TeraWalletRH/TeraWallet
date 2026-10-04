@@ -198,3 +198,70 @@ describe("A team's own approval rule", () => {
     expect(ruleAfter(3, { kind: "add-signer", subject: A })).toBe(3);
   });
 });
+
+describe("Team Treasury Proposal Expiration Windows", () => {
+  it("exposes standard expiration presets in config and core", () => {
+    expect(backendCore.EXPIRATION_PRESETS["24h"]).toBe(86400);
+    expect(backendCore.EXPIRATION_PRESETS["3d"]).toBe(259200);
+    expect(backendCore.EXPIRATION_PRESETS["7d"]).toBe(604800);
+    expect(siteCore.EXPIRATION_PRESETS["24h"]).toBe(86400);
+    expect(siteCore.EXPIRATION_PRESETS["3d"]).toBe(259200);
+    expect(siteCore.EXPIRATION_PRESETS["7d"]).toBe(604800);
+  });
+
+  it("parses valid expiration presets and numeric seconds", () => {
+    for (const core of [backendCore, siteCore]) {
+      expect(core.parseExpirationSeconds(null)).toBeNull();
+      expect(core.parseExpirationSeconds("")).toBeNull();
+      expect(core.parseExpirationSeconds("24h")).toBe(86400);
+      expect(core.parseExpirationSeconds("3d")).toBe(259200);
+      expect(core.parseExpirationSeconds("7d")).toBe(604800);
+      expect(core.parseExpirationSeconds(7200)).toBe(7200);
+      expect(core.parseExpirationSeconds("14400")).toBe(14400);
+    }
+  });
+
+  it("refuses out-of-bounds or malformed expiration durations", () => {
+    for (const core of [backendCore, siteCore]) {
+      expect(() => core.parseExpirationSeconds("invalid")).toThrow();
+      // Below 1 hour (3600 seconds)
+      expect(() => core.parseExpirationSeconds(1800)).toThrow();
+      // Above 90 days
+      expect(() => core.parseExpirationSeconds(91 * 86400)).toThrow();
+    }
+  });
+
+  it("evaluates expired state and remaining seconds accurately", () => {
+    const pastDate = new Date(Date.now() - 60_000).toISOString();
+    const futureDate = new Date(Date.now() + 120_000).toISOString();
+
+    for (const core of [backendCore, siteCore]) {
+      expect(core.isProposalExpired(pastDate)).toBe(true);
+      expect(core.isProposalExpired(futureDate)).toBe(false);
+      expect(core.isProposalExpired(null)).toBe(false);
+
+      expect(core.remainingSeconds(pastDate)).toBe(0);
+      expect(core.remainingSeconds(futureDate)).toBeGreaterThan(0);
+      expect(core.remainingSeconds(futureDate)).toBeLessThanOrEqual(120);
+      expect(core.remainingSeconds(null)).toBeNull();
+    }
+  });
+
+  it("signs and verifies proposal actionMessage with ExpiresIn field identically across web and service", () => {
+    const input = {
+      action: "propose",
+      team: SAFE,
+      wallet: WALLET,
+      timestamp: 1758268800000,
+      fields: [
+        ["To", "0x1111111111111111111111111111111111111111"],
+        ["Value", "1000000"],
+        ["Data", "0x"],
+        ["Note", "Quarterly team bonus payout"],
+        ["ExpiresIn", "86400s"],
+      ] as [string, string][],
+    };
+    expect(siteCore.actionMessage(input)).toBe(backendCore.actionMessage(input));
+    expect(backendCore.actionMessage(input)).toContain("ExpiresIn: 86400s");
+  });
+});
