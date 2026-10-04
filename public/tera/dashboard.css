@@ -32,3 +32,9 @@
 .facet-pill{border:1px solid #bec5b5;background:#ffffff;color:#233622;padding:6px 12px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;cursor:pointer;transition:all .15s ease}
 .facet-pill:hover{background:#e2e5d5;border-color:#8a9765}
 .facet-pill.active{background:#243b2c;color:#f7f4de;border-color:#243b2c;font-weight:600}
+
+/* Watchlist Pin Star */
+.pin-star-btn{background:transparent;border:0;padding:2px 6px;font-size:15px;color:#a0aec0;cursor:pointer;transition:transform .15s ease,color .15s ease;vertical-align:middle}
+.pin-star-btn:hover{transform:scale(1.2);color:#d69e2e}
+.pin-star-btn.is-pinned{color:#ecc94b;text-shadow:0 0 6px rgba(236,201,75,.4)}
+

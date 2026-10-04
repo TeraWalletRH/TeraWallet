@@ -1277,3 +1277,23 @@ h1:focus {
   font-weight: 600;
 }
 
+/* Watchlist Pin Star */
+.pin-star-btn {
+  background: transparent;
+  border: 0;
+  padding: 2px 6px;
+  font-size: 15px;
+  color: #a0aec0;
+  cursor: pointer;
+  transition: transform 0.15s ease, color 0.15s ease;
+  vertical-align: middle;
+}
+.pin-star-btn:hover {
+  transform: scale(1.2);
+  color: #d69e2e;
+}
+.pin-star-btn.is-pinned {
+  color: #ecc94b;
+  text-shadow: 0 0 6px rgba(236, 201, 75, 0.4);
+}
+

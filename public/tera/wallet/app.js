@@ -111,6 +111,13 @@ import {
   calculateNetBalanceDelta,
 } from "../core/verdict.js";
 import { generateActivityCsv as generateActivityCsvCore, CSV_PRESETS } from "../core/csv-export.js";
+import {
+  getPinnedAssets,
+  togglePinned,
+  isPinned,
+  sortWithPinned,
+  renderPinButtonHtml,
+} from "../core/watchlist.js";
 import { snapshot, appendVersion, versionTrail, pruneVersions, formatAmount } from "./history.js";
 import {
   STAGES,
@@ -452,6 +459,7 @@ const state = {
   provider: null,
   chain: null,
   assets: [],
+  pinnedAssets: getPinnedAssets(),
   nft: { tokens: [], loading: false, error: "" },
   assetsLoaded: false,
   assetError: "",
@@ -1079,13 +1087,15 @@ function valueBlock() {
 }
 
 function overview() {
-  const balanceRows = heldAssets()
+  const balanceRows = sortWithPinned(heldAssets(), state.pinnedAssets)
     .map((a) => {
       // Per row as well as in the total, because this is where an unpriced holding stops
       // being invisible. A holding that contributes nothing to the total shows a dash
       // next to its balance rather than being silently folded in at zero.
+      const isStarred = isPinned(a.symbol, state.pinnedAssets);
+      const starBtn = renderPinButtonHtml(a.symbol, isStarred);
       const value = valueOf(state.balances[a.address], state.prices[a.symbol]);
-      return `<div class="asset-mini"><span class="asset-symbol">${esc(a.symbol.slice(0, 2))}</span><div><b>${esc(a.symbol)}</b><small>${esc(a.category)}</small></div><div class="val">${state.hide ? "••••" : esc(state.balances[a.address])}${state.hide ? "" : `<small>${esc(formatFiat(value))}</small>`}</div></div>`;
+      return `<div class="asset-mini"><span class="asset-symbol">${esc(a.symbol.slice(0, 2))}</span><div><b>${esc(a.symbol)}</b> ${starBtn}<small>${esc(a.category)}</small></div><div class="val">${state.hide ? "••••" : esc(state.balances[a.address])}${state.hide ? "" : `<small>${esc(formatFiat(value))}</small>`}</div></div>`;
     })
     .join("");
   return `${!state.owner ? accountPrompt() : ""}<div class="workspace"><aside class="column"><div class="section-label"><span>Your holdings</span>${button(state.hide ? "Show" : "Hide", "privacy")}</div>${state.owner ? valueBlock() : ""}${balanceRows || empty(state.owner ? "Balances load on the selected network." : "Connect to view your holdings.")}${state.errors.balances ? `<p class="micro">${esc(state.errors.balances)}</p>` : ""}<details class="gate-detail"><summary><span class="gate-name">How this is valued</span></summary><div class="gate-body"><ul class="micro">${PRICE_SOURCES.map((source) => `<li><b>${esc(source.label)}</b> — ${esc(source.detail)}</li>`).join("")}</ul><p class="micro">What a valuation does not establish:</p><ul class="micro">${VALUE_LIMITS.map((line) => `<li>${esc(line)}</li>`).join("")}</ul></div></details><img class="portfolio-art" src="/tera/art/02-case-stairway.jpg" alt="Architectural stairway collage"></aside><section class="column"><div class="section-label"><span>Action inbox</span>${button("+ New proposal", "create")}</div>${state.drafts.length ? state.drafts.map(proposalCard).join("") : empty("No proposals in this session. Prepare an action to review it here.")}</section><aside class="column">${chat()}</aside></div><div class="lower-row"><section><div class="section-label"><span>Account activity</span><a href="${href("receipts")}">View history ↗</a></div>${state.errors.account ? empty(state.errors.account) : pair("Confirmed intents reported by Tera", state.account?.stats?.intents?.confirmed_intents ?? "—")}${pair("Transactions tracked on this device", state.records.length)}</section><section><div class="section-label">Your control surface</div><div class="quick-grid"><a href="${href("approvals")}">Approvals ↗</a><a href="${href("sessions")}">Agent sessions ↗</a><a href="${href("policy")}">Private policy ↗</a><a href="/dashboard/private-send/">Private routing ↗</a><a href="${href("assets")}">Asset registry ↗</a></div></section></div>`;
@@ -1099,7 +1109,8 @@ function registry() {
       `${a.symbol} ${a.name}`.toLowerCase().includes(state.query.toLowerCase()) &&
       (state.category === "all" || a.category === state.category),
   );
-  return `<form id="asset-filter" class="toolbar"><input class="search" name="query" aria-label="Search assets" placeholder="Search assets or symbols…" value="${esc(state.query)}"><select name="category" aria-label="Asset category">${["all", ...new Set(state.assets.map((a) => a.category))].map((c) => `<option ${state.category === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select><button class="btn">Search</button>${chip(`${state.assets.length} registry entries`)}</form><div class="table-scroll"><table><thead><tr><th>Asset</th><th>Type</th><th>Registry status</th><th>Contract</th><th>Details</th></tr></thead><tbody>${filtered.map((a) => `<tr><td><b>${esc(a.symbol)}</b><small>${esc(a.name)}</small></td><td>${esc(a.category)}</td><td>${chip(a.status, a.status !== "ACTIVE")}</td><td>${isAddress(a.address) ? esc(short(a.address)) : chip("Invalid address", true)}</td><td>${button("Inspect ↗", "asset", `data-symbol="${esc(a.symbol)}"`)}</td></tr>`).join("")}</tbody></table>${filtered.length ? "" : empty("No assets match your search.")}</div><p class="micro">Registry information is supplied by Tera. A registry entry does not establish transfer eligibility.</p>`;
+  const sorted = sortWithPinned(filtered, state.pinnedAssets);
+  return `<form id="asset-filter" class="toolbar"><input class="search" name="query" aria-label="Search assets" placeholder="Search assets or symbols…" value="${esc(state.query)}"><select name="category" aria-label="Asset category">${["all", ...new Set(state.assets.map((a) => a.category))].map((c) => `<option ${state.category === c ? "selected" : ""}>${esc(c)}</option>`).join("")}</select><button class="btn">Search</button>${chip(`${state.assets.length} registry entries`)}</form><div class="table-scroll"><table><thead><tr><th>Asset</th><th>Type</th><th>Registry status</th><th>Contract</th><th>Details</th></tr></thead><tbody>${sorted.map((a) => `<tr><td><b>${esc(a.symbol)}</b> ${renderPinButtonHtml(a.symbol, isPinned(a.symbol, state.pinnedAssets))}<small>${esc(a.name)}</small></td><td>${esc(a.category)}</td><td>${chip(a.status, a.status !== "ACTIVE")}</td><td>${isAddress(a.address) ? esc(short(a.address)) : chip("Invalid address", true)}</td><td>${button("Inspect ↗", "asset", `data-symbol="${esc(a.symbol)}"`)}</td></tr>`).join("")}</tbody></table>${sorted.length ? "" : empty("No assets match your search.")}</div><p class="micro">Registry information is supplied by Tera. A registry entry does not establish transfer eligibility.</p>`;
 }
 // The engine's state as one chip, so the composer says what will happen to the
 // next message without the owner opening the privacy centre.
@@ -4717,6 +4728,14 @@ document.addEventListener("click", async (event) => {
         state.notice = `Receipt ${message.receipt.shortRef} was saved to your downloads. The message and the reply are in that file in full.`;
         render();
       }
+    }
+    if (action === "toggle-pin") {
+      const sym = target.closest("[data-symbol]")?.dataset.symbol || target.dataset.symbol;
+      if (sym) {
+        state.pinnedAssets = togglePinned(sym);
+        render();
+      }
+      return;
     }
     if (action === "receipt-check" && state.records[index])
       await updateReceipt(state.records[index]);
