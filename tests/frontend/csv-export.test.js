@@ -1,34 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import {
+  generateActivityCsv,
+  parseRecordTransaction,
+  CSV_PRESETS,
+} from "../../public/tera/core/csv-export.js";
 
-function generateActivityCsv(records = [], history = [], chainId = 4663) {
-  const headers = ["Date", "TxHash", "Action", "Payee", "Status", "ChainID"];
-  const escapeCsv = (str) => {
-    const val = str === undefined || str === null ? "" : String(str);
-    return `"${val.replace(/"/g, '""')}"`;
-  };
-  const rows = [
-    ...records.map((r) => [
-      r.createdAt || "",
-      r.txHash || "",
-      r.action || "TRANSFER",
-      r.payee || "",
-      r.status || "confirmed",
-      r.chainId || chainId || 4663,
-    ]),
-    ...history.map((h) => [
-      h.created_at || h.createdAt || "",
-      h.tx_hash || h.txHash || "",
-      h.intent_type || h.action || "TRANSFER",
-      h.payee || "",
-      h.status || "confirmed",
-      h.chainId || chainId || 4663,
-    ]),
-  ].map((row) => row.map(escapeCsv).join(","));
-  return [headers.map(escapeCsv).join(","), ...rows].join("\n");
-}
-
-test("generateActivityCsv formats records and history into CSV", () => {
+test("generateActivityCsv formats records and history into standard CSV", () => {
   const records = [
     {
       createdAt: "2026-10-02T12:00:00Z",
@@ -63,3 +41,79 @@ test("generateActivityCsv handles empty inputs gracefully", () => {
   const csv = generateActivityCsv([], []);
   assert.equal(csv, '"Date","TxHash","Action","Payee","Status","ChainID"');
 });
+
+test("generateActivityCsv formats records into Koinly tax profile", () => {
+  const records = [
+    {
+      createdAt: "2026-10-02T12:00:00Z",
+      txHash: "0x111",
+      action: "SEND",
+      amount: "250.5",
+      symbol: "USDG",
+      payee: "0xrecipient",
+      fee: "0.0002",
+    },
+    {
+      createdAt: "2026-10-02T14:30:00Z",
+      txHash: "0x222",
+      action: "CLAIM_YIELD",
+      amount: "42.0",
+      symbol: "UST",
+    },
+  ];
+
+  const csv = generateActivityCsv(records, [], { preset: CSV_PRESETS.KOINLY });
+  const lines = csv.split("\n");
+
+  assert.equal(
+    lines[0],
+    '"Date","Sent Amount","Sent Currency","Received Amount","Received Currency","Fee Amount","Fee Currency","Net Worth Amount","Net Worth Currency","Label","Description","TxHash"',
+  );
+
+  // Send record
+  assert.match(lines[1], /"2026-10-02T12:00:00Z","250\.5","USDG","","","0\.0002","ETH"/);
+  assert.match(lines[1], /"0x111"/);
+
+  // Claim yield record (incoming reward)
+  assert.match(lines[2], /"2026-10-02T14:30:00Z","","","42\.0","UST"/);
+  assert.match(lines[2], /"reward"/);
+  assert.match(lines[2], /"0x222"/);
+});
+
+test("generateActivityCsv formats records into CoinTracker tax profile", () => {
+  const records = [
+    {
+      createdAt: "2026-10-02T12:00:00Z",
+      txHash: "0x333",
+      action: "TRANSFER",
+      amount: "100",
+      symbol: "USDG",
+      fee: "0.0001",
+    },
+    {
+      createdAt: "2026-10-02T16:00:00Z",
+      txHash: "0x444",
+      action: "RECEIVE",
+      amount: "0.5",
+      symbol: "ETH",
+    },
+  ];
+
+  const csv = generateActivityCsv(records, [], { preset: CSV_PRESETS.COINTRACKER });
+  const lines = csv.split("\n");
+
+  assert.equal(
+    lines[0],
+    '"Date","Received Quantity","Received Currency","Sent Quantity","Sent Currency","Fee Amount","Fee Currency","Tag","Transaction Hash"',
+  );
+
+  // Outgoing transfer
+  assert.match(lines[1], /"2026-10-02T12:00:00Z","","","100","USDG","0\.0001","ETH"/);
+  assert.match(lines[1], /"0x333"/);
+
+  // Incoming receive
+  assert.match(lines[2], /"2026-10-02T16:00:00Z","0\.5","ETH","",""/);
+  assert.match(lines[2], /"payment"/);
+  assert.match(lines[2], /"0x444"/);
+});
+

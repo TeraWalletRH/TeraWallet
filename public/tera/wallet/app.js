@@ -110,6 +110,7 @@ import {
   summarise as summariseVerdicts,
   calculateNetBalanceDelta,
 } from "../core/verdict.js";
+import { generateActivityCsv as generateActivityCsvCore, CSV_PRESETS } from "../core/csv-export.js";
 import { snapshot, appendVersion, versionTrail, pruneVersions, formatAmount } from "./history.js";
 import {
   STAGES,
@@ -1808,7 +1809,7 @@ function monthlySpendingPanel() {
 
 function receipts() {
   if (!state.owner) return accountPrompt();
-  return `${monthlySpendingPanel()}<div class="section-label"><span>Transactions tracked on this device</span>${button("Export CSV", "export-activity-csv")}</div>${state.records.map((r, i) => `<article class="panel live-record"><div class="proposal-top"><b>${esc(r.action || "Transaction")}</b>${chip(r.status === "confirmed" ? (r.recorded ? "Confirmed · recorded" : "Confirmed · audit sync pending") : r.status, r.status === "reverted")}</div>${pair("Submitted", r.createdAt)}${r.payee ? pair("To", contactLabel(r.payee)) : ""}<p>${explorer(r.txHash)}</p>${r.error ? `<p class="micro">${esc(r.error)}</p>` : ""}<div class="actions">${r.status !== "reverted" && !r.recorded ? button("Check status / retry audit sync", "receipt-check", `data-index="${i}" ${state.busy ? "disabled" : ""}`) : ""}${button("Export receipt", "receipt-export", `data-index="${i}"`)}${r.payee ? button(contactBook.nameFor(state.contacts, r.payee) ? "Rename address" : "Name this address", "contact-edit", `data-address="${esc(r.payee)}"`) : ""}</div></article>`).join("") || empty("No transactions tracked on this device.")}
+  return `${monthlySpendingPanel()}<div class="section-label"><span>Transactions tracked on this device</span><span class="actions">${button("Export CSV", "export-activity-csv")}${button("Koinly Tax CSV", "export-koinly-csv")}${button("CoinTracker CSV", "export-cointracker-csv")}</span></div>${state.records.map((r, i) => `<article class="panel live-record"><div class="proposal-top"><b>${esc(r.action || "Transaction")}</b>${chip(r.status === "confirmed" ? (r.recorded ? "Confirmed · recorded" : "Confirmed · audit sync pending") : r.status, r.status === "reverted")}</div>${pair("Submitted", r.createdAt)}${r.payee ? pair("To", contactLabel(r.payee)) : ""}<p>${explorer(r.txHash)}</p>${r.error ? `<p class="micro">${esc(r.error)}</p>` : ""}<div class="actions">${r.status !== "reverted" && !r.recorded ? button("Check status / retry audit sync", "receipt-check", `data-index="${i}" ${state.busy ? "disabled" : ""}`) : ""}${button("Export receipt", "receipt-export", `data-index="${i}"`)}${r.payee ? button(contactBook.nameFor(state.contacts, r.payee) ? "Rename address" : "Name this address", "contact-edit", `data-address="${esc(r.payee)}"`) : ""}</div></article>`).join("") || empty("No transactions tracked on this device.")}
     <div class="section-label live-history-heading">Account history from Tera</div>${state.errors.history ? empty(state.errors.history) : `<div class="table-scroll"><table><thead><tr><th>Action</th><th>Service status</th><th>Created</th><th>Transaction</th></tr></thead><tbody>${state.history.map((r) => `<tr><td>${esc(r.intent_type || r.intent?.actionType || "—")}</td><td>${esc(r.status)}</td><td>${esc(r.created_at || r.createdAt)}</td><td>${r.tx_hash ? explorer(r.tx_hash) : "—"}</td></tr>`).join("")}</tbody></table>${state.history.length ? "" : empty("No history returned by the service.")}</div>`}`;
 }
 // The egress panel is derived once so the view and the export can never
@@ -4029,31 +4030,8 @@ function downloadCsv(csv, filename) {
   link.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
-function generateActivityCsv(records = [], history = []) {
-  const headers = ["Date", "TxHash", "Action", "Payee", "Status", "ChainID"];
-  const escapeCsv = (str) => {
-    const val = str === undefined || str === null ? "" : String(str);
-    return `"${val.replace(/"/g, '""')}"`;
-  };
-  const rows = [
-    ...records.map((r) => [
-      r.createdAt || "",
-      r.txHash || "",
-      r.action || "TRANSFER",
-      r.payee || "",
-      r.status || "confirmed",
-      r.chainId || chainId || 4663,
-    ]),
-    ...history.map((h) => [
-      h.created_at || h.createdAt || "",
-      h.tx_hash || h.txHash || "",
-      h.intent_type || h.action || "TRANSFER",
-      h.payee || "",
-      h.status || "confirmed",
-      h.chainId || chainId || 4663,
-    ]),
-  ].map((row) => row.map(escapeCsv).join(","));
-  return [headers.map(escapeCsv).join(","), ...rows].join("\n");
+function generateActivityCsv(records = [], history = [], options = {}) {
+  return generateActivityCsvCore(records, history, options);
 }
 function exportReceipt(index) {
   const record = state.records[index];
@@ -4704,9 +4682,21 @@ document.addEventListener("click", async (event) => {
       return;
     }
     if (action === "export-activity-csv") {
-      const csv = generateActivityCsv(state.records, state.history);
-      downloadCsv(csv, `terrawallet-activity-${Date.now()}.csv`);
-      state.notice = "Activity exported to CSV successfully.";
+      const csv = generateActivityCsv(state.records, state.history, CSV_PRESETS.STANDARD);
+      downloadCsv(csv, `terrawallet-activity-standard-${Date.now()}.csv`);
+      state.notice = "Activity exported to standard CSV successfully.";
+      render();
+    }
+    if (action === "export-koinly-csv") {
+      const csv = generateActivityCsv(state.records, state.history, CSV_PRESETS.KOINLY);
+      downloadCsv(csv, `terrawallet-activity-koinly-${Date.now()}.csv`);
+      state.notice = "Activity exported to Koinly Tax CSV format.";
+      render();
+    }
+    if (action === "export-cointracker-csv") {
+      const csv = generateActivityCsv(state.records, state.history, CSV_PRESETS.COINTRACKER);
+      downloadCsv(csv, `terrawallet-activity-cointracker-${Date.now()}.csv`);
+      state.notice = "Activity exported to CoinTracker Tax CSV format.";
       render();
     }
     if (action === "receipt-export") {
