@@ -1,5 +1,11 @@
 export type ActionType = "BUY" | "SELL" | "TRANSFER" | "CLAIM_YIELD";
 
+export interface TransferItem {
+  recipient: `0x${string}`;
+  amount: string;
+  tag?: string;
+}
+
 export interface UserIntent {
   ownerAddress: `0x${string}`;
   accountAddress?: `0x${string}`;
@@ -8,6 +14,7 @@ export interface UserIntent {
   amount: string;
   maxSpendUsdCents?: number;
   recipient?: `0x${string}`;
+  transfers?: TransferItem[];
   policyVersion?: number;
   policySigner?: `0x${string}`;
   policySignature?: `0x${string}`;
@@ -45,4 +52,9 @@ export interface PreparedTransaction {
   approvals?: PreparedUnsignedTransaction[];
   quote?: { amountOut: string; amountOutWei: string; decimalsOut: number; priceImpactPct: number; route: string; comparedRoutes?: Array<{ route: string; amountOut: string }>; quotedAt: string };
   expiresAt?: string;
+  batchDetails?: {
+    totalRecipients: number;
+    totalAmount: string;
+    transfers: TransferItem[];
+  };
 }

@@ -103,4 +103,68 @@ describe("AI Agent Proposal Layer", () => {
       expect(res.status).toBe(422);
     }
   });
+
+  it("parses multi-recipient transfer prompt into an atomic Multicall3 batch transaction", async () => {
+    const recipient1 = "0x1111111111111111111111111111111111111111";
+    const recipient2 = "0x2222222222222222222222222222222222222222";
+    const res = await request(app).post("/api/agent/propose").send({
+      prompt: `Send 50 USDG to ${recipient1} and 75 USDG to ${recipient2}`,
+      ownerAddress: sampleOwner,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.intent.actionType).toBe("TRANSFER");
+    expect(res.body.intent.transfers).toBeDefined();
+    expect(res.body.intent.transfers.length).toBe(2);
+    expect(res.body.intent.transfers[0].recipient).toBe(recipient1);
+    expect(res.body.intent.transfers[0].amount).toBe("50000000");
+    expect(res.body.intent.transfers[1].recipient).toBe(recipient2);
+    expect(res.body.intent.transfers[1].amount).toBe("75000000");
+    expect(res.body.intent.amount).toBe("125000000");
+    expect(res.body.explanation).toContain("batch transfer");
+    expect(res.body.explanation).toContain("125 USDG");
+    expect(res.body.preparedTransaction.to.toLowerCase()).toBe("0xca11bde05977b3631167028862be2a173976ca11");
+    expect(res.body.preparedTransaction.batchDetails).toBeDefined();
+    expect(res.body.preparedTransaction.batchDetails.totalRecipients).toBe(2);
+  }, 15000);
+
+  it("resolves @tags in batch transfers", async () => {
+    const res = await request(app).post("/api/agent/propose").send({
+      prompt: "Send 20 USDG to @alice and 30 USDG to @bob",
+      ownerAddress: sampleOwner,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.intent.transfers.length).toBe(2);
+    expect(res.body.intent.transfers[0].tag).toBe("@alice");
+    expect(res.body.intent.transfers[0].recipient).toBe("0x1111111111111111111111111111111111111111");
+    expect(res.body.intent.transfers[1].tag).toBe("@bob");
+    expect(res.body.intent.transfers[1].recipient).toBe("0x2222222222222222222222222222222222222222");
+    expect(res.body.intent.amount).toBe("50000000");
+  }, 15000);
+
+  it("handles multi-recipient native ETH batch transfers", async () => {
+    const res = await request(app).post("/api/agent/propose").send({
+      prompt: "Send 1 ETH to @alice and 2 ETH to @bob",
+      ownerAddress: sampleOwner,
+    });
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.intent.transfers.length).toBe(2);
+    expect(res.body.preparedTransaction.to.toLowerCase()).toBe("0xca11bde05977b3631167028862be2a173976ca11");
+    expect(res.body.preparedTransaction.value).toBe("0x29a2241af62c0000"); // 3 ETH in hex
+  }, 15000);
+
+  it("rejects batch transfer when a tag cannot be resolved", async () => {
+    const res = await request(app).post("/api/agent/propose").send({
+      prompt: "Send 10 USDG to @unknownunregisteredtag and 20 USDG to @bob",
+      ownerAddress: sampleOwner,
+    });
+
+    expect(res.status).toBe(422);
+    expect(res.body.error).toContain("Could not resolve tag");
+  });
 });
