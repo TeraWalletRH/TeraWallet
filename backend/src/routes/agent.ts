@@ -11,6 +11,37 @@ import { savePreparedIntent } from "./intent";
 
 const router = Router();
 
+async function resolveRecipientTarget(target: string): Promise<{ address: `0x${string}`; tag?: string }> {
+  if (target.startsWith("@")) {
+    const rawTag = target.replace(/^@+/, "");
+    if (process.env.NODE_ENV === "test") {
+      const mockTags: Record<string, `0x${string}`> = {
+        alice: "0x1111111111111111111111111111111111111111",
+        bob: "0x2222222222222222222222222222222222222222",
+        carol: "0x3333333333333333333333333333333333333333",
+      };
+      if (mockTags[rawTag.toLowerCase()]) {
+        return { address: mockTags[rawTag.toLowerCase()], tag: `@${rawTag}` };
+      }
+    }
+    try {
+      const { resolveTag } = await import("../tags");
+      const res = await resolveTag(rawTag);
+      if (res.address && isAddress(res.address)) {
+        return { address: res.address as `0x${string}`, tag: `@${rawTag}` };
+      }
+    } catch {
+      // Fall through to error
+    }
+    throw new Error(`Could not resolve tag @${rawTag} to a registered wallet address.`);
+  }
+
+  if (isAddress(target)) {
+    return { address: target as `0x${string}` };
+  }
+  throw new Error(`Invalid recipient address or tag: ${target}`);
+}
+
 /**
  * POST /api/agent/propose
  * Formulates a typed UserIntent from natural language, evaluates all 5 gates, and returns the prepared transaction.
@@ -81,51 +112,141 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
         action = "TRANSFER";
       }
 
-      const withoutAddresses = prompt.replace(/0x[a-fA-F0-9]{40}/g, "")
-        .replace(/\bchain(?:\s+id)?\s*[:#]?\s*\d+\b/gi, "");
-      const amounts = [...withoutAddresses.matchAll(/(?:\$|\b)(\d+(?:\.\d+)?)(?![\d.])/g)];
-      if (!matchedAsset || !action || amounts.length !== 1) {
-        res.status(422).json({ success: false, error: "Specify an action, supported asset, and exact amount." });
-        return;
-      }
-      const amountText = amounts[0][1];
-      const inputDecimals = action === "BUY" ? (matchedAsset.symbol === "TERA" ? 18 : 6) : matchedAsset.decimals;
-      let amountUnits: string;
-      try { amountUnits = parseUnits(amountText, inputDecimals).toString(); }
-      catch { res.status(422).json({ success: false, error: "Amount has too many decimal places for this asset." }); return; }
-      if (BigInt(amountUnits) <= 0n) {
-        res.status(422).json({ success: false, error: "Enter an amount greater than zero." });
-        return;
+      let isBatchTransfer = false;
+      let batchTransfers: Array<{ recipient: `0x${string}`; amount: string; tag?: string }> = [];
+
+      if (action === "TRANSFER") {
+        const pairRegex = /(?:(?:send|transfer)\s+)?(?:\$?\s*(\d+(?:\.\d+)?))\s*(?:[A-Za-z0-9_-]+)?\s+(?:to\s+)?(@[a-z0-9_]{3,20}|0x[a-fA-F0-9]{40})|(?:\$?\s*(\d+(?:\.\d+)?))\s+(?:to\s+)?(@[a-z0-9_]{3,20}|0x[a-fA-F0-9]{40})|(?:to\s+)?(@[a-z0-9_]{3,20}|0x[a-fA-F0-9]{40})\s*(?:[:,-]\s*|\s+(?:amount\s+)?)\s*(?:\$?\s*(\d+(?:\.\d+)?))/gi;
+        const rawMatches = [...prompt.matchAll(pairRegex)];
+
+        if (rawMatches.length > 1) {
+          const parsedItems: Array<{ target: string; amountText: string }> = [];
+          for (const m of rawMatches) {
+            const amount = m[1] ?? m[3] ?? m[6];
+            const target = m[2] ?? m[4] ?? m[5];
+            if (amount && target) {
+              parsedItems.push({ target, amountText: amount });
+            }
+          }
+
+          if (parsedItems.length > 1 && matchedAsset) {
+            isBatchTransfer = true;
+            let totalAmountBig = 0n;
+            const items: typeof batchTransfers = [];
+            const summaryParts: string[] = [];
+
+            for (const p of parsedItems) {
+              let resolved;
+              try {
+                resolved = await resolveRecipientTarget(p.target);
+              } catch (err: any) {
+                res.status(422).json({ success: false, error: err?.message || `Could not resolve recipient ${p.target}` });
+                return;
+              }
+
+              let units: string;
+              try {
+                units = parseUnits(p.amountText, matchedAsset.decimals).toString();
+              } catch {
+                res.status(422).json({ success: false, error: "Amount has too many decimal places for this asset." });
+                return;
+              }
+
+              if (BigInt(units) <= 0n) {
+                res.status(422).json({ success: false, error: "Enter an amount greater than zero." });
+                return;
+              }
+
+              totalAmountBig += BigInt(units);
+              items.push({
+                recipient: resolved.address,
+                amount: units,
+                tag: resolved.tag,
+              });
+              summaryParts.push(`${resolved.tag ?? `${resolved.address.slice(0, 6)}...${resolved.address.slice(-4)}`}: ${p.amountText} ${matchedAsset.symbol}`);
+            }
+
+            batchTransfers = items;
+            const totalUnits = totalAmountBig.toString();
+            const totalFormatted = (Number(totalAmountBig) / 10 ** matchedAsset.decimals).toString();
+
+            intentDraft = {
+              assetAddress: matchedAsset.address,
+              actionType: "TRANSFER",
+              amount: totalUnits,
+              recipient: items[0].recipient,
+              transfers: items,
+            };
+
+            explanation = `You are about to batch transfer a total of ${totalFormatted} ${matchedAsset.symbol} to ${items.length} recipients (${summaryParts.join(", ")}). Review the unified transaction before signing.`;
+          }
+        }
       }
 
-      intentDraft = {
-        assetAddress: matchedAsset.address,
-        actionType: action,
-        amount: amountUnits,
-        maxSpendUsdCents: action === "BUY" && matchedAsset.symbol !== "TERA" ? Math.round(Number(amountText) * 100) : undefined,
-        ...(action === "TRANSFER"
-          ? { recipient: prompt.match(/0x[a-fA-F0-9]{40}/)?.[0] as `0x${string}` | undefined }
-          : {}),
-      };
+      if (!isBatchTransfer) {
+        const withoutAddresses = prompt.replace(/0x[a-fA-F0-9]{40}/g, "")
+          .replace(/@[a-z0-9_]{3,20}/gi, "")
+          .replace(/\bchain(?:\s+id)?\s*[:#]?\s*\d+\b/gi, "");
+        const amounts = [...withoutAddresses.matchAll(/(?:\$|\b)(\d+(?:\.\d+)?)(?![\d.])/g)];
+        if (!matchedAsset || !action || amounts.length !== 1) {
+          res.status(422).json({ success: false, error: "Specify an action, supported asset, and exact amount." });
+          return;
+        }
+        const amountText = amounts[0][1];
+        const inputDecimals = action === "BUY" ? (matchedAsset.symbol === "TERA" ? 18 : 6) : matchedAsset.decimals;
+        let amountUnits: string;
+        try { amountUnits = parseUnits(amountText, inputDecimals).toString(); }
+        catch { res.status(422).json({ success: false, error: "Amount has too many decimal places for this asset." }); return; }
+        if (BigInt(amountUnits) <= 0n) {
+          res.status(422).json({ success: false, error: "Enter an amount greater than zero." });
+          return;
+        }
 
-      explanation = action === "BUY"
-        ? `You are about to buy ${matchedAsset.symbol} using ${amountText} ${matchedAsset.symbol === "TERA" ? "ETH" : "USDG"}. Review the quote before signing.`
-        : `You are about to ${action === "TRANSFER" ? "send" : action.toLowerCase()} ${amountText} ${matchedAsset.symbol}. Review the transaction before signing.`;
+        let singleRecipient = prompt.match(/0x[a-fA-F0-9]{40}/)?.[0] as `0x${string}` | undefined;
+        let singleTag: string | undefined;
+        if (!singleRecipient && action === "TRANSFER") {
+          const tagMatch = prompt.match(/@[a-z0-9_]{3,20}/i)?.[0];
+          if (tagMatch) {
+            try {
+              const resolved = await resolveRecipientTarget(tagMatch);
+              singleRecipient = resolved.address;
+              singleTag = resolved.tag;
+            } catch (err: any) {
+              res.status(422).json({ success: false, error: err?.message || `Could not resolve tag ${tagMatch}` });
+              return;
+            }
+          }
+        }
+
+        intentDraft = {
+          assetAddress: matchedAsset.address,
+          actionType: action,
+          amount: amountUnits,
+          maxSpendUsdCents: action === "BUY" && matchedAsset.symbol !== "TERA" ? Math.round(Number(amountText) * 100) : undefined,
+          ...(action === "TRANSFER" ? { recipient: singleRecipient } : {}),
+        };
+
+        explanation = action === "BUY"
+          ? `You are about to buy ${matchedAsset.symbol} using ${amountText} ${matchedAsset.symbol === "TERA" ? "ETH" : "USDG"}. Review the quote before signing.`
+          : `You are about to ${action === "TRANSFER" ? "send" : action.toLowerCase()} ${amountText} ${matchedAsset.symbol}${singleTag ? ` to ${singleTag}` : ""}. Review the transaction before signing.`;
+      }
     }
-
 
     const walletAddress = ownerAddress as `0x${string}`;
     const actionType = intentDraft.actionType as UserIntent["actionType"];
-    // A transfer destination is owner-critical data. Only take it from the
-    // submitted request, never from an AI-generated explanation or fallback.
-    const recipient = prompt.match(/0x[a-fA-F0-9]{40}/)?.[0] as `0x${string}` | undefined;
-    if (actionType === "TRANSFER" && (!recipient || !isAddress(recipient))) {
-      res.status(422).json({
-        success: false,
-        error: "Transfers require a valid recipient address in the request.",
-      });
-      return;
+
+    if (actionType === "TRANSFER") {
+      if (intentDraft.transfers && intentDraft.transfers.length > 1) {
+        // Validated in batch step
+      } else if (!intentDraft.recipient || !isAddress(intentDraft.recipient)) {
+        res.status(422).json({
+          success: false,
+          error: "Transfers require a valid recipient address in the request.",
+        });
+        return;
+      }
     }
+
     const fullIntent: UserIntent = {
       ownerAddress: walletAddress,
       accountAddress: walletAddress,
@@ -133,7 +254,12 @@ router.post("/api/agent/propose", async (req: Request, res: Response) => {
       actionType,
       amount: intentDraft.amount!,
       ...(intentDraft.maxSpendUsdCents !== undefined ? { maxSpendUsdCents: intentDraft.maxSpendUsdCents } : {}),
-      ...(actionType === "TRANSFER" ? { recipient } : {}),
+      ...(actionType === "TRANSFER"
+        ? {
+            recipient: intentDraft.recipient,
+            ...(intentDraft.transfers ? { transfers: intentDraft.transfers } : {}),
+          }
+        : {}),
     };
 
     // A connected agent token can prepare only the action and asset selected

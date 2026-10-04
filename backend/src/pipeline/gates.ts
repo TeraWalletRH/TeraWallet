@@ -94,13 +94,25 @@ export async function checkAssetRegistry(intent: UserIntent): Promise<GateResult
 }
 
 export async function checkEligibilityPreflight(intent: UserIntent): Promise<GateResult> {
-  const targetAddress = intent.recipient ?? intent.ownerAddress;
-  if (!isAddress(targetAddress) && !isAddress((targetAddress as string).toLowerCase())) {
-    return {
-      gate: "eligibility_preflight",
-      passed: false,
-      reason: "Invalid recipient/owner address format",
-    };
+  if (intent.transfers && intent.transfers.length > 0) {
+    for (const item of intent.transfers) {
+      if (!isAddress(item.recipient) && !isAddress((item.recipient as string).toLowerCase())) {
+        return {
+          gate: "eligibility_preflight",
+          passed: false,
+          reason: `Invalid recipient address format for ${item.tag ?? item.recipient}`,
+        };
+      }
+    }
+  } else {
+    const targetAddress = intent.recipient ?? intent.ownerAddress;
+    if (!isAddress(targetAddress) && !isAddress((targetAddress as string).toLowerCase())) {
+      return {
+        gate: "eligibility_preflight",
+        passed: false,
+        reason: "Invalid recipient/owner address format",
+      };
+    }
   }
 
   const asset = findAsset(intent.assetAddress);
@@ -214,6 +226,18 @@ export async function checkRiskEngine(intent: UserIntent): Promise<GateResult> {
       passed: false,
       reason: "Execution amount must be strictly greater than zero",
     };
+  }
+
+  if (intent.transfers && intent.transfers.length > 0) {
+    for (const item of intent.transfers) {
+      if (BigInt(item.amount) <= 0n) {
+        return {
+          gate: "risk_engine",
+          passed: false,
+          reason: `Transfer amount for ${item.tag ?? item.recipient} must be strictly greater than zero`,
+        };
+      }
+    }
   }
 
   return {
