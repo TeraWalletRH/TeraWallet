@@ -31,7 +31,7 @@ describe("Payment link API, register off", () => {
   });
 
   it("refuses every call", async () => {
-    for (const name of ["create", "view", "mine", "cancel", "paid"]) {
+    for (const name of ["create", "view", "mine", "cancel", "paid", "invoice", "qr"]) {
       const res = await request(app).post(`/api/pay-links/${name}`).send({});
       expect(res.status).toBe(503);
     }
@@ -89,5 +89,46 @@ describe("What a merchant signs, and what counts as paying a link", () => {
       ).toBe(null);
       expect(core.paymentIn([], want)).toBe(null);
     }
+  });
+
+  it("formats invoice amount and tracks status across both cores identically", () => {
+    for (const core of [siteCore, backendCore]) {
+      expect(core.formatInvoiceAmount("25000000")).toBe("$25.00");
+      expect(core.formatInvoiceAmount("1500000")).toBe("$1.50");
+      expect(core.formatInvoiceAmount("1000000000000")).toBe("$1,000,000.00");
+
+      expect(core.invoiceStatus({ status: "open" })).toBe("waiting");
+      expect(core.invoiceStatus({ status: "paid" })).toBe("settled");
+      expect(core.invoiceStatus({ paidTx: "0x1234" })).toBe("settled");
+      expect(core.invoiceStatus({ status: "cancelled" })).toBe("cancelled");
+    }
+  });
+
+  it("creates invoice cards and renders HTML views with QR and settled states", () => {
+    const link = {
+      id: "23456789ABCD",
+      merchant: MERCHANT,
+      amount: "25000000",
+      note: "Coffee & Pastries",
+      status: "open",
+    };
+    const card = backendCore.createInvoiceCard(link);
+    expect(card.amountFormatted).toBe("$25.00");
+    expect(card.status).toBe("waiting");
+    expect(card.isSettled).toBe(false);
+
+    const htmlWaiting = backendCore.renderInvoiceCardHtml(card);
+    expect(htmlWaiting).toContain("Waiting for payment...");
+    expect(htmlWaiting).toContain("Coffee & Pastries");
+    expect(htmlWaiting).toContain("$25.00");
+
+    const paidLink = { ...link, status: "paid", paidTx: "0xabcd1234", payer: PAYER };
+    const paidCard = backendCore.createInvoiceCard(paidLink);
+    expect(paidCard.status).toBe("settled");
+    expect(paidCard.isSettled).toBe(true);
+
+    const htmlSettled = backendCore.renderInvoiceCardHtml(paidCard);
+    expect(htmlSettled).toContain("Paid & Verified");
+    expect(htmlSettled).toContain("Payment Received");
   });
 });
