@@ -94,6 +94,70 @@ export interface NetBalanceDelta {
   hasDeltas: boolean;
 }
 
+export type GasSpeedTier = "eco" | "standard" | "fast";
+
+export interface GasSpeedConfig {
+  id: GasSpeedTier;
+  label: string;
+  baseFeeMultiplier: number;
+  priorityFeeMultiplier: number;
+  estimatedSeconds: number;
+  timeEstimate: string;
+  tagline: string;
+}
+
+export const GAS_SPEEDS: Record<GasSpeedTier, GasSpeedConfig> = {
+  eco: {
+    id: "eco",
+    label: "Eco",
+    baseFeeMultiplier: 0.9,
+    priorityFeeMultiplier: 0.8,
+    estimatedSeconds: 30,
+    timeEstimate: "~15–30s",
+    tagline: "Eco (Save Gas)",
+  },
+  standard: {
+    id: "standard",
+    label: "Standard",
+    baseFeeMultiplier: 1.0,
+    priorityFeeMultiplier: 1.0,
+    estimatedSeconds: 10,
+    timeEstimate: "~5–10s",
+    tagline: "Standard (Market)",
+  },
+  fast: {
+    id: "fast",
+    label: "Fast",
+    baseFeeMultiplier: 1.15,
+    priorityFeeMultiplier: 1.25,
+    estimatedSeconds: 2,
+    timeEstimate: "~1–3s",
+    tagline: "Fast (Priority)",
+  },
+};
+
+export function calculateGasSpeedFee(
+  speed: GasSpeedTier,
+  baseFeeWei = 1_000_000_000n,
+  priorityFeeWei = 100_000_000n,
+  gasLimit = 65_000n,
+) {
+  const tier = GAS_SPEEDS[speed] || GAS_SPEEDS.standard;
+  const prio = BigInt(Math.max(1, Math.round(Number(priorityFeeWei) * tier.priorityFeeMultiplier)));
+  const scaledBase = BigInt(Math.max(1, Math.round(Number(baseFeeWei) * tier.baseFeeMultiplier)));
+  const maxFeePerGas = scaledBase + prio;
+  const totalWei = maxFeePerGas * BigInt(gasLimit);
+  const feeEth = (Number(totalWei) / 1e18).toFixed(6).replace(/0+$/, "").replace(/\.$/, "");
+  return {
+    speed: tier.id,
+    label: tier.label,
+    maxFeePerGas,
+    maxPriorityFeePerGas: prio,
+    feeEth,
+    timeEstimate: tier.timeEstimate,
+  };
+}
+
 /**
  * On-device net balance simulation helper:
  * Decodes transaction parameters and intent to derive exact You Pay / You Receive asset deltas.
@@ -104,6 +168,7 @@ export function simulateNetBalanceDelta(params: {
   asset?: { symbol?: string; decimals?: number; address?: string };
   quote?: { amountOut?: string; amountOutWei?: string | bigint };
   gasEstimateEth?: number | string;
+  gasSpeed?: GasSpeedTier;
 }): NetBalanceDelta {
   const pays: BalanceDeltaItem[] = [];
   const receives: BalanceDeltaItem[] = [];
@@ -212,7 +277,9 @@ export function simulateNetBalanceDelta(params: {
     });
   }
 
-  const gasFee = params.gasEstimateEth ?? "0.0001";
+  const gasFee =
+    params.gasEstimateEth ??
+    (params.gasSpeed ? calculateGasSpeedFee(params.gasSpeed).feeEth : "0.0001");
   if (gasFee) {
     pays.push({
       asset: "ETH",

@@ -118,6 +118,13 @@ import {
   sortWithPinned,
   renderPinButtonHtml,
 } from "../core/watchlist.js";
+import {
+  GAS_SPEEDS,
+  calculateGasTierFee,
+  getAllGasTierEstimates,
+  renderGasSpeedSelectorHtml,
+  getGasSpeed,
+} from "../core/gas-speed.js";
 import { snapshot, appendVersion, versionTrail, pruneVersions, formatAmount } from "./history.js";
 import {
   STAGES,
@@ -1544,11 +1551,15 @@ function balanceDeltaBlock(p) {
   const intent = p.intent || tx?.intent;
   if (!tx || !intent) return "";
   const asset = assetFor(intent.assetAddress);
+  const speed = p.gasSpeed || state.gasSpeed || "standard";
+  const estimates = getAllGasTierEstimates();
+  const gasEstimate = estimates[speed]?.feeEth || "0.0001";
   const delta = calculateNetBalanceDelta({
     tx,
     intent,
     asset,
     quote: p.quote || tx.quote,
+    gasEstimate,
   });
   if (!delta || !delta.hasDeltas) return "";
   return `<section class="balance-delta-block">
@@ -1588,9 +1599,16 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
   } catch {
     /* Raw amount remains visible. */
   }
+  const speed = p.gasSpeed || state.gasSpeed || "standard";
+  const gasSelector = renderGasSpeedSelectorHtml({
+    selected: speed,
+    index,
+    disabled: submitted || state.busy,
+  });
   return `<article class="proposal"><div class="proposal-top"><span class="eyebrow">${esc(intent?.actionType || "Proposal")}</span>${chip(submitted ? "Submitted" : issue ? "Needs attention" : "Awaiting owner", !submitted && !!issue)}</div><h2>${esc(asset?.name || "Action review")}</h2>${p.explanation ? `<p class="lead">${esc(p.explanation)}</p>` : ""}
     ${gateSummaryBlock(p)}
     ${balanceDeltaBlock(p)}
+    ${gasSelector}
     <ul class="status-list">`${GATES.map((name, i) => {
       const g = p.gates?.find((g) => g.gate === name);
       const detail = explainGate(name, g);
@@ -3936,6 +3954,12 @@ async function approve(index) {
   state.busy = true;
   state.approval = { index, progress: initialProgress(stages), stages };
   state.notice = "Running read-only checks. Your wallet has not been asked to sign.";
+  const speed = proposal.gasSpeed || state.gasSpeed || "standard";
+  const feeInfo = calculateGasTierFee(speed);
+  if (proposal.preparedTransaction) {
+    proposal.preparedTransaction.maxFeePerGas = feeInfo.maxFeePerGas;
+    proposal.preparedTransaction.maxPriorityFeePerGas = feeInfo.maxPriorityFeePerGas;
+  }
   render();
   try {
     const hash = await sendPrepared(
@@ -4591,6 +4615,16 @@ document.addEventListener("click", async (event) => {
         field.dispatchEvent(new Event("input", { bubbles: true }));
         field.dispatchEvent(new Event("change", { bubbles: true }));
         state.notice = "Address converted to valid ERC-55 checksum.";
+        render();
+      }
+    }
+    if (action === "select-gas-speed") {
+      const btn = target.closest('[data-action="select-gas-speed"]') || target;
+      const speed = btn.dataset.speed;
+      const cardIndex = Number(btn.dataset.index);
+      if (speed && Number.isInteger(cardIndex) && state.drafts[cardIndex]) {
+        state.drafts[cardIndex].gasSpeed = speed;
+        state.gasSpeed = speed;
         render();
       }
     }

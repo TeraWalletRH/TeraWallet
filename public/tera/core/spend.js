@@ -150,3 +150,13 @@ export function spentBetween(rows, start, now = Date.now()) {
 /** Dollars paid out this calendar month. See `spentBetween`. */
 export const spentThisMonth = (rows, now = Date.now()) =>
   spentBetween(rows, startOfMonth(now), now);
+
+export {
+  GAS_SPEEDS,
+  GAS_SPEED_KEYS,
+  DEFAULT_GAS_SPEED,
+  getGasSpeed,
+  calculateGasTierFee,
+  getAllGasTierEstimates,
+  renderGasSpeedSelectorHtml,
+} from "./gas-speed.js";

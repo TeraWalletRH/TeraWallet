@@ -1,8 +1,8 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-abcfa2fee98f",
-  "builtAt": "2026-10-04T06:32:21.836Z",
+  "release": "r-180abe1db307",
+  "builtAt": "2026-10-04T06:43:38.669Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
@@ -31,6 +31,11 @@
       "path": "core/discretion.js",
       "hash": "sha256-+kyJyKa6MrVprH/1TcZPIRYDJeh0wFmJsxuiU1eS7U8=",
       "bytes": 4446
+    },
+    {
+      "path": "core/gas-speed.js",
+      "hash": "sha256-5JiN94Yn38aPzNVXo2fqva5IAL1v8RpDeeudxt/9D1E=",
+      "bytes": 5921
     },
     {
       "path": "core/ingress.js",
@@ -99,8 +104,8 @@
     },
     {
       "path": "core/spend.js",
-      "hash": "sha256-qf071absOqZtfFX6kWYjiYU5moXuQwjfJOWKryEnr3E=",
-      "bytes": 6459
+      "hash": "sha256-bp0/uy8CvmEu5pppg0uXg6AL1zY/GHOZpNL/YWbnC/o=",
+      "bytes": 6641
     },
     {
       "path": "core/tags.js",
@@ -139,13 +144,13 @@
     },
     {
       "path": "wallet/app.css",
-      "hash": "sha256-Ncuqd/laFte20nno7JIu9umAO+41CecABL7HHkwBcCc=",
-      "bytes": 24394
+      "hash": "sha256-sdaNqgvXBFOMNnIPGPiiP1b8Hq4BSzFTCzRoDQy3Sho=",
+      "bytes": 26119
     },
     {
       "path": "wallet/app.js",
-      "hash": "sha256-cSmTkiTDwEtrL4AUflGpMc/mbfzodoRA5IPOrogDUp0=",
-      "bytes": 240696
+      "hash": "sha256-uSBnd4yMIIVEI9F9k2Lmu35SiTeRiGuMsAEhJDIE1RI=",
+      "bytes": 241947
     },
     {
       "path": "wallet/boundary.js",
@@ -164,8 +169,8 @@
     },
     {
       "path": "wallet/core.js",
-      "hash": "sha256-ZL2mhDLqwEdwKo6GjC8siehEbNuKNiTE9KUqom/lx4Y=",
-      "bytes": 12613
+      "hash": "sha256-T5BX7CvxVS7bmm4h0Id+8zDK/kpi6BhY52vdoDny7vg=",
+      "bytes": 12875
     },
     {
       "path": "wallet/demo.js",
@@ -273,5 +278,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-q8+i/umPI+M9FbXL4o9JHVJnPskidNwtJH3X/MmSiho="
+  "filesHash": "sha256-GAq+HbMHgjbrMcpRB2ISx6InU9ZS1nHfApi/8WAmu+k="
 }

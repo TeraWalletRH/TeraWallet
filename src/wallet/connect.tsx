@@ -15,6 +15,8 @@ import { createRoot } from "react-dom/client";
 import { defineChain } from "viem";
 import { createConfig, http, useAccount, useDisconnect, WagmiProvider } from "wagmi";
 
+import { GAS_SPEEDS, type GasSpeedTier } from "./engine-runtime";
+
 declare global {
   interface Window {
     teraRainbowKit?: {
@@ -22,6 +24,7 @@ declare global {
       account: () => void;
       network: () => void;
       disconnect: () => void;
+      gasSpeeds?: typeof GAS_SPEEDS;
     };
   }
 }
@@ -81,6 +84,7 @@ export function DashboardWalletBridge() {
       account: () => openAccountModal?.(),
       network: () => openChainModal?.(),
       disconnect: () => disconnect(),
+      gasSpeeds: GAS_SPEEDS,
     };
     return () => {
       delete window.teraRainbowKit;
