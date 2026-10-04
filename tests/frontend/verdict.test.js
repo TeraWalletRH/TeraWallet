@@ -17,6 +17,7 @@ import {
   clean,
   blockers,
   blockingReason,
+  calculateNetBalanceDelta,
 } from "../../public/tera/core/verdict.js";
 import { GATES } from "../../public/tera/wallet/core.js";
 
@@ -231,3 +232,61 @@ test("the reason names the checks rather than counting them", () => {
   // Blocked is reported before unproven, the same worst-first order as everywhere.
   assert.ok(reason.indexOf("blocked it") < reason.indexOf("could not be established"));
 });
+
+test("simulated net balance delta: ERC20 token transfer", () => {
+  const token = "0x" + "3".repeat(40);
+  const recipient = "0x" + "2".repeat(40);
+  const amountHex = (250000000n).toString(16).padStart(64, "0");
+  const data = `0xa9059cbb${recipient.slice(2).padStart(64, "0")}${amountHex}`;
+  const tx = { to: token, data, value: "0x0" };
+  const intent = { actionType: "TRANSFER", assetAddress: token, amount: "250000000" };
+  const asset = { symbol: "USDG", decimals: 6 };
+
+  const delta = calculateNetBalanceDelta({ tx, intent, asset, gasEstimate: "0.0001" });
+  assert.equal(delta.hasDeltas, true);
+  assert.equal(delta.pays.length, 2);
+  assert.equal(delta.pays[0].formatted, "-250 USDG");
+  assert.equal(delta.pays[1].formatted, "-0.0001 ETH gas");
+  assert.equal(delta.receives.length, 0);
+  assert.match(delta.summary, /You Pay: -250 USDG, -0.0001 ETH gas/);
+});
+
+test("simulated net balance delta: native ETH transfer", () => {
+  const recipient = "0x" + "2".repeat(40);
+  const tx = { to: recipient, data: "0x", value: (100000000000000000n).toString() };
+  const intent = { actionType: "TRANSFER", recipient, amount: "100000000000000000" };
+
+  const delta = calculateNetBalanceDelta({ tx, intent, gasEstimate: "0.00005" });
+  assert.equal(delta.hasDeltas, true);
+  assert.equal(delta.pays[0].formatted, "-0.1 ETH");
+  assert.equal(delta.pays[1].formatted, "-0.00005 ETH gas");
+  assert.equal(delta.receives.length, 0);
+});
+
+test("simulated net balance delta: BUY swap (paying USDG, receiving ETH)", () => {
+  const tx = { to: "0x" + "4".repeat(40), data: "0x12345678" };
+  const intent = { actionType: "BUY", amount: "250000000" };
+  const quote = { amountOut: "0.098" };
+  const asset = { symbol: "ETH", decimals: 18 };
+
+  const delta = calculateNetBalanceDelta({ tx, intent, asset, quote, gasEstimate: "0.0001" });
+  assert.equal(delta.hasDeltas, true);
+  assert.equal(delta.pays[0].formatted, "-250 USDG");
+  assert.equal(delta.pays[1].formatted, "-0.0001 ETH gas");
+  assert.equal(delta.receives.length, 1);
+  assert.equal(delta.receives[0].formatted, "+0.098 ETH");
+  assert.match(delta.summary, /You Pay: -250 USDG, -0.0001 ETH gas \| You Receive: \+0.098 ETH/);
+});
+
+test("simulated net balance delta: SELL swap (paying token, receiving USDG)", () => {
+  const tx = { to: "0x" + "4".repeat(40), data: "0x12345678" };
+  const intent = { actionType: "SELL", amount: "100000000000000000" };
+  const quote = { amountOut: "250.00" };
+  const asset = { symbol: "ETH", decimals: 18 };
+
+  const delta = calculateNetBalanceDelta({ tx, intent, asset, quote, gasEstimate: "0.0001" });
+  assert.equal(delta.hasDeltas, true);
+  assert.equal(delta.pays[0].formatted, "-0.1 ETH");
+  assert.equal(delta.receives[0].formatted, "+250.00 USDG");
+});
+

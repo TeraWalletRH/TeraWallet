@@ -78,3 +78,159 @@ export async function unload() {
   await generator?.dispose?.();
   generator = null;
 }
+
+export interface BalanceDeltaItem {
+  asset: string;
+  amount: string;
+  symbol: string;
+  formatted: string;
+  isGas?: boolean;
+}
+
+export interface NetBalanceDelta {
+  pays: BalanceDeltaItem[];
+  receives: BalanceDeltaItem[];
+  summary: string;
+  hasDeltas: boolean;
+}
+
+/**
+ * On-device net balance simulation helper:
+ * Decodes transaction parameters and intent to derive exact You Pay / You Receive asset deltas.
+ */
+export function simulateNetBalanceDelta(params: {
+  tx?: { to?: string; data?: string; value?: string | bigint; gas?: string | number };
+  intent?: { actionType?: string; amount?: string | bigint; assetAddress?: string; recipient?: string };
+  asset?: { symbol?: string; decimals?: number; address?: string };
+  quote?: { amountOut?: string; amountOutWei?: string | bigint };
+  gasEstimateEth?: number | string;
+}): NetBalanceDelta {
+  const pays: BalanceDeltaItem[] = [];
+  const receives: BalanceDeltaItem[] = [];
+
+  const tx = params.tx || {};
+  const intent = params.intent || {};
+  const actionType = String(intent.actionType || "").toUpperCase();
+  const data = String(tx.data || "").toLowerCase();
+  const symbol = params.asset?.symbol || (actionType === "BUY" ? "USDG" : "ASSET");
+  const decimals = Number.isInteger(params.asset?.decimals) ? (params.asset?.decimals as number) : 18;
+
+  let txValue = 0n;
+  try {
+    if (tx.value) txValue = BigInt(tx.value);
+  } catch {
+    txValue = 0n;
+  }
+
+  const formatAmt = (val: string | bigint, dec: number) => {
+    try {
+      const bi = BigInt(val);
+      const str = bi.toString().padStart(dec + 1, "0");
+      const whole = str.slice(0, -dec) || "0";
+      const frac = str.slice(-dec).replace(/0+$/, "");
+      return frac ? `${whole}.${frac}` : whole;
+    } catch {
+      return String(val);
+    }
+  };
+
+  const isErc20Transfer = data.startsWith("0xa9059cbb") && data.length >= 138;
+  let erc20Amount: bigint | null = null;
+  if (isErc20Transfer) {
+    try {
+      erc20Amount = BigInt(`0x${data.slice(74, 138)}`);
+    } catch {
+      erc20Amount = null;
+    }
+  }
+
+  if (actionType === "BUY") {
+    const inputAmount = intent.amount ? formatAmt(intent.amount, 6) : "—";
+    pays.push({
+      asset: "USDG",
+      amount: inputAmount,
+      symbol: "USDG",
+      formatted: `-${inputAmount} USDG`,
+      isGas: false,
+    });
+    const outputAmount =
+      params.quote?.amountOut ||
+      (params.quote?.amountOutWei ? formatAmt(params.quote.amountOutWei, decimals) : null);
+    if (outputAmount) {
+      receives.push({
+        asset: symbol,
+        amount: String(outputAmount),
+        symbol,
+        formatted: `+${outputAmount} ${symbol}`,
+      });
+    }
+  } else if (actionType === "SELL") {
+    const inputAmount = intent.amount ? formatAmt(intent.amount, decimals) : "—";
+    pays.push({
+      asset: symbol,
+      amount: inputAmount,
+      symbol,
+      formatted: `-${inputAmount} ${symbol}`,
+      isGas: false,
+    });
+    const outputAmount =
+      params.quote?.amountOut ||
+      (params.quote?.amountOutWei ? formatAmt(params.quote.amountOutWei, 6) : null);
+    if (outputAmount) {
+      receives.push({
+        asset: "USDG",
+        amount: String(outputAmount),
+        symbol: "USDG",
+        formatted: `+${outputAmount} USDG`,
+      });
+    }
+  } else if (isErc20Transfer) {
+    const amtStr =
+      erc20Amount !== null
+        ? formatAmt(erc20Amount, decimals)
+        : intent.amount
+          ? formatAmt(intent.amount, decimals)
+          : "0";
+    pays.push({
+      asset: symbol,
+      amount: amtStr,
+      symbol,
+      formatted: `-${amtStr} ${symbol}`,
+      isGas: false,
+    });
+  } else if (txValue > 0n || actionType === "TRANSFER") {
+    const amtVal = txValue > 0n ? txValue : intent.amount ? BigInt(intent.amount) : 0n;
+    const sym = txValue > 0n ? "ETH" : symbol;
+    const dec = txValue > 0n ? 18 : decimals;
+    const amtStr = formatAmt(amtVal, dec);
+    pays.push({
+      asset: sym,
+      amount: amtStr,
+      symbol: sym,
+      formatted: `-${amtStr} ${sym}`,
+      isGas: false,
+    });
+  }
+
+  const gasFee = params.gasEstimateEth ?? "0.0001";
+  if (gasFee) {
+    pays.push({
+      asset: "ETH",
+      amount: String(gasFee),
+      symbol: "ETH",
+      formatted: `-${gasFee} ETH gas`,
+      isGas: true,
+    });
+  }
+
+  const payLines = pays.map((p) => p.formatted).join(", ");
+  const receiveLines = receives.length ? receives.map((r) => r.formatted).join(", ") : "None";
+  const summary = `You Pay: ${payLines || "0"} | You Receive: ${receiveLines}`;
+
+  return {
+    pays,
+    receives,
+    summary,
+    hasDeltas: pays.length > 0 || receives.length > 0,
+  };
+}
