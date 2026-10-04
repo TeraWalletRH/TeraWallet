@@ -38,3 +38,21 @@
 .pin-star-btn:hover{transform:scale(1.2);color:#d69e2e}
 .pin-star-btn.is-pinned{color:#ecc94b;text-shadow:0 0 6px rgba(236,201,75,.4)}
 
+/* Dynamic Gas Speed Selector */
+.gas-speed-selector{margin:12px 0;padding:12px 14px;background:#fbfbf7;border:1px solid #d5dbc9;border-radius:4px}
+.gas-speed-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.gas-speed-title{font-family:'IBM Plex Mono','Courier New',monospace;font-size:11px;text-transform:uppercase;color:#5d6756;font-weight:600;letter-spacing:0.04em}
+.gas-speed-selected-info{font-size:12px;color:#243b2c;font-weight:500}
+.gas-speed-pills{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.gas-speed-btn{background:#ffffff;border:1px solid #ccd2c1;border-radius:4px;padding:8px 10px;cursor:pointer;text-align:left;transition:all .15s ease;display:flex;flex-direction:column;gap:4px}
+.gas-speed-btn:hover:not(:disabled){border-color:#768143;background:#f4f6ef}
+.gas-speed-btn.active{background:#243b2c;border-color:#243b2c;color:#f7f4de}
+.gas-speed-btn .speed-head{display:flex;justify-content:space-between;align-items:baseline;width:100%}
+.gas-speed-btn .speed-label{font-weight:600;font-size:12px}
+.gas-speed-btn.active .speed-label{color:#f7f4de}
+.gas-speed-btn .speed-time{font-size:10px;color:#768143;font-family:'IBM Plex Mono',monospace}
+.gas-speed-btn.active .speed-time{color:#dbe4c2}
+.gas-speed-btn .speed-fee{font-size:11px;font-family:'IBM Plex Mono',monospace;color:#55604e}
+.gas-speed-btn.active .speed-fee{color:#e5ebd3}
+.gas-speed-btn:disabled{opacity:0.6;cursor:not-allowed}
+

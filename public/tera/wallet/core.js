@@ -234,6 +234,12 @@ export async function sendPrepared(
       value: step.value,
       chainId: `0x${chainId.toString(16)}`,
     };
+    if (step.maxFeePerGas != null) {
+      request.maxFeePerGas = `0x${BigInt(step.maxFeePerGas).toString(16)}`;
+    }
+    if (step.maxPriorityFeePerGas != null) {
+      request.maxPriorityFeePerGas = `0x${BigInt(step.maxPriorityFeePerGas).toString(16)}`;
+    }
     if (!nativeTransfer) {
       await stage("contract", info, async () => {
         const code = await provider.request({ method: "eth_getCode", params: [step.to, "latest"] });
