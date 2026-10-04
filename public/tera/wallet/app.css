@@ -1157,3 +1157,77 @@ h1:focus {
 .nft-copy .actions {
   flex-wrap: wrap;
 }
+
+/* Simulated Net Balance Delta in Proposal Review */
+.balance-delta-block {
+  margin: 12px 0 16px;
+  padding: 12px 14px;
+  background: var(--surface-subtle, #f4f7f4);
+  border: 1px solid var(--border-color, #dce5dc);
+  border-radius: 8px;
+}
+.balance-delta-block .delta-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.balance-delta-block .delta-title {
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #556b5a);
+}
+.balance-delta-block .delta-badge {
+  font-size: 0.7rem;
+  padding: 2px 7px;
+  border-radius: 12px;
+  background: #e2ede2;
+  color: #1a5628;
+  font-weight: 600;
+}
+.balance-delta-block .delta-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.balance-delta-block .delta-column {
+  background: #ffffff;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--border-subtle, #e7eee7);
+}
+.balance-delta-block .delta-label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-muted, #667);
+  margin-bottom: 4px;
+}
+.balance-delta-block .delta-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.balance-delta-block .delta-item {
+  font-size: 0.88rem;
+  font-family: monospace;
+  margin-bottom: 2px;
+}
+.balance-delta-block .delta-item.pay b {
+  color: #c92a2a;
+}
+.balance-delta-block .delta-item.pay.gas b {
+  color: #868e96;
+  font-size: 0.76rem;
+}
+.balance-delta-block .delta-item.receive b {
+  color: #2b8a3e;
+}
+.balance-delta-block .delta-item.none em {
+  font-size: 0.76rem;
+  color: #868e96;
+}
+

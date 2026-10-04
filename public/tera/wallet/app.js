@@ -108,6 +108,7 @@ import {
   UNVERIFIABLE as VERDICT_UNVERIFIABLE,
   gateVerdicts,
   summarise as summariseVerdicts,
+  calculateNetBalanceDelta,
 } from "../core/verdict.js";
 import { snapshot, appendVersion, versionTrail, pruneVersions, formatAmount } from "./history.js";
 import {
@@ -1526,6 +1527,39 @@ function localBlock(proposal) {
     <p class="micro">These comparisons run in your browser against the action you reviewed. They do not ask Tera whether the transaction is correct.</p>
   </details>`;
 }
+function balanceDeltaBlock(p) {
+  const tx = p.preparedTransaction;
+  const intent = p.intent || tx?.intent;
+  if (!tx || !intent) return "";
+  const asset = assetFor(intent.assetAddress);
+  const delta = calculateNetBalanceDelta({
+    tx,
+    intent,
+    asset,
+    quote: p.quote || tx.quote,
+  });
+  if (!delta || !delta.hasDeltas) return "";
+  return `<section class="balance-delta-block">
+    <div class="delta-header">
+      <span class="delta-title">Simulated Net Balance Delta</span>
+      <span class="delta-badge">Simulated</span>
+    </div>
+    <div class="delta-columns">
+      <div class="delta-column pay">
+        <span class="delta-label">You Pay</span>
+        <ul class="delta-items">
+          ${delta.pays.map((item) => `<li class="delta-item pay ${item.isGas ? "gas" : ""}"><b>${esc(item.formatted)}</b></li>`).join("")}
+        </ul>
+      </div>
+      <div class="delta-column receive">
+        <span class="delta-label">You Receive</span>
+        <ul class="delta-items">
+          ${delta.receives.length ? delta.receives.map((item) => `<li class="delta-item receive"><b>${esc(item.formatted)}</b></li>`).join("") : '<li class="delta-item none"><em>No incoming assets</em></li>'}
+        </ul>
+      </div>
+    </div>
+  </section>`;
+}
 function proposalCard(p, index = state.drafts.indexOf(p)) {
   const intent = p.intent || p.preparedTransaction?.intent;
   const asset = assetFor(intent?.assetAddress);
@@ -1544,7 +1578,8 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
   }
   return `<article class="proposal"><div class="proposal-top"><span class="eyebrow">${esc(intent?.actionType || "Proposal")}</span>${chip(submitted ? "Submitted" : issue ? "Needs attention" : "Awaiting owner", !submitted && !!issue)}</div><h2>${esc(asset?.name || "Action review")}</h2>${p.explanation ? `<p class="lead">${esc(p.explanation)}</p>` : ""}
     ${gateSummaryBlock(p)}
-    <ul class="status-list">${GATES.map((name, i) => {
+    ${balanceDeltaBlock(p)}
+    <ul class="status-list">`${GATES.map((name, i) => {
       const g = p.gates?.find((g) => g.gate === name);
       const detail = explainGate(name, g);
       const status =

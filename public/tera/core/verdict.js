@@ -226,3 +226,147 @@ export function clean(verdicts = []) {
   const counts = tally(verdicts);
   return counts[FAIL] === 0 && counts[UNVERIFIABLE] === 0;
 }
+
+/**
+ * Net Balance Delta: Calculates the asset changes ("You Pay / You Receive") for a transaction.
+ *
+ * Evaluates native ETH value, calldata token transfers, swap input/output, and gas estimates.
+ * Returns structured changes so the owner sees exactly what will leave and enter their wallet.
+ */
+export function calculateNetBalanceDelta({
+  tx,
+  intent,
+  asset,
+  quote,
+  gasEstimate = "0.0001",
+} = {}) {
+  const pays = [];
+  const receives = [];
+
+  const rawTx = tx || {};
+  const rawIntent = intent || rawTx.intent || {};
+  const actionType = String(rawIntent.actionType || "").toUpperCase();
+  const data = String(rawTx.data || "").toLowerCase();
+  const symbol = asset?.symbol || (actionType === "BUY" ? "USDG" : "ASSET");
+  const decimals = Number.isInteger(asset?.decimals) ? asset.decimals : 18;
+
+  let txValue = 0n;
+  try {
+    if (rawTx.value) txValue = BigInt(rawTx.value);
+  } catch {
+    txValue = 0n;
+  }
+
+  const formatAmt = (val, dec) => {
+    try {
+      const d = dec ?? 18;
+      const bi = BigInt(val);
+      const str = bi.toString().padStart(d + 1, "0");
+      const whole = str.slice(0, -d) || "0";
+      const frac = str.slice(-d).replace(/0+$/, "");
+      return frac ? `${whole}.${frac}` : whole;
+    } catch {
+      return String(val);
+    }
+  };
+
+  const isErc20Transfer = data.startsWith("0xa9059cbb") && data.length >= 138;
+  const isErc20Approve = data.startsWith("0x095ea7b3") && data.length >= 138;
+
+  let erc20Amount = null;
+  if (isErc20Transfer || isErc20Approve) {
+    try {
+      erc20Amount = BigInt(`0x${data.slice(74, 138)}`);
+    } catch {
+      erc20Amount = null;
+    }
+  }
+
+  if (actionType === "BUY") {
+    const inputAmount = rawIntent.amount ? formatAmt(rawIntent.amount, 6) : "—";
+    pays.push({
+      asset: "USDG",
+      amount: inputAmount,
+      symbol: "USDG",
+      formatted: `-${inputAmount} USDG`,
+      isGas: false,
+    });
+    const outputAmount =
+      quote?.amountOut || (quote?.amountOutWei ? formatAmt(quote.amountOutWei, decimals) : null);
+    if (outputAmount) {
+      receives.push({
+        asset: symbol,
+        amount: String(outputAmount),
+        symbol,
+        formatted: `+${outputAmount} ${symbol}`,
+      });
+    }
+  } else if (actionType === "SELL") {
+    const inputAmount = rawIntent.amount ? formatAmt(rawIntent.amount, decimals) : "—";
+    pays.push({
+      asset: symbol,
+      amount: inputAmount,
+      symbol,
+      formatted: `-${inputAmount} ${symbol}`,
+      isGas: false,
+    });
+    const outputAmount =
+      quote?.amountOut || (quote?.amountOutWei ? formatAmt(quote.amountOutWei, 6) : null);
+    if (outputAmount) {
+      receives.push({
+        asset: "USDG",
+        amount: String(outputAmount),
+        symbol: "USDG",
+        formatted: `+${outputAmount} USDG`,
+      });
+    }
+  } else if (isErc20Transfer) {
+    const amtStr =
+      erc20Amount !== null
+        ? formatAmt(erc20Amount, decimals)
+        : rawIntent.amount
+          ? formatAmt(rawIntent.amount, decimals)
+          : "0";
+    pays.push({
+      asset: symbol,
+      amount: amtStr,
+      symbol,
+      formatted: `-${amtStr} ${symbol}`,
+      isGas: false,
+    });
+  } else if (txValue > 0n || actionType === "TRANSFER") {
+    const amtVal = txValue > 0n ? txValue : rawIntent.amount ? BigInt(rawIntent.amount) : 0n;
+    const sym = txValue > 0n ? "ETH" : symbol;
+    const dec = txValue > 0n ? 18 : decimals;
+    const amtStr = formatAmt(amtVal, dec);
+    pays.push({
+      asset: sym,
+      amount: amtStr,
+      symbol: sym,
+      formatted: `-${amtStr} ${sym}`,
+      isGas: false,
+    });
+  }
+
+  if (gasEstimate) {
+    const gasStr = String(gasEstimate);
+    pays.push({
+      asset: "ETH",
+      amount: gasStr,
+      symbol: "ETH",
+      formatted: `-${gasStr} ETH gas`,
+      isGas: true,
+    });
+  }
+
+  const payLines = pays.map((p) => p.formatted).join(", ");
+  const receiveLines = receives.length ? receives.map((r) => r.formatted).join(", ") : "None";
+  const summary = `You Pay: ${payLines || "0"} | You Receive: ${receiveLines}`;
+
+  return {
+    pays,
+    receives,
+    summary,
+    hasDeltas: pays.length > 0 || receives.length > 0,
+  };
+}
