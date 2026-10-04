@@ -37,17 +37,28 @@ import {
   actionMessage,
   can,
   cleanText,
+  EXPIRATION_PRESETS,
   isSignerRole,
   majority,
   MAX_NOTE,
   MAX_TEAM_NAME,
   packSignatures,
+  parseExpirationSeconds,
   ROLES,
   SAFE,
   safeTxTypedData,
 } from "../../../public/tera/core/teams.js";
 
-export { can, isSignerRole, majority, MAX_NOTE, MAX_TEAM_NAME, ROLES };
+export {
+  can,
+  EXPIRATION_PRESETS,
+  isSignerRole,
+  majority,
+  MAX_NOTE,
+  MAX_TEAM_NAME,
+  parseExpirationSeconds,
+  ROLES,
+};
 
 export type Role = "admin" | "approver" | "initiator" | "viewer";
 export type TeamSummary = {
@@ -87,6 +98,8 @@ export type Proposal = {
   blocked: boolean;
   /** Enough signers signed its cancellation for anyone to send it. */
   cancellable: boolean;
+  expires_at?: string | null;
+  expiresAt?: string | null;
 };
 export type Team = {
   team: { safe: Address; name: string; chainId: number; createdBy: Address };
@@ -378,25 +391,38 @@ export async function removeMember(safe: Address, member: Address) {
 
 export async function proposePayment(
   safe: Address,
-  payment: { recipient: Address; asset: Asset; amount: string; note: string },
+  payment: {
+    recipient: Address;
+    asset: Asset;
+    amount: string;
+    note: string;
+    expiresIn?: string | number | null;
+  },
 ) {
   const units = parseUnits(payment.amount.trim(), payment.asset.decimals);
   if (units <= 0n) throw new Error("Enter an amount above zero.");
   const tx = transferTx(payment.asset.address as Address, payment.recipient, units.toString());
   const note = cleanText(payment.note, MAX_NOTE);
   const data = tx.data.toLowerCase();
+  const expirationSeconds = parseExpirationSeconds(payment.expiresIn);
+  const fields: [string, unknown][] = [
+    ["To", tx.to.toLowerCase()],
+    ["Value", tx.value],
+    ["Data", data],
+    ["Note", note],
+  ];
+  if (expirationSeconds !== null) {
+    fields.push(["ExpiresIn", `${expirationSeconds}s`]);
+  }
   return api("/api/teams/propose", {
     team: safe,
     to: tx.to,
     value: tx.value,
     data,
     note,
-    ...(await sign("propose", safe, [
-      ["To", tx.to.toLowerCase()],
-      ["Value", tx.value],
-      ["Data", data],
-      ["Note", note],
-    ])),
+    expiresIn: expirationSeconds ? `${expirationSeconds}s` : undefined,
+    expirationSeconds: expirationSeconds || undefined,
+    ...(await sign("propose", safe, fields)),
   });
 }
 

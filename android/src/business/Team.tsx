@@ -1318,6 +1318,7 @@ function NewPayment({
     asset: Asset;
     amount: string;
     note: string;
+    expiresIn?: string;
   }) => Promise<void>;
 }) {
   const held = assets.filter((asset) => holdings[asset.symbol]);
@@ -1326,6 +1327,7 @@ function NewPayment({
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
+  const [expiration, setExpiration] = useState("24h");
   const [problem, setProblem] = useState("");
   const asset = assets.find((a) => a.symbol === symbol) || choices[0];
   return (
@@ -1365,6 +1367,24 @@ function NewPayment({
         placeholder={t("What it's for, invoice number…", "用途、发票号…")}
         onChangeText={setNote}
       />
+      <View style={{ gap: 6 }}>
+        <Text style={s.small}>{t("Auto-Expiration Window", "自动过期窗口")}</Text>
+        <View style={s.wrap}>
+          {[
+            { label: t("24 Hours", "24 小时"), value: "24h" },
+            { label: t("3 Days", "3 天"), value: "3d" },
+            { label: t("7 Days", "7 天"), value: "7d" },
+            { label: t("30 Days", "30 天"), value: "30d" },
+          ].map((preset) => (
+            <Chip
+              key={preset.value}
+              label={preset.label}
+              on={expiration === preset.value}
+              onPress={() => setExpiration(preset.value)}
+            />
+          ))}
+        </View>
+      </View>
       {problem ? <Text style={[s.small, { color: colors.danger }]}>{problem}</Text> : null}
       <Button
         primary
@@ -1385,7 +1405,7 @@ function NewPayment({
               return setProblem(
                 t("Enter a wallet address or a business email.", "请输入钱包地址或商业邮箱。"),
               );
-            await onPropose({ recipient: to, asset: asset!, amount, note });
+            await onPropose({ recipient: to, asset: asset!, amount, note, expiresIn: expiration });
           })()
         }
       >
