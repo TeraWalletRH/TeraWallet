@@ -24,3 +24,11 @@
 .field{min-width:0}.field input:not([type=checkbox]),.field select,.field textarea{width:100%;min-width:0;box-sizing:border-box}
 
 .wallet-nav-connect,.wallet-nav a.wallet-nav-home{display:none}@media(max-width:750px){.wallet-nav.is-open .wallet-nav-connect,.wallet-nav.is-open a.wallet-nav-home{display:flex;align-items:center;justify-content:center;margin-top:8px;font-size:11px;min-height:44px}.wallet-nav.is-open a.wallet-nav-home{border:1px solid #b9c0ae}}
+
+/* Facet Filter Pills */
+.facet-filters-bar{display:flex;flex-direction:column;gap:10px;margin-bottom:20px;padding:14px;background:#f7f9f4;border:1px solid #cbcfc4}
+.facet-filter-group{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.facet-group-label{font-family:'IBM Plex Mono','Courier New',monospace;font-size:11px;text-transform:uppercase;color:#657060;min-width:75px;font-weight:600}
+.facet-pill{border:1px solid #bec5b5;background:#ffffff;color:#233622;padding:6px 12px;font-size:11px;font-family:'IBM Plex Mono',monospace;text-transform:uppercase;cursor:pointer;transition:all .15s ease}
+.facet-pill:hover{background:#e2e5d5;border-color:#8a9765}
+.facet-pill.active{background:#243b2c;color:#f7f4de;border-color:#243b2c;font-weight:600}

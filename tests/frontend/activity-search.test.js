@@ -4,9 +4,17 @@ import {
   activeCount,
   assetOf,
   assetsIn,
+  categorizeType,
   dateRange,
+  directionOf,
+  FACET_ASSETS,
+  FACET_DIRECTIONS,
+  FACET_TYPES,
   filter,
+  filterByFacets,
+  isRwaAsset,
   parseDay,
+  renderFacetPillsHtml,
   statusGroup,
 } from "../../public/tera/core/activity-search.js";
 
@@ -132,4 +140,82 @@ test("the filter count ignores the search box and empty choices", () => {
   assert.equal(activeCount({}), 0);
   assert.equal(activeCount({ query: "mum", kind: "all", period: "any" }), 0);
   assert.equal(activeCount({ kind: "send", asset: "ETH", status: "failed", period: "7d" }), 4);
+});
+
+test("categorizeType classifies rows into transfer, swap, staking, and paylink", () => {
+  assert.equal(categorizeType({ action: "SEND" }), "transfers");
+  assert.equal(categorizeType({ direction: "receive" }), "transfers");
+  assert.equal(categorizeType({ activityType: "swap" }), "swaps");
+  assert.equal(categorizeType({ action: "BUY" }), "swaps");
+  assert.equal(categorizeType({ action: "CLAIM_YIELD" }), "staking_rewards");
+  assert.equal(categorizeType({ activityType: "stake" }), "staking_rewards");
+  assert.equal(categorizeType({ action: "paylink" }), "payment_links");
+  assert.equal(categorizeType({ activityType: "invoice" }), "payment_links");
+});
+
+test("directionOf accurately determines incoming vs outgoing", () => {
+  assert.equal(directionOf({ direction: "receive" }), "incoming");
+  assert.equal(directionOf({ action: "CLAIM_YIELD" }), "incoming");
+  assert.equal(directionOf({ direction: "send" }), "outgoing");
+  assert.equal(directionOf({ action: "BUY" }), "outgoing");
+  assert.equal(directionOf({ recipient: ME }, ME), "incoming");
+  assert.equal(directionOf({ payee: SHOP }, ME), "outgoing");
+});
+
+test("isRwaAsset correctly identifies Real World Asset tokens", () => {
+  assert.equal(isRwaAsset("UST"), true);
+  assert.equal(isRwaAsset("NVDA"), true);
+  assert.equal(isRwaAsset("AAPL"), true);
+  assert.equal(isRwaAsset("TSLA"), true);
+  assert.equal(isRwaAsset("USDG"), false);
+  assert.equal(isRwaAsset("ETH"), false);
+});
+
+test("facet filtering filters by type, direction, and asset categories", () => {
+  const facetRows = [
+    { hash: "0x1", activityType: "send", symbol: "USDG", status: "confirmed", createdAt: NOW },
+    { hash: "0x2", direction: "receive", symbol: "USDG", status: "confirmed", createdAt: NOW },
+    { hash: "0x3", action: "BUY", symbol: "NVDA", status: "confirmed", createdAt: NOW },
+    { hash: "0x4", action: "CLAIM_YIELD", symbol: "UST", status: "confirmed", createdAt: NOW },
+    { hash: "0x5", action: "paylink", symbol: "USDG", status: "confirmed", createdAt: NOW },
+  ];
+
+  // Filter by Type
+  const transfers = filterByFacets(facetRows, { type: "transfers", now: NOW }).map((r) => r.hash);
+  assert.deepEqual(transfers, ["0x1", "0x2"]);
+
+  const swaps = filterByFacets(facetRows, { type: "swaps", now: NOW }).map((r) => r.hash);
+  assert.deepEqual(swaps, ["0x3"]);
+
+  const staking = filterByFacets(facetRows, { type: "staking_rewards", now: NOW }).map((r) => r.hash);
+  assert.deepEqual(staking, ["0x4"]);
+
+  const paylinks = filterByFacets(facetRows, { type: "payment_links", now: NOW }).map((r) => r.hash);
+  assert.deepEqual(paylinks, ["0x5"]);
+
+  // Filter by Direction
+  const incoming = filterByFacets(facetRows, { direction: "incoming", now: NOW }).map((r) => r.hash);
+  assert.deepEqual(incoming, ["0x2", "0x4"]);
+
+  const outgoing = filterByFacets(facetRows, { direction: "outgoing", now: NOW }).map((r) => r.hash);
+  assert.deepEqual(outgoing, ["0x1", "0x3", "0x5"]);
+
+  // Filter by Asset
+  const usdg = filterByFacets(facetRows, { asset: "USDG", now: NOW }).map((r) => r.hash);
+  assert.deepEqual(usdg, ["0x1", "0x2", "0x5"]);
+
+  const rwa = filterByFacets(facetRows, { asset: "RWA", now: NOW }).map((r) => r.hash);
+  assert.deepEqual(rwa, ["0x3", "0x4"]);
+
+  // Combined facets
+  const incomingUsdg = filterByFacets(facetRows, { direction: "incoming", asset: "USDG", now: NOW }).map((r) => r.hash);
+  assert.deepEqual(incomingUsdg, ["0x2"]);
+});
+
+test("renderFacetPillsHtml generates markup with active states", () => {
+  const html = renderFacetPillsHtml({ type: "transfers", direction: "incoming", asset: "RWA" });
+  assert.match(html, /facet-filters-bar/);
+  assert.match(html, /class="facet-pill active"[^>]*data-facet-val="transfers"/);
+  assert.match(html, /class="facet-pill active"[^>]*data-facet-val="incoming"/);
+  assert.match(html, /class="facet-pill active"[^>]*data-facet-val="RWA"/);
 });
