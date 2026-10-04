@@ -2437,6 +2437,16 @@ function Wallet() {
     const payee = i.actionType === "TRANSFER" ? i.recipient : undefined;
     const savedAs = payee ? contactsCore.nameFor(book, payee) : "";
     if (savedAs) rows.push([t("Saved as", "已保存为"), savedAs]);
+    if (p.expiresAt) {
+      const expDate = new Date(p.expiresAt);
+      const isExp = expDate.getTime() <= Date.now();
+      rows.push([
+        t("Auto-Expires", "自动过期"),
+        isExp
+          ? t("Expired", "已过期")
+          : `${expDate.toLocaleTimeString()} (${Math.max(1, Math.round((expDate.getTime() - Date.now()) / 3600000))}h)`,
+      ]);
+    }
     if (q) {
       rows.push([
         t("Expected output", "预计收到"),
@@ -3067,7 +3077,15 @@ function Wallet() {
         prepared = await api("/api/intent/prepare", checked);
         guard();
       }
-      const p = { ...prepared, intent: checked, createdAt: Date.now() };
+      const p = {
+        ...prepared,
+        intent: checked,
+        createdAt: Date.now(),
+        expiresAt:
+          prepared?.expiresAt ||
+          result?.expiresAt ||
+          new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+      };
       await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, p] });
     }
   }
@@ -4191,11 +4209,45 @@ function Wallet() {
                     }
                   </Text>
                   {d.expiresAt ? (
-                    <Text style={[s.small, { color: new Date(d.expiresAt).getTime() <= Date.now() ? colors.danger : colors.muted }]}>
-                      {new Date(d.expiresAt).getTime() <= Date.now()
-                        ? t("Quote expired", "报价已过期")
-                        : t(`Expires at ${new Date(d.expiresAt).toLocaleTimeString()}`, `将于 ${new Date(d.expiresAt).toLocaleTimeString()} 过期`)}
-                    </Text>
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 6, marginVertical: 4 }}>
+                      <View
+                        style={{
+                          paddingHorizontal: 8,
+                          paddingVertical: 2,
+                          borderRadius: 6,
+                          backgroundColor:
+                            new Date(d.expiresAt).getTime() <= Date.now()
+                              ? colors.warnTint
+                              : colors.tint,
+                        }}
+                      >
+                        <Text
+                          style={[
+                            s.small,
+                            {
+                              color:
+                                new Date(d.expiresAt).getTime() <= Date.now()
+                                  ? colors.danger
+                                  : colors.green,
+                              fontWeight: "600",
+                            },
+                          ]}
+                        >
+                          {new Date(d.expiresAt).getTime() <= Date.now()
+                            ? t("Expired", "已过期")
+                            : t(
+                                `Expires in ${Math.max(1, Math.round((new Date(d.expiresAt).getTime() - Date.now()) / 3600000))}h`,
+                                `${Math.max(1, Math.round((new Date(d.expiresAt).getTime() - Date.now()) / 3600000))}小时后过期`,
+                              )}
+                        </Text>
+                      </View>
+                      <Text style={[s.small, { color: colors.muted }]}>
+                        {t(
+                          `Window: 24h · ${new Date(d.expiresAt).toLocaleTimeString()}`,
+                          `窗口: 24小时 · ${new Date(d.expiresAt).toLocaleTimeString()}`,
+                        )}
+                      </Text>
+                    </View>
                   ) : null}
                   <Button
                     disabled={busy}
