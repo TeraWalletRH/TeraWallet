@@ -1,0 +1,1014 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Help & Support · Tera Wallet</title>
+  <meta name="description" content="Official Tera Wallet Help & Support Center. Search self-service guides, check live system health, generate privacy diagnostics, or submit an inquiry to our team.">
+  
+  <!-- Social metadata -->
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Tera Wallet">
+  <meta property="og:url" content="https://terawallet.app/support/">
+  <meta property="og:title" content="Help & Support · Tera Wallet">
+  <meta property="og:description" content="Official Tera Wallet Help & Support Center. Search guides, inspect live network health, or get assistance from our team within 24 hours.">
+  <meta property="og:image" content="https://terawallet.app/tera/og-card.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:site" content="@TeraWalletRH">
+  <meta name="twitter:title" content="Help & Support · Tera Wallet">
+  <meta name="twitter:description" content="Official Tera Wallet Help & Support Center. Search guides, inspect live network health, or get assistance from our team within 24 hours.">
+  <meta name="twitter:image" content="https://terawallet.app/tera/og-card.png">
+  
+  <link rel="icon" href="/favicon.png">
+  <link rel="stylesheet" href="/tera/preloader.css?v=1789076705">
+
+  <style>
+    :root {
+      --paper: #121814;
+      --surface: #18221b;
+      --card: #1f2b23;
+      --raised: #28372d;
+      --ink: #f5eedb;
+      --muted: #9aa893;
+      --line: #2e3e32;
+      --tint: #162f22;
+      --green: #10b981;
+      --green-glow: #10b98133;
+      --yellow: #eab308;
+      --yellow-tint: #42350a33;
+      --danger: #ef4444;
+      --danger-tint: #45121233;
+      --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root:not(.dark) {
+        --paper: #f4f3ef;
+        --surface: #ffffff;
+        --card: #eae9e3;
+        --raised: #dfddd5;
+        --ink: #1e2d22;
+        --muted: #6b7765;
+        --line: #d1cfc5;
+        --tint: #e4efe7;
+        --green: #059669;
+        --yellow: #ca8a04;
+        --danger: #dc2626;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: var(--font-sans);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a { color: inherit; text-decoration: none; }
+    a:hover { color: var(--green); }
+
+    .shell {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 0 24px 80px;
+    }
+
+    /* Header */
+    .header {
+      min-height: 74px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font: 13px/1 var(--font-mono);
+      font-weight: 700;
+      letter-spacing: 1.2px;
+      color: var(--ink);
+    }
+
+    .brand img {
+      width: 26px;
+      height: 26px;
+      object-fit: contain;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      font: 12px var(--font-mono);
+      text-transform: uppercase;
+    }
+
+    .nav-links a {
+      color: var(--muted);
+      transition: color 0.15s;
+    }
+
+    .nav-links a.active, .nav-links a:hover {
+      color: var(--ink);
+    }
+
+    .locale-btn {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      color: var(--ink);
+      padding: 5px 12px;
+      border-radius: 999px;
+      cursor: pointer;
+      font: 11px var(--font-mono);
+      transition: all 0.15s;
+    }
+
+    .locale-btn:hover {
+      border-color: var(--green);
+      color: var(--green);
+    }
+
+    /* Security Warning Banner */
+    .security-banner {
+      margin: 28px 0 36px;
+      background: var(--yellow-tint);
+      border: 1px solid var(--yellow);
+      border-radius: 14px;
+      padding: 16px 20px;
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+    }
+
+    .security-badge {
+      background: var(--yellow);
+      color: #000;
+      font: 10px var(--font-mono);
+      font-weight: 800;
+      padding: 4px 8px;
+      border-radius: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      white-space: nowrap;
+    }
+
+    .security-text {
+      font-size: 13px;
+      line-height: 1.5;
+      color: var(--ink);
+    }
+
+    .security-text strong {
+      color: var(--yellow);
+    }
+
+    /* Hero */
+    .hero {
+      padding: 20px 0 40px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .eyebrow {
+      font: 11px var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 1.5px;
+      color: var(--green);
+      margin: 0 0 12px;
+    }
+
+    .hero h1 {
+      font-size: clamp(34px, 5vw, 54px);
+      font-weight: 700;
+      line-height: 1.05;
+      letter-spacing: -0.04em;
+      margin: 0 0 16px;
+    }
+
+    .hero p {
+      font-size: 17px;
+      color: var(--muted);
+      max-width: 680px;
+      margin: 0 0 24px;
+    }
+
+    /* Live Status Strip */
+    .status-strip {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+      margin-top: 24px;
+    }
+
+    .status-card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .status-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px var(--green-glow);
+    }
+
+    .status-info {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .status-label {
+      font: 10px var(--font-mono);
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+    }
+
+    .status-val {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--ink);
+    }
+
+    /* Channels Grid */
+    .section-title {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 48px 0 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .channels-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+      gap: 16px;
+    }
+
+    .channel-card {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 22px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 18px;
+      transition: transform 0.15s, border-color 0.15s;
+    }
+
+    .channel-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--green);
+    }
+
+    .channel-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .channel-icon {
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      background: var(--tint);
+      color: var(--green);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .channel-tag {
+      font: 10px var(--font-mono);
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--raised);
+      color: var(--muted);
+    }
+
+    .channel-title {
+      font-size: 16px;
+      font-weight: 700;
+      margin: 0 0 6px;
+    }
+
+    .channel-desc {
+      font-size: 13px;
+      color: var(--muted);
+      margin: 0;
+      line-height: 1.45;
+    }
+
+    .channel-action {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font: 12px var(--font-mono);
+      font-weight: 700;
+      color: var(--green);
+    }
+
+    /* Ticket Composer (Option A) */
+    .ticket-container {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      padding: 32px;
+      margin: 20px 0 48px;
+    }
+
+    .ticket-header {
+      margin-bottom: 24px;
+    }
+
+    .ticket-header h2 {
+      font-size: 22px;
+      font-weight: 700;
+      margin: 0 0 8px;
+    }
+
+    .ticket-header p {
+      font-size: 14px;
+      color: var(--muted);
+      margin: 0;
+    }
+
+    .form-group {
+      margin-bottom: 18px;
+    }
+
+    .form-label {
+      display: block;
+      font: 11px var(--font-mono);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+
+    .chip-selector {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .category-chip {
+      padding: 7px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: transparent;
+      color: var(--muted);
+      font: 12px var(--font-mono);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .category-chip.selected {
+      border-color: var(--green);
+      background: var(--tint);
+      color: var(--green);
+      font-weight: 700;
+    }
+
+    .input-field, .textarea-field {
+      width: 100%;
+      background: var(--paper);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px 14px;
+      font-size: 14px;
+      color: var(--ink);
+      font-family: inherit;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .input-field:focus, .textarea-field:focus {
+      border-color: var(--green);
+    }
+
+    .textarea-field {
+      min-height: 110px;
+      resize: vertical;
+    }
+
+    .diagnostics-box {
+      background: var(--paper);
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+      padding: 14px 18px;
+      margin: 20px 0;
+    }
+
+    .diagnostics-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .diagnostics-title {
+      font: 11px var(--font-mono);
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+
+    .diagnostics-text {
+      font: 11px/1.6 var(--font-mono);
+      color: var(--ink);
+      word-break: break-all;
+      margin: 0;
+    }
+
+    .ticket-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 14px;
+      margin-top: 24px;
+    }
+
+    .btn-primary {
+      background: var(--green);
+      color: #0c1810;
+      border: 0;
+      padding: 13px 24px;
+      border-radius: 10px;
+      font: 13px var(--font-mono);
+      font-weight: 700;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      transition: opacity 0.15s;
+    }
+
+    .btn-primary:hover {
+      opacity: 0.9;
+    }
+
+    .btn-secondary {
+      background: transparent;
+      color: var(--ink);
+      border: 1px solid var(--line);
+      padding: 13px 20px;
+      border-radius: 10px;
+      font: 13px var(--font-mono);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .btn-secondary:hover {
+      border-color: var(--green);
+      color: var(--green);
+    }
+
+    /* FAQ Section */
+    .search-bar-wrap {
+      position: relative;
+      margin-bottom: 24px;
+    }
+
+    .search-input {
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px 18px;
+      font-size: 15px;
+      color: var(--ink);
+      outline: none;
+    }
+
+    .search-input:focus {
+      border-color: var(--green);
+    }
+
+    .faq-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .faq-item {
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+
+    .faq-item.open {
+      border-color: var(--green);
+    }
+
+    .faq-question {
+      width: 100%;
+      padding: 18px 20px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      background: none;
+      border: 0;
+      color: var(--ink);
+      font-size: 15px;
+      font-weight: 600;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .faq-arrow {
+      font: 16px var(--font-mono);
+      color: var(--muted);
+      transition: transform 0.2s;
+    }
+
+    .faq-item.open .faq-arrow {
+      transform: rotate(90deg);
+      color: var(--green);
+    }
+
+    .faq-answer {
+      display: none;
+      padding: 0 20px 20px;
+      font-size: 14px;
+      line-height: 1.6;
+      color: var(--muted);
+      border-top: 1px solid transparent;
+    }
+
+    .faq-item.open .faq-answer {
+      display: block;
+      border-top-color: var(--line);
+      padding-top: 14px;
+    }
+
+    /* Toast */
+    .toast {
+      position: fixed;
+      bottom: 28px;
+      right: 28px;
+      background: var(--surface);
+      border: 1px solid var(--green);
+      color: var(--ink);
+      padding: 12px 20px;
+      border-radius: 10px;
+      font: 13px var(--font-mono);
+      box-shadow: 0 10px 25px rgba(0,0,0,0.4);
+      z-index: 100;
+      animation: fadeUp 0.2s ease-out;
+    }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    /* Footer */
+    .footer {
+      border-top: 1px solid var(--line);
+      margin-top: 80px;
+      padding-top: 32px;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 20px;
+      font: 12px var(--font-mono);
+      color: var(--muted);
+    }
+
+    .footer-links {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 20px;
+    }
+
+    @media (max-width: 768px) {
+      .header .nav-links a:not(.active) {
+        display: none;
+      }
+      .ticket-container {
+        padding: 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <!-- Top Header -->
+    <header class="header">
+      <a class="brand" href="/">
+        <img src="/tera/logo.png" alt="Tera Wallet Logo">
+        TERA WALLET
+      </a>
+      <nav class="nav-links">
+        <a href="/app/" data-en="App" data-zh="应用">App</a>
+        <a href="/dashboard/" data-en="Dashboard" data-zh="概览">Dashboard</a>
+        <a href="/roadmap/" data-en="Roadmap" data-zh="路线图">Roadmap</a>
+        <a href="/whitepaper/" data-en="Whitepaper" data-zh="白皮书">Whitepaper</a>
+        <a href="/support/" class="active" data-en="Support" data-zh="支持">Support</a>
+        <button class="locale-btn" type="button" aria-label="Toggle language">中文</button>
+      </nav>
+    </header>
+
+    <!-- Anti-Phishing Security Banner -->
+    <div class="security-banner">
+      <span class="security-badge" data-en="Security Notice" data-zh="安全提示">Security Notice</span>
+      <div class="security-text" data-en="The Tera Wallet team will <strong>NEVER</strong> ask for your seed phrase, private keys, or passwords. Never share your recovery file or enter credentials on third-party sites." data-zh="Tera Wallet 官方团队<strong>绝不会</strong>索要您的助记词、私钥或密码。切勿向任何人分享您的恢复文件或在第三方网站输入敏感凭据。">
+        The Tera Wallet team will <strong>NEVER</strong> ask for your seed phrase, private keys, or passwords. Never share your recovery file or enter credentials on third-party sites.
+      </div>
+    </div>
+
+    <!-- Main Hero -->
+    <main>
+      <section class="hero">
+        <p class="eyebrow" data-en="Help & User Support Center" data-zh="帮助与用户支持中心">Help & User Support Center</p>
+        <h1 data-en="How can we help you?" data-zh="我们能为您提供什么帮助？">How can we help you?</h1>
+        <p data-en="Search our self-service knowledge base, inspect live network latency, or compose a pre-filled diagnostic ticket directly to our support team." data-zh="浏览自助知识库，检查网络实时状态，或直接向支持团队发起带有环境诊断信息的技术工单。">
+          Search our self-service knowledge base, inspect live network latency, or compose a pre-filled diagnostic ticket directly to our support team.
+        </p>
+
+        <!-- Live Network Status Indicators -->
+        <div class="status-strip">
+          <div class="status-card">
+            <div class="status-dot"></div>
+            <div class="status-info">
+              <span class="status-label" data-en="Target Chain" data-zh="目标网络">Target Chain</span>
+              <span class="status-val">Robinhood Chain (4663)</span>
+            </div>
+          </div>
+          <div class="status-card">
+            <div class="status-dot"></div>
+            <div class="status-info">
+              <span class="status-label" data-en="OHTTP Gateway" data-zh="隐匿网关">OHTTP Gateway</span>
+              <span class="status-val" data-en="Active · HPKE Sealed" data-zh="运行中 · HPKE 封装">Active · HPKE Sealed</span>
+            </div>
+          </div>
+          <div class="status-card">
+            <div class="status-dot"></div>
+            <div class="status-info">
+              <span class="status-label" data-en="Response SLA" data-zh="服务时效">Response SLA</span>
+              <span class="status-val" data-en="Within 24 Hours" data-zh="24 小时内回复">Within 24 Hours</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Direct Official Channels -->
+      <section>
+        <div class="section-title">
+          <span data-en="Direct Escalation Channels" data-zh="官方联系通道">Direct Escalation Channels</span>
+        </div>
+        <div class="channels-grid">
+          <a class="channel-card" href="mailto:terrawalletrh@outlook.com">
+            <div>
+              <div class="channel-top">
+                <div class="channel-icon">✉</div>
+                <span class="channel-tag" data-en="24h SLA" data-zh="24小时回复">24h SLA</span>
+              </div>
+              <h3 class="channel-title" data-en="Official Email" data-zh="官方邮箱">Official Email</h3>
+              <p class="channel-desc">terrawalletrh@outlook.com</p>
+            </div>
+            <span class="channel-action" data-en="Compose email ↗" data-zh="发送邮件 ↗">Compose email ↗</span>
+          </a>
+
+          <a class="channel-card" href="https://t.me/terawalletrh" target="_blank" rel="noopener">
+            <div>
+              <div class="channel-top">
+                <div class="channel-icon">✈</div>
+                <span class="channel-tag" data-en="Community" data-zh="社区社群">Community</span>
+              </div>
+              <h3 class="channel-title" data-en="Telegram Channel" data-zh="Telegram 频道">Telegram Channel</h3>
+              <p class="channel-desc" data-en="Real-time support, news and community discussion." data-zh="实时在线支持、官方动态与社区讨论。">Real-time support, news and community discussion.</p>
+            </div>
+            <span class="channel-action" data-en="Join Telegram ↗" data-zh="加入 Telegram ↗">Join Telegram ↗</span>
+          </a>
+
+          <a class="channel-card" href="https://x.com/TeraWalletRH" target="_blank" rel="noopener">
+            <div>
+              <div class="channel-top">
+                <div class="channel-icon">𝕏</div>
+                <span class="channel-tag" data-en="Alerts" data-zh="官方资讯">Alerts</span>
+              </div>
+              <h3 class="channel-title" data-en="X / Twitter" data-zh="X (Twitter) 官方号">X / Twitter</h3>
+              <p class="channel-desc" data-en="@TeraWalletRH product updates and feature logs." data-zh="@TeraWalletRH 产品更新与功能动态。">@TeraWalletRH product updates and feature logs.</p>
+            </div>
+            <span class="channel-action" data-en="Follow @TeraWalletRH ↗" data-zh="关注 @TeraWalletRH ↗">Follow @TeraWalletRH ↗</span>
+          </a>
+
+          <a class="channel-card" href="https://github.com/TeraWalletRH/TeraWallet/issues" target="_blank" rel="noopener">
+            <div>
+              <div class="channel-top">
+                <div class="channel-icon">⌥</div>
+                <span class="channel-tag" data-en="Developers" data-zh="开源社区">Developers</span>
+              </div>
+              <h3 class="channel-title" data-en="GitHub Issues" data-zh="GitHub Issue 追踪">GitHub Issues</h3>
+              <p class="channel-desc" data-en="Report technical bugs, RPC failures, or feature requests." data-zh="提交技术缺陷、RPC 故障报告或功能建议。">Report technical bugs, RPC failures, or feature requests.</p>
+            </div>
+            <span class="channel-action" data-en="Open GitHub issue ↗" data-zh="创建 Issue ↗">Open GitHub issue ↗</span>
+          </a>
+        </div>
+      </section>
+
+      <!-- Option A: Support Ticket Composer & Privacy Diagnostics -->
+      <section>
+        <div class="section-title">
+          <span data-en="Send a Support Inquiry" data-zh="发起支持工单">Send a Support Inquiry</span>
+        </div>
+        <div class="ticket-container">
+          <div class="ticket-header">
+            <h2 data-en="Pre-filled Diagnostic Ticket (Option A)" data-zh="预填充诊断工单（邮件直连）">Pre-filled Diagnostic Ticket (Option A)</h2>
+            <p data-en="Fill in your details below. We generate an exact ticket bundle and open your email client pre-addressed to terrawalletrh@outlook.com with safe, non-sensitive diagnostic metadata." data-zh="请在下方填写工单信息。我们将自动组装安全的非敏感设备诊断信息，并在您的邮箱客户端中预填收件人 terrawalletrh@outlook.com。">
+              Fill in your details below. We generate an exact ticket bundle and open your email client pre-addressed to terrawalletrh@outlook.com with safe, non-sensitive diagnostic metadata.
+            </p>
+          </div>
+
+          <form id="support-ticket-form" onsubmit="event.preventDefault(); submitTicket();">
+            <div class="form-group">
+              <label class="form-label" data-en="Category" data-zh="问题类型">Category</label>
+              <div class="chip-selector" id="category-selector">
+                <button type="button" class="category-chip selected" data-cat="Transaction">Transaction / Send</button>
+                <button type="button" class="category-chip" data-cat="Staking">Staking & Rewards</button>
+                <button type="button" class="category-chip" data-cat="Multisig">Team / Multisig Safe</button>
+                <button type="button" class="category-chip" data-cat="AI Agent">AI Agent & Batching</button>
+                <button type="button" class="category-chip" data-cat="Bug">Bug Report</button>
+                <button type="button" class="category-chip" data-cat="General">General Question</button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="ticket-address" data-en="Your Wallet Address (Optional)" data-zh="您的钱包地址（选填）">Your Wallet Address (Optional)</label>
+              <input type="text" id="ticket-address" class="input-field" placeholder="0x..." spellcheck="false">
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="ticket-subject" data-en="Subject / Brief Summary" data-zh="工单标题 / 简要概述">Subject / Brief Summary</label>
+              <input type="text" id="ticket-subject" class="input-field" placeholder="e.g. Transaction simulation failure on Robinhood Chain" required>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label" for="ticket-details" data-en="Detailed Description" data-zh="详细问题描述">Detailed Description</label>
+              <textarea id="ticket-details" class="textarea-field" placeholder="Explain what happened, steps to reproduce, or any error message you received..." required></textarea>
+            </div>
+
+            <!-- Diagnostics Preview Box -->
+            <div class="diagnostics-box">
+              <div class="diagnostics-header">
+                <span class="diagnostics-title" data-en="Privacy-Preserved Diagnostics" data-zh="隐私安全诊断信息">Privacy-Preserved Diagnostics</span>
+                <span style="font-size:11px; color:var(--green);" data-en="Zero keys or balances included" data-zh="绝不包含私钥或资产余额">Zero keys or balances included</span>
+              </div>
+              <p class="diagnostics-text" id="diag-preview">Loading environment metadata...</p>
+            </div>
+
+            <div class="ticket-actions">
+              <button type="submit" class="btn-primary" data-en="Open Pre-filled Email ↗" data-zh="打开预填充邮件 ↗">
+                Open Pre-filled Email ↗
+              </button>
+              <button type="button" class="btn-secondary" onclick="copyTicketToClipboard()" data-en="Copy Ticket to Clipboard" data-zh="复制工单到剪贴板">
+                Copy Ticket to Clipboard
+              </button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <!-- Searchable Knowledge Base & FAQ -->
+      <section>
+        <div class="section-title">
+          <span data-en="Frequently Asked Questions" data-zh="常见问题解答 (FAQ)">Frequently Asked Questions</span>
+        </div>
+
+        <div class="search-bar-wrap">
+          <input type="text" id="faq-search" class="search-input" placeholder="Search guides, topics, error codes (e.g. 'expiration', 'multisig', 'fees')..." oninput="filterFaq(this.value)">
+        </div>
+
+        <div class="faq-list" id="faq-container">
+          <div class="faq-item" data-keywords="backup recover phrase seed shamir keys loss">
+            <button class="faq-question" onclick="toggleFaq(this)">
+              <span data-en="How do I back up and recover my Tera Wallet?" data-zh="如何备份和恢复我的 Tera 钱包？">How do I back up and recover my Tera Wallet?</span>
+              <span class="faq-arrow">›</span>
+            </button>
+            <div class="faq-answer" data-en="Tera Wallet is completely self-custodial. Your cryptographic keys are created locally on your device and are never uploaded to any cloud server. You can back up using a standard 12-word recovery phrase or export an encrypted Shamir Secret Sharing recovery file. To recover, simply import your phrase or split shares into any Tera client." data-zh="Tera Wallet 是完全自托管的。您的加密私钥均在本地设备生成，绝不会上传至任何云端服务器。您可以通过标准的 12 位助记词备份，或导出基于沙米尔秘密共享（Shamir Secret Sharing）的加密恢复文件。恢复时，只需在任意 Tera 客户端导入助记词或分片即可。">
+              Tera Wallet is completely self-custodial. Your cryptographic keys are created locally on your device and are never uploaded to any cloud server. You can back up using a standard 12-word recovery phrase or export an encrypted Shamir Secret Sharing recovery file. To recover, simply import your phrase or split shares into any Tera client.
+            </div>
+          </div>
+
+          <div class="faq-item" data-keywords="batch transfer multicall multicall3 multiple recipients agent">
+            <button class="faq-question" onclick="toggleFaq(this)">
+              <span data-en="How do Multi-Recipient Batch Transfers (Multicall3) work?" data-zh="多收款人批量转账 (Multicall3) 是如何运作的？">How do Multi-Recipient Batch Transfers (Multicall3) work?</span>
+              <span class="faq-arrow">›</span>
+            </button>
+            <div class="faq-answer" data-en="Tera Wallet integrates Multicall3 on Robinhood Chain. When you ask the AI Assistant or use batch transfer to send tokens to multiple addresses or @tags in one prompt, the app packages all payments into a single atomic transaction. Either all transfers succeed together, or the entire transaction reverts, saving over 60% on network gas fees." data-zh="Tera Wallet 在 Robinhood Chain 上集成了 Multicall3 智能合约。当您通过 AI 助手或批量转账功能向多个地址或 @tag 转账时，系统会将所有转账打包为单笔原子性交易。所有转账要么同时成功，要么全部回滚，且能节省超过 60% 的网络 Gas 费。">
+              Tera Wallet integrates Multicall3 on Robinhood Chain. When you ask the AI Assistant or use batch transfer to send tokens to multiple addresses or @tags in one prompt, the app packages all payments into a single atomic transaction. Either all transfers succeed together, or the entire transaction reverts, saving over 60% on network gas fees.
+            </div>
+          </div>
+
+          <div class="faq-item" data-keywords="expiration auto-expires window proposal stale time">
+            <button class="faq-question" onclick="toggleFaq(this)">
+              <span data-en="Why do proposals have an Auto-Expiration Window?" data-zh="为什么提案会有自动过期窗口（Auto-Expiration Window）？">Why do proposals have an Auto-Expiration Window?</span>
+              <span class="faq-arrow">›</span>
+            </button>
+            <div class="faq-answer" data-en="To protect signers against stale market prices or forgotten unapproved transfers, every proposal (AI drafts or Team Multisig payouts) is bounded by an expiration window (24h, 3d, 7d, or 30d). Once the window lapses, the proposal is permanently locked and rejected, preventing unauthorized or unexpected delayed executions." data-zh="为了防止签署人受到陈旧代币价格波动或被遗忘的未审批付款的影响，所有提案（包括 AI 草稿和团队资金库支出）均设有过期窗口（24小时、3天、7天或30天）。一旦超时，提案将被自动锁定并拒绝，杜绝任何未经授权的滞后执行。">
+              To protect signers against stale market prices or forgotten unapproved transfers, every proposal (AI drafts or Team Multisig payouts) is bounded by an expiration window (24h, 3d, 7d, or 30d). Once the window lapses, the proposal is permanently locked and rejected, preventing unauthorized or unexpected delayed executions.
+            </div>
+          </div>
+
+          <div class="faq-item" data-keywords="usdg dollars spend stablecoin robinhood chain">
+            <button class="faq-question" onclick="toggleFaq(this)">
+              <span data-en="What is USDG and how do I spend or receive it?" data-zh="什么是 USDG？我该如何使用或接收它？">What is USDG and how do I spend or receive it?</span>
+              <span class="faq-arrow">›</span>
+            </button>
+            <div class="faq-answer" data-en="USDG (Global Dollar) is the regulated primary settlement asset on Robinhood Chain, pegged 1:1 with the US Dollar. You can receive USDG using your wallet address or personal @tag, spend exact dollar amounts to any recipient, or lock it in tiered staking to earn yield." data-zh="USDG（全球美元）是 Robinhood Chain 上的受监管主要结算资产，与美元按 1:1 锚定。您可以使用钱包地址或个人 @tag 接收 USDG，向任意方支付精确美元金额，或将其存入阶梯式质押中赚取收益。">
+              USDG (Global Dollar) is the regulated primary settlement asset on Robinhood Chain, pegged 1:1 with the US Dollar. You can receive USDG using your wallet address or personal @tag, spend exact dollar amounts to any recipient, or lock it in tiered staking to earn yield.
+            </div>
+          </div>
+
+          <div class="faq-item" data-keywords="staking lockup apy reward tiers flexible multipliers">
+            <button class="faq-question" onclick="toggleFaq(this)">
+              <span data-en="How do Tiered Staking Lockups and APY Multipliers work?" data-zh="阶梯质押锁定和 APY 乘数是如何计算的？">How do Tiered Staking Lockups and APY Multipliers work?</span>
+              <span class="faq-arrow">›</span>
+            </button>
+            <div class="faq-answer" data-en="Tera Wallet offers three staking tiers for USDG: Flexible Lockup (1.0x multiplier, ~9.2% base APY), 30-Day Lockup (1.25x multiplier, ~11.5% APY), and 90-Day Lockup (1.6x multiplier, ~14.8% APY). Rewards accrue continuously and can be claimed directly from the Staking dashboard." data-zh="Tera Wallet 为 USDG 提供了三种质押等级：活期锁定（1.0 倍乘数，约 9.2% 基础年化）、30 天锁定（1.25 倍乘数，约 11.5% 年化）和 90 天锁定（1.6 倍乘数，约 14.8% 年化）。收益按秒累计，随时可在质押界面提取。">
+              Tera Wallet offers three staking tiers for USDG: Flexible Lockup (1.0x multiplier, ~9.2% base APY), 30-Day Lockup (1.25x multiplier, ~11.5% APY), and 90-Day Lockup (1.6x multiplier, ~14.8% APY). Rewards accrue continuously and can be claimed directly from the Staking dashboard.
+            </div>
+          </div>
+
+          <div class="faq-item" data-keywords="tax csv export koinly cointracker reporting accounting">
+            <button class="faq-question" onclick="toggleFaq(this)">
+              <span data-en="How do I export my transaction history for tax reporting?" data-zh="如何导出交易历史用于税务申报？">How do I export my transaction history for tax reporting?</span>
+              <span class="faq-arrow">›</span>
+            </button>
+            <div class="faq-answer" data-en="In the Activity tab on Tera Wallet or the app, click the 'Export CSV' button. You can choose between Standard CSV (universal ledger), Koinly Format (sent/received values and capital gain compatibility), and CoinTracker Format for 1-click import into crypto tax software." data-zh="在 Tera Wallet 或 App 的“记录”页面顶部，点击“导出 CSV”按钮。您可以选择标准通用 CSV、Koinly 专用格式或 CoinTracker 专用格式，一键导入报税软件完成会计申报。">
+              In the Activity tab on Tera Wallet or the app, click the 'Export CSV' button. You can choose between Standard CSV (universal ledger), Koinly Format (sent/received values and capital gain compatibility), and CoinTracker Format for 1-click import into crypto tax software.
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <div>© 2026 TERA WALLET · Self-Custodial Authorization</div>
+      <div class="footer-links">
+        <a href="/">Website</a>
+        <a href="/app/">App</a>
+        <a href="/roadmap/">Roadmap</a>
+        <a href="/support/">Support</a>
+        <a href="/legal/privacy-policy/">Privacy</a>
+        <a href="/legal/terms-of-service/">Terms</a>
+      </div>
+    </footer>
+  </div>
+
+  <script>
+    // State
+    let selectedCategory = "Transaction";
+    let diagData = {};
+
+    function initDiagnostics() {
+      diagData = {
+        app: "Tera Wallet Web / Production",
+        chainId: 4663,
+        network: "Robinhood Chain",
+        timestamp: new Date().toISOString(),
+        userAgent: navigator.userAgent,
+        screen: `${window.innerWidth}x${window.innerHeight}`,
+        language: navigator.language || "en",
+        timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+      };
+
+      const previewText = `[OS: ${navigator.platform || 'Unknown'}] · [Browser: ${navigator.userAgent.slice(0, 50)}...] · [Chain: 4663] · [UTC: ${diagData.timestamp}]`;
+      const el = document.getElementById("diag-preview");
+      if (el) el.textContent = previewText;
+    }
+
+    // Category Selector
+    document.querySelectorAll(".category-chip").forEach(btn => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".category-chip").forEach(b => b.classList.remove("selected"));
+        btn.classList.add("selected");
+        selectedCategory = btn.dataset.cat;
+      });
+    });
+
+    // Option A: Build and open mailto
+    function buildTicketContent() {
+      const address = document.getElementById("ticket-address").value.trim() || "Not provided";
+      const subject = document.getElementById("ticket-subject").value.trim();
+      const details = document.getElementById("ticket-details").value.trim();
+      const ticketId = "TERA-" + Date.now().toString(36).toUpperCase();
+
+      const body = `--- TERA WALLET SUPPORT TICKET ---
+Ticket ID: #${ticketId}
+Category: ${selectedCategory}
+Wallet Address: ${address}
+Timestamp: ${new Date().toISOString()}
+
+--- ISSUE DESCRIPTION ---
+${details}
+
+--- CLIENT DIAGNOSTICS (NON-SENSITIVE) ---
+App Environment: ${diagData.app}
+Network: ${diagData.network} (Chain ID: ${diagData.chainId})
+User Agent: ${diagData.userAgent}
+Viewport: ${diagData.screen}
+Timezone: ${diagData.timezone}
+Language: ${diagData.language}
+----------------------------------
+(Note: No private keys, passwords, or personal balances are included.)`;
+
+      return {
+        ticketId,
+        subject: `[Tera Support - ${selectedCategory}] ${subject}`,
+        body
+      };
+    }
+
+    function submitTicket() {
+      const ticket = buildTicketContent();
+      const mailtoUrl = `mailto:terrawalletrh@outlook.com?subject=${encodeURIComponent(ticket.subject)}&body=${encodeURIComponent(ticket.body)}`;
+      window.location.href = mailtoUrl;
+      showToast("Email client opened with pre-filled ticket!");
+    }
+
+    function copyTicketToClipboard() {
+      const ticket = buildTicketContent();
+      const fullText = `Subject: ${ticket.subject}\n\n${ticket.body}`;
+      navigator.clipboard.writeText(fullText).then(() => {
+        showToast("Ticket details copied to clipboard!");
+      }).catch(() => {
+        showToast("Unable to copy to clipboard.");
+      });
+    }
+
+    // FAQ Toggles & Search
+    function toggleFaq(btn) {
+      const item = btn.closest(".faq-item");
+      item.classList.toggle("open");
+    }
+
+    function filterFaq(query) {
+      const q = query.toLowerCase().trim();
+      document.querySelectorAll(".faq-item").forEach(item => {
+        const text = item.textContent.toLowerCase();
+        const keywords = (item.dataset.keywords || "").toLowerCase();
+        const match = !q || text.includes(q) || keywords.includes(q);
+        item.style.display = match ? "block" : "none";
+      });
+    }
+
+    // Toast
+    function showToast(msg) {
+      document.querySelector(".toast")?.remove();
+      const t = document.createElement("div");
+      t.className = "toast";
+      t.textContent = msg;
+      document.body.appendChild(t);
+      setTimeout(() => t.remove(), 4000);
+    }
+
+    // Locale
+    const LOCALE_KEY = "tera-locale";
+    const isZh = () => localStorage.getItem(LOCALE_KEY) === "zh";
+
+    function applyLocale() {
+      const zh = isZh();
+      document.documentElement.lang = zh ? "zh-CN" : "en";
+      document.querySelectorAll("[data-en]").forEach(el => {
+        el.innerHTML = el.dataset[zh ? "zh" : "en"];
+      });
+      const btn = document.querySelector(".locale-btn");
+      if (btn) btn.textContent = zh ? "EN" : "中文";
+    }
+
+    document.querySelector(".locale-btn").addEventListener("click", () => {
+      localStorage.setItem(LOCALE_KEY, isZh() ? "en" : "zh");
+      applyLocale();
+    });
+
+    // Run
+    initDiagnostics();
+    applyLocale();
+  </script>
+</body>
+</html>
