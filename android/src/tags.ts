@@ -18,9 +18,31 @@
 import { type Address } from "viem";
 import { api } from "./api";
 import { API } from "./config";
-import { claimMessage, display, parseTag } from "../../public/tera/core/tags.js";
+import {
+  claimMessage,
+  display,
+  parseTag,
+  isTag,
+  tagReceiveCardData as coreTagReceiveCardData,
+  tagPaymentUrl,
+} from "../../public/tera/core/tags.js";
 
-export { display, parseTag };
+export const tagReceiveCardData = coreTagReceiveCardData as (opts?: {
+  tag?: string;
+  address?: string;
+  network?: string;
+}) => {
+  tag: string;
+  handle: string;
+  address: string;
+  network: string;
+  paymentUrl: string;
+  qrUri: string;
+  shareText: string;
+  intentUrl: string;
+};
+
+export { display, parseTag, isTag, tagPaymentUrl };
 
 type Account = {
   address: Address;

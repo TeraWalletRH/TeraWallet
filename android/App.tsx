@@ -57,7 +57,7 @@ import {
   UNVERIFIABLE,
   value as valueCore,
 } from "./src/core";
-import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
+import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { evaluatePriceAlerts, type PriceAlert } from "./src/alerts";
 import { screenOrigin } from "./src/viewport";
@@ -65,6 +65,10 @@ import { useAppTheme } from "./src/theme";
 import { generateActivityCsv, shareText } from "./src/share";
 import { calculateMonthlySpending } from "./src/spending";
 import { normalizePhrase, walletFromPhrase, walletFromPrivateKey } from "./src/crypto";
+import { calculateNetBalanceDelta, type NetBalanceDelta } from "./src/verdict";
+import { GAS_SPEEDS, getAllGasTierEstimates, type GasTier } from "./src/gasspeed";
+import { getPinnedAssets, togglePinned, sortWithPinned, isPinned } from "./src/watchlist";
+import { generateExportCsv, CSV_PRESETS } from "./src/csvexport";
 import {
   Button,
   Chips,
@@ -126,6 +130,7 @@ type Review = {
   activityType?: "send" | "swap" | "bridge";
   /** The owner's private note, saved under the transaction's hash once it is signed. */
   note?: string;
+  netBalanceDelta?: NetBalanceDelta;
 };
 type ReviewSnapshot = Pick<Review, "rows" | "steps">;
 const tokenImages: Record<string, any> = {
@@ -642,7 +647,13 @@ function Wallet() {
     [voiceMode, setVoiceMode] = useState(false),
     [liveTranscript, setLiveTranscript] = useState(""),
     [busy, setBusy] = useState(false),
-    [error, setError] = useState("");
+    [error, setError] = useState(""),
+    [selectedGasSpeed, setSelectedGasSpeed] = useState<"eco" | "standard" | "fast">("standard"),
+    [pinnedAssets, setPinnedAssetsState] = useState<string[]>(() => getPinnedAssets()),
+    [csvModalOpen, setCsvModalOpen] = useState(false),
+    [stakingPosition, setStakingPosition] = useState<any>(null),
+    [stakingLockTier, setStakingLockTier] = useState<"flexible" | "30d" | "90d">("flexible"),
+    [stakeAmount, setStakeAmount] = useState("");
   const { setting: themeSetting, effectiveTheme, updateSetting: updateThemeSetting } = useAppTheme();
   useEffect(() => {
     setColorTheme(effectiveTheme);
@@ -2407,12 +2418,22 @@ function Wallet() {
     const input = i.actionType === "BUY" ? (teraTrade ? sources[1] : sources[0]) : asset;
     const q = p.preparedTransaction.quote;
     if (q) check(q.decimalsOut === (i.actionType === "BUY" ? asset.decimals : teraTrade ? 18 : 6));
+    const isBatch = i.actionType === "TRANSFER" && Array.isArray(i.transfers) && i.transfers.length > 1;
     const rows: [string, string][] = [
-      [t("Action", "操作"), i.actionType],
+      [t("Action", "操作"), isBatch ? t("Batch Transfer (Multicall3)", "批量转账 (Multicall3)") : i.actionType],
       [t("Send", "发送"), `${formatUnits(BigInt(i.amount), input.decimals)} ${input.symbol}`],
       usdReviewRow(input.symbol, formatUnits(BigInt(i.amount), input.decimals)),
-      [t("Recipient", "收款地址"), i.recipient || owner],
+      [t("Recipient", "收款地址"), isBatch ? t(`${i.transfers.length} recipients (Multicall3)`, `${i.transfers.length} 位收款人 (Multicall3)`) : (i.recipient || owner)],
     ];
+    if (isBatch) {
+      i.transfers.forEach((tr: any, idx: number) => {
+        const trTag = tr.tag || (tr.recipient ? `${tr.recipient.slice(0, 6)}…${tr.recipient.slice(-4)}` : `#${idx + 1}`);
+        rows.push([
+          `${t("Recipient", "收款人")} ${idx + 1}`,
+          `${trTag} · ${formatUnits(BigInt(tr.amount), input.decimals)} ${input.symbol}`,
+        ]);
+      });
+    }
     const payee = i.actionType === "TRANSFER" ? i.recipient : undefined;
     const savedAs = payee ? contactsCore.nameFor(book, payee) : "";
     if (savedAs) rows.push([t("Saved as", "已保存为"), savedAs]);
@@ -2837,7 +2858,15 @@ function Wallet() {
       knownRecipient: !!intelligenceRecipient && (!!contactsCore.nameFor(book, intelligenceRecipient) || data.history.some((h) => h.payee?.toLowerCase() === intelligenceRecipient.toLowerCase())),
       steps: next.steps.length,
     };
-    setReview({ ...next, simulation: "checking", intelligence: reviewIntelligence({ ...input, simulation: "checking" }) });
+    const tx0 = next.steps[0];
+    const assetFound = assets.find((a) => same(a.address, tx0?.to) || next.rows.some(([l, v]) => v.includes(a.symbol)));
+    const delta = calculateNetBalanceDelta({
+      tx: tx0,
+      intent: (next as any).intent || { actionType: next.activityType === "swap" ? "BUY" : "TRANSFER" },
+      asset: assetFound,
+      gasEstimate: "0.0001",
+    });
+    setReview({ ...next, netBalanceDelta: delta, simulation: "checking", intelligence: reviewIntelligence({ ...input, simulation: "checking" }) });
     try {
       await Promise.all(
         next.steps.map((tx) =>
@@ -2861,9 +2890,27 @@ function Wallet() {
         ? (Number(gasResult.value[0] * gasResult.value[1].reduce((sum, gas) => sum + gas, 0n)) / 1e18).toFixed(6)
         : undefined;
       const recipientHasCode = codeResult.status === "fulfilled" && !!codeResult.value && codeResult.value !== "0x";
-      setReview({ ...next, simulation: "passed", intelligence: reviewIntelligence({ ...input, simulation: "passed", recipientHasCode, recipientCodeUnavailable: codeResult.status === "rejected", estimatedFeeEth, gasEstimateUnavailable: gasResult.status === "rejected" }) });
+      const updatedDelta = calculateNetBalanceDelta({
+        tx: tx0,
+        intent: (next as any).intent || { actionType: next.activityType === "swap" ? "BUY" : "TRANSFER" },
+        asset: assetFound,
+        gasEstimate: estimatedFeeEth || "0.0001",
+      });
+      setReview({
+        ...next,
+        netBalanceDelta: updatedDelta,
+        simulation: "passed",
+        intelligence: reviewIntelligence({
+          ...input,
+          simulation: "passed",
+          recipientHasCode,
+          recipientCodeUnavailable: codeResult.status === "rejected",
+          estimatedFeeEth,
+          gasEstimateUnavailable: gasResult.status === "rejected",
+        }),
+      });
     } catch {
-      setReview({ ...next, simulation: "needs-attention", intelligence: reviewIntelligence({ ...input, simulation: "needs-attention" }) });
+      setReview({ ...next, netBalanceDelta: delta, simulation: "needs-attention", intelligence: reviewIntelligence({ ...input, simulation: "needs-attention" }) });
     }
   }
   async function signReview(r: Review) {
@@ -3008,10 +3055,18 @@ function Wallet() {
       { role: "tera", text: minimised ? rehydrate(reply, plan!.placeholders) : reply },
     ]);
     if (propose && result.intent) {
-      const checked = await policyFor(result.intent);
+      let prepared = result.preparedTransaction;
+      let checked = result.intent;
+      try {
+        checked = await policyFor(result.intent);
+      } catch {
+        // Fall back to unchecked intent if policy bundle is unavailable
+      }
       guard();
-      const prepared = await api("/api/intent/prepare", checked);
-      guard();
+      if (!prepared) {
+        prepared = await api("/api/intent/prepare", checked);
+        guard();
+      }
       const p = { ...prepared, intent: checked, createdAt: Date.now() };
       await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, p] });
     }
@@ -4135,6 +4190,13 @@ function Wallet() {
                       )?.symbol
                     }
                   </Text>
+                  {d.expiresAt ? (
+                    <Text style={[s.small, { color: new Date(d.expiresAt).getTime() <= Date.now() ? colors.danger : colors.muted }]}>
+                      {new Date(d.expiresAt).getTime() <= Date.now()
+                        ? t("Quote expired", "报价已过期")
+                        : t(`Expires at ${new Date(d.expiresAt).toLocaleTimeString()}`, `将于 ${new Date(d.expiresAt).toLocaleTimeString()} 过期`)}
+                    </Text>
+                  ) : null}
                   <Button
                     disabled={busy}
                     onPress={() => {
@@ -4423,6 +4485,7 @@ function Wallet() {
   // than each being its own card — tapping the row opens the token's detail
   // page.
   function assetRow(asset: Asset, amount: string, first: boolean) {
+    const pinned = isPinned(asset.symbol, pinnedAssets);
     return (
       <Pressable
         key={asset.symbol}
@@ -4440,7 +4503,23 @@ function Wallet() {
       >
         <TokenIcon symbol={asset.symbol} size={38} chainBadge />
         <View style={{ flex: 1 }}>
-          <Text style={s.label}>{asset.symbol}</Text>
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Text style={s.label}>{asset.symbol}</Text>
+            <Pressable
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={pinned ? t(`Unpin ${asset.symbol}`, `取消置顶 ${asset.symbol}`) : t(`Pin ${asset.symbol}`, `置顶 ${asset.symbol}`)}
+              onPress={(e: any) => {
+                e?.stopPropagation?.();
+                const next = togglePinned(asset.symbol);
+                setPinnedAssetsState(next);
+              }}
+            >
+              <Text style={{ fontSize: 15, color: pinned ? "#eab308" : colors.muted }}>
+                {pinned ? "★" : "☆"}
+              </Text>
+            </Pressable>
+          </View>
           <Text style={s.small} numberOfLines={1}>
             {shownValue(shortAmount(amount))}
           </Text>
@@ -5066,6 +5145,25 @@ function Wallet() {
                 </View>
                 <Icon name="chevron-right" size={18} color={colors.muted} />
               </Pressable>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => setPage("staking")}
+                style={({ pressed }) => [
+                  s.panel,
+                  { flexDirection: "row", alignItems: "center", gap: 12, opacity: pressed ? 0.7 : 1 },
+                ]}
+              >
+                <View style={[s.quickIcon, { backgroundColor: colors.tint }]}>
+                  <Icon name="trending-up" color={colors.green} size={22} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[s.text, { fontWeight: "700" }]}>{t("USDG Staking", "USDG 质押")}</Text>
+                  <Text style={s.small}>
+                    {t("Tiered lockups: earn up to 1.6x APY", "阶梯锁定：赚取高达 1.6 倍 APY")}
+                  </Text>
+                </View>
+                <Icon name="chevron-right" size={18} color={colors.muted} />
+              </Pressable>
               {!wide && popular}
               <View ref={tourAssetsRef} collapsable={false} style={{ gap: 10 }}>
                 <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
@@ -5084,7 +5182,7 @@ function Wallet() {
                   </View>
                 ) : held.length ? (
                   <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
-                    {held.map(({ asset, amount }, i) => assetRow(asset, amount, i === 0))}
+                    {sortWithPinned(held, pinnedAssets).map(({ asset, amount }, i) => assetRow(asset, amount, i === 0))}
                     {hiddenBalancesRow()}
                   </View>
                 ) : (
@@ -5184,8 +5282,17 @@ function Wallet() {
       );
     }
     if (page === "tag") {
-      const activeTag = myTag || (claimInput && tags.isTag(claimInput) ? claimInput : "tera");
-      const cardData = tags.tagReceiveCardData({ tag: activeTag, address: owner });
+      const activeTag = myTag ? String(myTag).replace(/^@+/, "") : (claimInput && tags.isTag(claimInput) ? claimInput.replace(/^@+/, "") : "astra");
+      let cardData = {
+        handle: "@" + activeTag,
+        intentUrl: "https://x.com/intent/tweet?text=Pay%20me%20via%20Tera%20tag",
+        paymentUrl: "https://terawallet.app/pay/@" + activeTag,
+      };
+      try {
+        cardData = tags.tagReceiveCardData({ tag: activeTag, address: owner });
+      } catch {
+        // Fallback
+      }
       return (
         <>
           <Header
@@ -5282,7 +5389,7 @@ function Wallet() {
                 accessibilityRole="button"
                 onPress={() =>
                   void Clipboard.setStringAsync(cardData.paymentUrl).then(() =>
-                    notify({
+                    setNotice({
                       title: t("Payment link copied", "收款链接已复制"),
                       body: cardData.paymentUrl,
                       tone: "success",
@@ -5695,6 +5802,221 @@ function Wallet() {
               "付款以 Robinhood Chain 上的 USDG 发出。此处 USDG 按 $1.00 计算——这是约定，并非担保。",
             )}
           </Text>
+        </>
+      );
+    }
+    if (page === "staking") {
+      const activeStake = stakingPosition?.active_stake ? (BigInt(stakingPosition.active_stake) / 1000000n).toString() : "0";
+      const accruedRewards = stakingPosition?.accrued_rewards ? (Number(stakingPosition.accrued_rewards) / 1e18).toFixed(4) : "0.0000";
+      const currentTier = stakingPosition?.lock_tier || stakingLockTier;
+      const isLocked = stakingPosition?.lock_until ? Number(stakingPosition.lock_until) > Math.floor(Date.now() / 1000) : false;
+      const lockSecondsLeft = isLocked ? Number(stakingPosition.lock_until) - Math.floor(Date.now() / 1000) : 0;
+      const lockDaysLeft = Math.ceil(lockSecondsLeft / 86400);
+
+      const TIERS = [
+        { id: "flexible" as const, label: t("Flexible", "活期质押"), days: "0 days", multiplier: "1.0x", badge: t("Instant unstake", "随存随取"), apy: "4.8% APY" },
+        { id: "30d" as const, label: t("30-Day Lock", "30天锁定"), days: "30 days", multiplier: "1.25x", badge: t("1.25x Multiplier", "1.25倍收益"), apy: "6.0% APY" },
+        { id: "90d" as const, label: t("90-Day Lock", "90天锁定"), days: "90 days", multiplier: "1.60x", badge: t("1.60x Multiplier", "1.60倍收益"), apy: "7.7% APY" },
+      ];
+
+      return (
+        <>
+          <Header
+            title={t("USDG Staking", "USDG 质押")}
+            onBack={() => setPage("home")}
+            backLabel={t("Home", "首页")}
+          />
+          <ScrollView contentContainerStyle={{ gap: 16, paddingBottom: 32 }}>
+            <View style={[s.panel, { gap: 14, backgroundColor: colors.tint, borderColor: colors.green, borderWidth: 1 }]}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                <Text style={s.eyebrow}>{t("ACTIVE STAKING POSITION", "当前质押仓位")}</Text>
+                <View style={{ backgroundColor: colors.green + "20", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
+                  <Text style={{ color: colors.green, fontWeight: "700", fontSize: 11 }}>Robinhood Chain</Text>
+                </View>
+              </View>
+
+              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                <View>
+                  <Text style={[s.small, { color: colors.muted }]}>{t("Total Staked", "质押总额")}</Text>
+                  <Text style={{ fontSize: 28, fontWeight: "800", color: colors.ink }}>
+                    ${activeStake} <Text style={{ fontSize: 16, fontWeight: "600", color: colors.muted }}>USDG</Text>
+                  </Text>
+                </View>
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text style={[s.small, { color: colors.muted }]}>{t("Accrued Rewards", "待领收益")}</Text>
+                  <Text style={{ fontSize: 24, fontWeight: "800", color: colors.green }}>
+                    +{accruedRewards} <Text style={{ fontSize: 14, fontWeight: "600" }}>USDG</Text>
+                  </Text>
+                </View>
+              </View>
+
+              <View style={{ borderTopWidth: 1, borderColor: colors.line, paddingTop: 10, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                  <Icon name="lock" size={14} color={isLocked ? colors.copper : colors.muted} />
+                  <Text style={[s.small, { fontWeight: "600" }]}>
+                    {isLocked ? t(`Locked (${lockDaysLeft} days remaining)`, `锁定中 (剩余 ${lockDaysLeft} 天)`) : t("Flexible (Instant Unstake)", "活期 (随时可取)")}
+                  </Text>
+                </View>
+                <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                  {currentTier === "90d" ? "1.60x APY" : currentTier === "30d" ? "1.25x APY" : "1.00x APY"}
+                </Text>
+              </View>
+            </View>
+
+            <View style={{ gap: 10 }}>
+              <Text style={s.eyebrow}>{t("SELECT LOCKUP TIER", "选择锁定阶梯")}</Text>
+              <View style={{ gap: 8 }}>
+                {TIERS.map((tier) => {
+                  const selected = stakingLockTier === tier.id;
+                  return (
+                    <Pressable
+                      key={tier.id}
+                      accessibilityRole="button"
+                      onPress={() => setStakingLockTier(tier.id)}
+                      style={[
+                        s.panel,
+                        {
+                          padding: 14,
+                          borderColor: selected ? colors.green : colors.line,
+                          borderWidth: selected ? 2 : 1,
+                          backgroundColor: selected ? colors.tint : colors.wash,
+                          flexDirection: "row",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                        },
+                      ]}
+                    >
+                      <View style={{ gap: 2 }}>
+                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                          <Text style={[s.text, { fontWeight: "700" }]}>{tier.label}</Text>
+                          <View style={{ backgroundColor: selected ? colors.green + "25" : colors.line, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
+                            <Text style={{ fontSize: 10, fontWeight: "700", color: selected ? colors.green : colors.ink }}>{tier.badge}</Text>
+                          </View>
+                        </View>
+                        <Text style={s.small}>{tier.days} · {t("Multiplier boosted returns", "收益乘数加速")}</Text>
+                      </View>
+                      <View style={{ alignItems: "flex-end" }}>
+                        <Text style={{ fontSize: 16, fontWeight: "800", color: colors.green }}>{tier.apy}</Text>
+                        <Text style={[s.small, { color: colors.muted }]}>{tier.multiplier}</Text>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={[s.panel, { gap: 12 }]}>
+              <Text style={s.eyebrow}>{t("STAKE AMOUNT", "质押金额")}</Text>
+              <Field
+                label={t("USDG Amount", "USDG 金额")}
+                value={stakeAmount}
+                onChangeText={setStakeAmount}
+                placeholder="0.00"
+                keyboardType="decimal-pad"
+              />
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                {["25%", "50%", "Max"].map((preset) => (
+                  <Pressable
+                    key={preset}
+                    accessibilityRole="button"
+                    onPress={() => {
+                      const usdgBal = balance?.[spendCore.STABLE] ? (BigInt(balance[spendCore.STABLE]) / 1000000n).toString() : "0";
+                      if (preset === "Max") setStakeAmount(usdgBal);
+                      else if (preset === "50%") setStakeAmount((Math.floor(Number(usdgBal) * 0.5)).toString());
+                      else setStakeAmount((Math.floor(Number(usdgBal) * 0.25)).toString());
+                    }}
+                    style={{ flex: 1, paddingVertical: 8, borderRadius: 10, backgroundColor: colors.wash, alignItems: "center", borderWidth: 1, borderColor: colors.line }}
+                  >
+                    <Text style={[s.small, { fontWeight: "600" }]}>{preset}</Text>
+                  </Pressable>
+                ))}
+              </View>
+
+              <Button
+                primary
+                disabled={busy || !stakeAmount || Number(stakeAmount) <= 0}
+                onPress={() => {
+                  void run(async (guard) => {
+                    try {
+                      const units = (BigInt(Math.floor(Number(stakeAmount) * 1000000))).toString();
+                      await api("/api/staking/locks", {
+                        walletAddress: owner,
+                        amount: units,
+                        tier: stakingLockTier,
+                      });
+                      guard();
+                      setNotice({
+                        title: t("Staked successfully", "质押成功"),
+                        body: t(`Staked ${stakeAmount} USDG in ${stakingLockTier} lockup.`, `已成功在 ${stakingLockTier} 阶梯中质押 ${stakeAmount} USDG。`),
+                        tone: "success",
+                      });
+                      setStakeAmount("");
+                      try {
+                        const pos = await api(`/api/staking/position/${owner}`);
+                        if (pos.positions?.[0]) setStakingPosition(pos.positions[0]);
+                      } catch {}
+                    } catch (e: any) {
+                      setNotice({
+                        title: t("Staking failed", "质押失败"),
+                        body: e.message || String(e),
+                        tone: "error",
+                      });
+                    }
+                  });
+                }}
+              >
+                {t(`Stake USDG (${TIERS.find((t) => t.id === stakingLockTier)?.multiplier} Multiplier)`, `质押 USDG (${TIERS.find((t) => t.id === stakingLockTier)?.multiplier} 收益乘数)`)}
+              </Button>
+
+              <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
+                <View style={{ flex: 1 }}>
+                  <Button
+                    disabled={busy || Number(accruedRewards) <= 0}
+                    onPress={() => {
+                      void run(async (guard) => {
+                        try {
+                          await api("/api/staking/payouts", { walletAddress: owner });
+                          guard();
+                          setNotice({ title: t("Rewards claimed", "已领取奖励"), body: t("Rewards transferred to your wallet.", "质押奖励已发放至你的钱包。"), tone: "success" });
+                          const pos = await api(`/api/staking/position/${owner}`);
+                          if (pos.positions?.[0]) setStakingPosition(pos.positions[0]);
+                        } catch (e: any) {
+                          setNotice({ title: t("Claim failed", "领取失败"), body: e.message || String(e), tone: "error" });
+                        }
+                      });
+                    }}
+                  >
+                    {t("Claim Rewards", "领取收益")}
+                  </Button>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Button
+                    danger
+                    disabled={busy || isLocked || Number(activeStake) <= 0}
+                    onPress={() => {
+                      if (isLocked) {
+                        setNotice({ title: t("Locked", "已锁定"), body: t(`Position is locked for another ${lockDaysLeft} days.`, `仓位仍需锁定 ${lockDaysLeft} 天。`), tone: "error" });
+                        return;
+                      }
+                      void run(async (guard) => {
+                        try {
+                          await api("/api/staking/locks/unlock", { walletAddress: owner });
+                          guard();
+                          setNotice({ title: t("Unstaked", "已解除质押"), body: t("Unstaked and settled successfully.", "已成功解除质押并结算。"), tone: "success" });
+                          const pos = await api(`/api/staking/position/${owner}`);
+                          if (pos.positions?.[0]) setStakingPosition(pos.positions[0]);
+                        } catch (e: any) {
+                          setNotice({ title: t("Unstake failed", "解押失败"), body: e.message || String(e), tone: "error" });
+                        }
+                      });
+                    }}
+                  >
+                    {isLocked ? t(`Locked (${lockDaysLeft}d)`, `锁定中 (${lockDaysLeft}天)`) : t("Unstake All", "全部解押")}
+                  </Button>
+                </View>
+              </View>
+            </View>
+          </ScrollView>
         </>
       );
     }
@@ -7446,21 +7768,7 @@ function Wallet() {
                 <Pressable
                   accessibilityRole="button"
                   accessibilityLabel={t("Export CSV", "导出 CSV")}
-                  onPress={() => {
-                    const csv = generateActivityCsv(combinedHistory);
-                    if (Platform.OS === "web") {
-                      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-                      const url = URL.createObjectURL(blob);
-                      const link = document.createElement("a");
-                      link.href = url;
-                      link.setAttribute("download", `terrawallet-activity-${Date.now()}.csv`);
-                      document.body.appendChild(link);
-                      link.click();
-                      document.body.removeChild(link);
-                    } else {
-                      void shareText({ title: t("Export CSV", "导出 CSV"), text: csv });
-                    }
-                  }}
+                  onPress={() => setCsvModalOpen(true)}
                   style={({ pressed }) => [
                     {
                       paddingHorizontal: 12,
@@ -7475,7 +7783,7 @@ function Wallet() {
                 >
                   <Icon name="share" size={16} color={colors.ink} />
                   <Text style={[s.small, { color: colors.ink, fontWeight: "600" }]}>
-                    {t("CSV", "CSV")}
+                    {t("CSV ↗", "CSV ↗")}
                   </Text>
                 </Pressable>
               ) : undefined
@@ -7574,6 +7882,8 @@ function Wallet() {
                   { value: "receive", label: t("Received", "收到") },
                   { value: "swap", label: t("Swaps", "兑换") },
                   { value: "bridge", label: t("Bridges", "跨链") },
+                  { value: "staking_rewards", label: t("Staking", "质押奖励") },
+                  { value: "payment_links", label: t("Payment Links", "收款链接") },
                 ]}
               />
               <Chips
@@ -7582,8 +7892,11 @@ function Wallet() {
                 select={setFilter("asset")}
                 options={[
                   { value: "all", label: t("All", "全部") },
+                  { value: "USDG", label: "USDG" },
+                  { value: "RWA", label: t("RWA Tokens", "RWA 代币") },
                   ...activitySearch
                     .assetsIn(combinedHistory)
+                    .filter((symbol: string) => symbol !== "USDG")
                     .map((symbol: string) => ({ value: symbol, label: symbol })),
                 ]}
               />
@@ -7745,6 +8058,104 @@ function Wallet() {
               </View>
             );
           })}
+          <Modal visible={csvModalOpen} transparent animationType="fade" onRequestClose={() => setCsvModalOpen(false)}>
+            <View style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "center", alignItems: "center", padding: 20 }}>
+              <View style={[s.panel, { width: "100%", maxWidth: 380, borderRadius: 24, padding: 22, gap: 16, backgroundColor: colors.sheet, borderWidth: 1, borderColor: colors.line }]}>
+                <View style={{ gap: 4 }}>
+                  <Text style={[s.label, { fontWeight: "800", fontSize: 18 }]}>{t("Export Tax-Ready Activity CSV", "导出税务活动 CSV")}</Text>
+                  <Text style={[s.small, { color: colors.muted }]}>{t("Select an export preset for tax preparation and bookkeeping software:", "选择税务软件与财务报表预设：")}</Text>
+                </View>
+                <View style={{ gap: 10 }}>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => {
+                      setCsvModalOpen(false);
+                      const csv = generateExportCsv(combinedHistory, "standard");
+                      if (Platform.OS === "web") {
+                        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement("a");
+                        link.href = url;
+                        link.setAttribute("download", `terrawallet-activity-standard-${Date.now()}.csv`);
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                      } else {
+                        void shareText({ title: t("Export CSV (Standard)", "导出 CSV (标准)"), text: csv });
+                      }
+                    }}
+                    style={({ pressed }) => [s.panel, { padding: 14, backgroundColor: pressed ? colors.raised : colors.wash, flexDirection: "row", alignItems: "center", gap: 12 }]}
+                  >
+                    <View style={s.iconDisc}><Icon name="file-text" size={18} color={colors.ink} /></View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.text, { fontWeight: "700" }]}>{t("Standard CSV", "标准 CSV")}</Text>
+                      <Text style={s.small}>{t("Internal audit & transaction ledger", "内部对账与账本流水")}</Text>
+                    </View>
+                    <Icon name="arrow-down" size={16} color={colors.green} />
+                  </Pressable>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => {
+                      setCsvModalOpen(false);
+                      const csv = generateExportCsv(combinedHistory, "koinly");
+                      if (Platform.OS === "web") {
+                        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement("a");
+                        link.href = url;
+                        link.setAttribute("download", `terrawallet-activity-koinly-${Date.now()}.csv`);
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                      } else {
+                        void shareText({ title: t("Export CSV (Koinly)", "导出 CSV (Koinly)"), text: csv });
+                      }
+                    }}
+                    style={({ pressed }) => [s.panel, { padding: 14, backgroundColor: pressed ? colors.raised : colors.wash, flexDirection: "row", alignItems: "center", gap: 12 }]}
+                  >
+                    <View style={[s.iconDisc, { backgroundColor: colors.tint }]}><Icon name="share" size={18} color={colors.green} /></View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.text, { fontWeight: "700" }]}>{t("Koinly Tax Format", "Koinly 税务格式")}</Text>
+                      <Text style={s.small}>{t("Pre-formatted for direct 1-click import into Koinly", "适配 Koinly 一键导入")}</Text>
+                    </View>
+                    <Icon name="arrow-down" size={16} color={colors.green} />
+                  </Pressable>
+
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => {
+                      setCsvModalOpen(false);
+                      const csv = generateExportCsv(combinedHistory, "cointracker");
+                      if (Platform.OS === "web") {
+                        const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+                        const url = URL.createObjectURL(blob);
+                        const link = document.createElement("a");
+                        link.href = url;
+                        link.setAttribute("download", `terrawallet-activity-cointracker-${Date.now()}.csv`);
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+                      } else {
+                        void shareText({ title: t("Export CSV (CoinTracker)", "导出 CSV (CoinTracker)"), text: csv });
+                      }
+                    }}
+                    style={({ pressed }) => [s.panel, { padding: 14, backgroundColor: pressed ? colors.raised : colors.wash, flexDirection: "row", alignItems: "center", gap: 12 }]}
+                  >
+                    <View style={[s.iconDisc, { backgroundColor: colors.tint }]}><Icon name="share" size={18} color={colors.green} /></View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.text, { fontWeight: "700" }]}>{t("CoinTracker Format", "CoinTracker 税务格式")}</Text>
+                      <Text style={s.small}>{t("Pre-formatted for direct 1-click import into CoinTracker", "适配 CoinTracker 一键导入")}</Text>
+                    </View>
+                    <Icon name="arrow-down" size={16} color={colors.green} />
+                  </Pressable>
+                </View>
+                <Button onPress={() => setCsvModalOpen(false)}>
+                  {t("Cancel", "取消")}
+                </Button>
+              </View>
+            </View>
+          </Modal>
         </>
       );
     }
@@ -10416,6 +10827,70 @@ function Wallet() {
                   {review.intelligence.networkFee && <Text style={s.small}>{review.intelligence.networkFee}</Text>}
                 </View>
               )}
+              {!review?.historical && review?.netBalanceDelta && review.netBalanceDelta.hasDeltas && (
+                <View style={[s.panel, { gap: 10, backgroundColor: colors.wash }]}>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                    <Text style={s.eyebrow}>{t("SIMULATED NET BALANCE DELTA", "模拟净余额变动")}</Text>
+                    <Text style={[s.small, { color: colors.green, fontWeight: "600", fontSize: 11 }]}>
+                      {t("Pre-execution Simulation", "执行前模拟")}
+                    </Text>
+                  </View>
+                  <View style={{ gap: 8 }}>
+                    {review.netBalanceDelta.pays.length > 0 && (
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <Text style={[s.small, { fontWeight: "700", color: colors.muted, width: 85 }]}>
+                          {t("You Pay:", "你支付:")}
+                        </Text>
+                        <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap", flex: 1 }}>
+                          {review.netBalanceDelta.pays.map((item, idx) => (
+                            <View
+                              key={`pay-${idx}`}
+                              style={{
+                                backgroundColor: colors.danger + "18",
+                                borderColor: colors.danger + "40",
+                                borderWidth: 1,
+                                paddingHorizontal: 9,
+                                paddingVertical: 4,
+                                borderRadius: 8,
+                              }}
+                            >
+                              <Text style={{ color: colors.danger, fontWeight: "700", fontSize: 12 }}>
+                                {item.formatted}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    )}
+                    {review.netBalanceDelta.receives.length > 0 && (
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <Text style={[s.small, { fontWeight: "700", color: colors.muted, width: 85 }]}>
+                          {t("You Receive:", "你收到:")}
+                        </Text>
+                        <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap", flex: 1 }}>
+                          {review.netBalanceDelta.receives.map((item, idx) => (
+                            <View
+                              key={`rec-${idx}`}
+                              style={{
+                                backgroundColor: colors.green + "18",
+                                borderColor: colors.green + "40",
+                                borderWidth: 1,
+                                paddingHorizontal: 9,
+                                paddingVertical: 4,
+                                borderRadius: 8,
+                              }}
+                            >
+                              <Text style={{ color: colors.green, fontWeight: "700", fontSize: 12 }}>
+                                {item.formatted}
+                              </Text>
+                            </View>
+                          ))}
+                        </View>
+                      </View>
+                    )}
+                  </View>
+                </View>
+              )}
               {review?.rows.map(([label, value], i) => (
                 <Row key={i} label={label} value={value} />
               ))}
@@ -10450,6 +10925,52 @@ function Wallet() {
                     value={`${step.data === "0x" ? t("Native transfer", "原生转账") : t("Contract call", "合约调用")} · ${step.to.slice(0, 8)}…${step.to.slice(-4)}`}
                   />
                 ))}
+              {!review?.historical && (
+                <View style={[s.panel, { gap: 10 }]}>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                    <Text style={s.eyebrow}>{t("GAS SPEED URGENCY", "GAS 速度选择")}</Text>
+                    <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                      {GAS_SPEEDS[selectedGasSpeed].label} · {GAS_SPEEDS[selectedGasSpeed].timeEstimate}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: "row", gap: 8 }}>
+                    {(["eco", "standard", "fast"] as const).map((tierKey) => {
+                      const tier = GAS_SPEEDS[tierKey];
+                      const active = selectedGasSpeed === tierKey;
+                      const estimates = getAllGasTierEstimates();
+                      const tierEstimate = estimates[tierKey];
+                      return (
+                        <Pressable
+                          key={tierKey}
+                          accessibilityRole="button"
+                          onPress={() => setSelectedGasSpeed(tierKey)}
+                          style={{
+                            flex: 1,
+                            paddingVertical: 10,
+                            paddingHorizontal: 8,
+                            borderRadius: 14,
+                            borderWidth: 1,
+                            borderColor: active ? colors.green : colors.line,
+                            backgroundColor: active ? colors.tint : colors.wash,
+                            alignItems: "center",
+                            gap: 3,
+                          }}
+                        >
+                          <Text style={{ fontSize: 13, fontWeight: "700", color: active ? colors.green : colors.ink }}>
+                            {tier.label}
+                          </Text>
+                          <Text style={{ fontSize: 11, color: active ? colors.green : colors.muted, fontWeight: "500" }}>
+                            {tier.timeEstimate}
+                          </Text>
+                          <Text style={{ fontSize: 11, color: colors.muted }}>
+                            {tierEstimate?.feeEth ? `${tierEstimate.feeEth} ETH` : "~0.0001"}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              )}
               {auth && !signing && !review?.historical && (
                 <View
                   style={[
