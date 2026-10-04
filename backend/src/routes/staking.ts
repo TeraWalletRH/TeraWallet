@@ -5,7 +5,21 @@ import { privateKeyToAccount } from "viem/accounts";
 import pool from "../db";
 import { env } from "../env";
 import { logger } from "../logging";
-import { advanceEpoch, changeStake, claimableRewards, calculateFixedReward, FIXED_STAKING_TIERS, isLockMature, isValidStakingTier, type StakingEpoch, type StakingPosition } from "../staking";
+import {
+  advanceEpoch,
+  changeStake,
+  claimableRewards,
+  calculateFixedReward,
+  FIXED_STAKING_TIERS,
+  isLockMature,
+  isValidStakingTier,
+  TIERED_LOCK_OPTIONS,
+  isValidTieredLockDuration,
+  isPositionLocked,
+  remainingLockSeconds,
+  type StakingEpoch,
+  type StakingPosition,
+} from "../staking";
 import { lockPayoutAuthorizationMessage, payoutAuthorizationMessage, payoutTotal } from "../staking-outbox";
 import { broadcastPayout, confirmPayout } from "../staking-executor";
 
@@ -95,6 +109,7 @@ router.get("/api/staking/config", (_req: Request, res: Response) => {
     // Configuration is not activation. An epoch is only live after a verified
     // funding transaction has been recorded by the admin flow.
     activation: "A verified, funded epoch is required before deposits can be credited.",
+    lockupTiers: Object.values(TIERED_LOCK_OPTIONS),
   });
 });
 
@@ -118,6 +133,14 @@ router.get("/api/staking/tiers", (_req: Request, res: Response) => {
   res.json({
     success: true,
     tiers: Object.values(FIXED_STAKING_TIERS),
+    lockupTiers: Object.values(TIERED_LOCK_OPTIONS),
+  });
+});
+
+router.get("/api/staking/lockup-tiers", (_req: Request, res: Response) => {
+  res.json({
+    success: true,
+    tiers: Object.values(TIERED_LOCK_OPTIONS),
   });
 });
 
@@ -589,16 +612,104 @@ router.post("/api/staking/deposits", async (req: Request, res: Response) => {
       }
       const settleTimestamp = Math.max(transfer.blockTimestamp, epoch.lastUpdatedAt, chainNow);
       const advanced = advanceEpoch(epoch, settleTimestamp);
-      const positionResult = await db.query("SELECT * FROM staking_positions WHERE epoch_id = $1 AND LOWER(wallet_address) = LOWER($2) FOR UPDATE", [epochId, walletAddress]);
+
+      const requestedTier = req.body?.lockTier;
+      let lockUntilDate: Date | null = null;
+      let multiplierVal = 1.0;
+      let tierName = "flexible";
+
+      if (requestedTier && isValidTieredLockDuration(requestedTier)) {
+        const opt = TIERED_LOCK_OPTIONS[requestedTier];
+        tierName = opt.tier;
+        multiplierVal = opt.multiplier;
+        if (opt.days > 0) {
+          lockUntilDate = new Date((settleTimestamp + opt.days * 86400) * 1000);
+        }
+      }
+
+      const positionResult = await db.query(
+        "SELECT * FROM staking_positions WHERE epoch_id = $1 AND LOWER(wallet_address) = LOWER($2) FOR UPDATE",
+        [epochId, walletAddress],
+      );
       const prior = positionResult.rows[0];
-      const position: StakingPosition = prior ? { activeStake: BigInt(prior.active_stake), accruedRewards: BigInt(prior.accrued_rewards), rewardDebt: BigInt(prior.reward_debt) } : { activeStake: 0n, accruedRewards: 0n, rewardDebt: advanced.rewardPerToken };
+      const position: StakingPosition = prior
+        ? {
+            activeStake: BigInt(prior.active_stake),
+            accruedRewards: BigInt(prior.accrued_rewards),
+            rewardDebt: BigInt(prior.reward_debt),
+            multiplier: prior.multiplier ? Number(prior.multiplier) : 1.0,
+            lockUntil: prior.lock_until
+              ? Math.floor(new Date(prior.lock_until).getTime() / 1000)
+              : null,
+            lockTier: prior.lock_tier || "flexible",
+          }
+        : {
+            activeStake: 0n,
+            accruedRewards: 0n,
+            rewardDebt: advanced.rewardPerToken,
+            multiplier: multiplierVal,
+            lockUntil: lockUntilDate ? Math.floor(lockUntilDate.getTime() / 1000) : null,
+            lockTier: tierName,
+          };
       const next = changeStake(position, advanced.rewardPerToken, transfer.amount);
-      await db.query("UPDATE staking_epochs SET reward_per_token=$2,total_active_stake=$3,distributed_rewards=$4,last_updated_at=to_timestamp($5),updated_at=NOW() WHERE id=$1", [epochId, advanced.rewardPerToken.toString(), (advanced.totalActiveStake + transfer.amount).toString(), advanced.distributedRewards.toString(), advanced.lastUpdatedAt]);
-      await db.query(`INSERT INTO staking_positions (epoch_id,wallet_address,active_stake,accrued_rewards,reward_debt) VALUES ($1,$2,$3,$4,$5)
-        ON CONFLICT (epoch_id,wallet_address) DO UPDATE SET active_stake=EXCLUDED.active_stake,accrued_rewards=EXCLUDED.accrued_rewards,reward_debt=EXCLUDED.reward_debt,updated_at=NOW()`, [epochId, walletAddress, next.activeStake.toString(), next.accruedRewards.toString(), next.rewardDebt.toString()]);
-      await db.query("INSERT INTO staking_events (epoch_id,wallet_address,kind,amount,tx_hash,metadata) VALUES ($1,$2,'stake',$3,$4,$5)", [epochId, walletAddress, transfer.amount.toString(), txHash, JSON.stringify({ confirmedAt: transfer.blockTimestamp })]);
+      await db.query(
+        "UPDATE staking_epochs SET reward_per_token=$2,total_active_stake=$3,distributed_rewards=$4,last_updated_at=to_timestamp($5),updated_at=NOW() WHERE id=$1",
+        [
+          epochId,
+          advanced.rewardPerToken.toString(),
+          (advanced.totalActiveStake + transfer.amount).toString(),
+          advanced.distributedRewards.toString(),
+          advanced.lastUpdatedAt,
+        ],
+      );
+      await db.query(
+        `INSERT INTO staking_positions (epoch_id,wallet_address,active_stake,accrued_rewards,reward_debt,lock_until,multiplier,lock_tier) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        ON CONFLICT (epoch_id,wallet_address) DO UPDATE SET
+          active_stake=EXCLUDED.active_stake,
+          accrued_rewards=EXCLUDED.accrued_rewards,
+          reward_debt=EXCLUDED.reward_debt,
+          lock_until=COALESCE(EXCLUDED.lock_until, staking_positions.lock_until),
+          multiplier=GREATEST(EXCLUDED.multiplier, staking_positions.multiplier),
+          lock_tier=CASE WHEN EXCLUDED.multiplier > staking_positions.multiplier THEN EXCLUDED.lock_tier ELSE staking_positions.lock_tier END,
+          updated_at=NOW()`,
+        [
+          epochId,
+          walletAddress,
+          next.activeStake.toString(),
+          next.accruedRewards.toString(),
+          next.rewardDebt.toString(),
+          lockUntilDate,
+          multiplierVal,
+          tierName,
+        ],
+      );
+      await db.query(
+        "INSERT INTO staking_events (epoch_id,wallet_address,kind,amount,tx_hash,metadata) VALUES ($1,$2,'stake',$3,$4,$5)",
+        [
+          epochId,
+          walletAddress,
+          transfer.amount.toString(),
+          txHash,
+          JSON.stringify({
+            confirmedAt: transfer.blockTimestamp,
+            lockTier: tierName,
+            multiplier: multiplierVal,
+            lockUntil: lockUntilDate ? lockUntilDate.toISOString() : null,
+          }),
+        ],
+      );
       await db.query("COMMIT");
-      res.status(201).json({ success: true, creditedAmount: transfer.amount.toString(), position: { activeStake: next.activeStake.toString(), accruedRewards: next.accruedRewards.toString() } });
+      res.status(201).json({
+        success: true,
+        creditedAmount: transfer.amount.toString(),
+        position: {
+          activeStake: next.activeStake.toString(),
+          accruedRewards: next.accruedRewards.toString(),
+          lockTier: tierName,
+          multiplier: multiplierVal,
+          lockUntil: lockUntilDate ? lockUntilDate.toISOString() : null,
+        },
+      });
     } catch (error) { await db.query("ROLLBACK"); throw error; } finally { db.release(); }
   } catch (error) {
     logger.warn(req, "staking.deposit_rejected", error);
@@ -623,14 +734,15 @@ router.get("/api/staking/position/:walletAddress", async (req: Request, res: Res
       return;
     }
     const result = await pool.query(
-       `SELECT p.epoch_id, p.active_stake, p.accrued_rewards, p.reward_debt, p.updated_at,
-               e.status AS epoch_status, e.starts_at, e.ends_at, e.token_address,
-               e.last_updated_at, e.reward_rate_per_second, e.total_active_stake,
-               e.reward_per_token, e.distributed_rewards
-         FROM staking_positions p
-         JOIN staking_epochs e ON e.id = p.epoch_id
-        WHERE LOWER(p.wallet_address) = LOWER($1)
-        ORDER BY e.ends_at DESC`,
+      `SELECT p.epoch_id, p.active_stake, p.accrued_rewards, p.reward_debt, p.updated_at,
+              p.lock_until, p.multiplier, p.lock_tier,
+              e.status AS epoch_status, e.starts_at, e.ends_at, e.token_address,
+              e.last_updated_at, e.reward_rate_per_second, e.total_active_stake,
+              e.reward_per_token, e.distributed_rewards
+        FROM staking_positions p
+        JOIN staking_epochs e ON e.id = p.epoch_id
+       WHERE LOWER(p.wallet_address) = LOWER($1)
+       ORDER BY e.ends_at DESC`,
       [walletAddress],
     );
     const chainNow = result.rows.some((row) => row.epoch_status === "active")
@@ -646,12 +758,33 @@ router.get("/api/staking/position/:walletAddress", async (req: Request, res: Res
         rewardPerToken: BigInt(row.reward_per_token),
         distributedRewards: BigInt(row.distributed_rewards),
       };
-      const claimable = claimableRewards(epoch, {
-        activeStake: BigInt(row.active_stake),
-        accruedRewards: BigInt(row.accrued_rewards),
-        rewardDebt: BigInt(row.reward_debt),
-      }, row.epoch_status, chainNow);
-      return { ...row, claimable_rewards: claimable.toString() };
+      const mult = row.multiplier ? Number(row.multiplier) : 1.0;
+      const claimable = claimableRewards(
+        epoch,
+        {
+          activeStake: BigInt(row.active_stake),
+          accruedRewards: BigInt(row.accrued_rewards),
+          rewardDebt: BigInt(row.reward_debt),
+          multiplier: mult,
+        },
+        row.epoch_status,
+        chainNow,
+      );
+      const isLocked = Boolean(
+        row.lock_until && new Date(row.lock_until).getTime() > chainNow * 1000,
+      );
+      const remainingSeconds = row.lock_until
+        ? Math.max(0, Math.floor((new Date(row.lock_until).getTime() - chainNow * 1000) / 1000))
+        : 0;
+      return {
+        ...row,
+        multiplier: mult,
+        lock_tier: row.lock_tier || "flexible",
+        lock_until: row.lock_until ? new Date(row.lock_until).toISOString() : null,
+        is_locked: isLocked,
+        remaining_lock_seconds: remainingSeconds,
+        claimable_rewards: claimable.toString(),
+      };
     });
     res.status(200).json({ success: true, positions, source: "ledger" });
   } catch (error) {
@@ -682,7 +815,10 @@ router.post("/api/staking/payouts", async (req, res) => {
        const advanced=row.status==='active'?advanceEpoch(epoch,chainNow):epoch;
       const pr=await db.query('SELECT * FROM staking_positions WHERE epoch_id=$1 AND LOWER(wallet_address)=LOWER($2) FOR UPDATE',[epochId,wallet]), prior=pr.rows[0];
       if (!prior) throw new Error('No active staking position.');
-      const settled=changeStake({activeStake:BigInt(prior.active_stake),accruedRewards:BigInt(prior.accrued_rewards),rewardDebt:BigInt(prior.reward_debt)},advanced.rewardPerToken,0n);
+      if (kind === 'unstake' && prior.lock_until && new Date(prior.lock_until).getTime() > chainNow * 1000) {
+        throw new Error(`Staking position is locked until ${new Date(prior.lock_until).toISOString()}. Unstake is not permitted before lock maturity.`);
+      }
+      const settled=changeStake({activeStake:BigInt(prior.active_stake),accruedRewards:BigInt(prior.accrued_rewards),rewardDebt:BigInt(prior.reward_debt),multiplier:prior.multiplier?Number(prior.multiplier):1.0},advanced.rewardPerToken,0n);
       const principal=kind==='unstake'?amount:0n; if(principal>settled.activeStake) throw new Error('Unstake amount exceeds active stake.');
       const reward=settled.accruedRewards; const total=payoutTotal(principal,reward);
       const next={...settled,activeStake:settled.activeStake-principal,accruedRewards:0n};

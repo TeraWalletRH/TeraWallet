@@ -136,3 +136,87 @@ describe("TERA fixed staking calculations", () => {
   });
 });
 
+describe("Tiered Staking Lockups with APY Multipliers", () => {
+  const {
+    TIERED_LOCK_OPTIONS,
+    applyTieredLock,
+    isPositionLocked,
+    remainingLockSeconds,
+    settlePosition,
+    changeStake,
+    REWARD_SCALE,
+  } = require("../src/staking");
+
+  it("exposes flexible, 30-day (1.25x), and 90-day (1.6x) presets", () => {
+    expect(TIERED_LOCK_OPTIONS.flexible.multiplier).toBe(1.0);
+    expect(TIERED_LOCK_OPTIONS["30d"].multiplier).toBe(1.25);
+    expect(TIERED_LOCK_OPTIONS["90d"].multiplier).toBe(1.6);
+
+    expect(TIERED_LOCK_OPTIONS.flexible.days).toBe(0);
+    expect(TIERED_LOCK_OPTIONS["30d"].days).toBe(30);
+    expect(TIERED_LOCK_OPTIONS["90d"].days).toBe(90);
+  });
+
+  it("applies yield multipliers accurately during settlement", () => {
+    const rewardPerToken = REWARD_SCALE; // 1 unit per token
+
+    // Baseline: 1.0x on 100 tokens -> 100 tokens earned
+    const flexiblePos = { activeStake: 100n, accruedRewards: 0n, rewardDebt: 0n, multiplier: 1.0 };
+    const settledFlexible = settlePosition(flexiblePos, rewardPerToken);
+    expect(settledFlexible.accruedRewards).toBe(100n);
+
+    // 30-Day Lock: 1.25x on 100 tokens -> 125 tokens earned
+    const lock30dPos = { activeStake: 100n, accruedRewards: 0n, rewardDebt: 0n, multiplier: 1.25 };
+    const settled30d = settlePosition(lock30dPos, rewardPerToken);
+    expect(settled30d.accruedRewards).toBe(125n);
+
+    // 90-Day Lock: 1.6x on 100 tokens -> 160 tokens earned
+    const lock90dPos = { activeStake: 100n, accruedRewards: 0n, rewardDebt: 0n, multiplier: 1.6 };
+    const settled90d = settlePosition(lock90dPos, rewardPerToken);
+    expect(settled90d.accruedRewards).toBe(160n);
+  });
+
+  it("tracks position lock status and remaining seconds", () => {
+    const now = 100000;
+    const basePos = { activeStake: 50n, accruedRewards: 0n, rewardDebt: 0n };
+
+    const locked30d = applyTieredLock(basePos, "30d", now);
+    expect(locked30d.lockUntil).toBe(now + 30 * 86400);
+    expect(locked30d.multiplier).toBe(1.25);
+    expect(isPositionLocked(locked30d, now)).toBe(true);
+    expect(isPositionLocked(locked30d, now + 15 * 86400)).toBe(true);
+    expect(isPositionLocked(locked30d, now + 30 * 86400)).toBe(false);
+    expect(remainingLockSeconds(locked30d, now)).toBe(30 * 86400);
+    expect(remainingLockSeconds(locked30d, now + 35 * 86400)).toBe(0);
+
+    const flexible = applyTieredLock(basePos, "flexible", now);
+    expect(flexible.lockUntil).toBe(null);
+    expect(isPositionLocked(flexible, now)).toBe(false);
+  });
+
+  it("refuses unstaking while a position is locked, and permits once mature", () => {
+    const now = 100000;
+    const locked = applyTieredLock(
+      { activeStake: 100n, accruedRewards: 0n, rewardDebt: 0n },
+      "30d",
+      now,
+    );
+
+    // Unstake while locked -> throws error
+    expect(() => changeStake(locked, 0n, -20n, now + 5000)).toThrow(/Position is locked until/);
+
+    // Unstake after unlock -> succeeds
+    const unlocked = changeStake(locked, 0n, -20n, now + 31 * 86400);
+    expect(unlocked.activeStake).toBe(80n);
+  });
+
+  it("exposes lockup tiers via API", async () => {
+    const res = await request(app).get("/api/staking/lockup-tiers");
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.tiers.some((t: any) => t.tier === "30d" && t.multiplier === 1.25)).toBe(true);
+    expect(res.body.tiers.some((t: any) => t.tier === "90d" && t.multiplier === 1.6)).toBe(true);
+  });
+});
+
+

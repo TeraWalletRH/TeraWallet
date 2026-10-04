@@ -21,7 +21,68 @@ export type StakingPosition = {
   activeStake: bigint;
   accruedRewards: bigint;
   rewardDebt: bigint;
+  multiplier?: number;
+  multiplierBps?: bigint;
+  lockUntil?: number | null;
+  lockTier?: string;
 };
+
+export const TIERED_LOCK_OPTIONS = {
+  flexible: {
+    tier: "flexible",
+    label: "Flexible (Instant unstake)",
+    days: 0,
+    multiplier: 1.0,
+    multiplierBps: 10000,
+  },
+  "30d": {
+    tier: "30d",
+    label: "30-Day Lock (1.25x Multiplier)",
+    days: 30,
+    multiplier: 1.25,
+    multiplierBps: 12500,
+  },
+  "90d": {
+    tier: "90d",
+    label: "90-Day Lock (1.6x Multiplier)",
+    days: 90,
+    multiplier: 1.6,
+    multiplierBps: 16000,
+  },
+} as const;
+
+export type TieredLockDuration = keyof typeof TIERED_LOCK_OPTIONS;
+
+export function isValidTieredLockDuration(tier: unknown): tier is TieredLockDuration {
+  return typeof tier === "string" && tier in TIERED_LOCK_OPTIONS;
+}
+
+export function isPositionLocked(position: StakingPosition, nowSeconds: number): boolean {
+  if (!position.lockUntil) return false;
+  return nowSeconds < position.lockUntil;
+}
+
+export function remainingLockSeconds(position: StakingPosition, nowSeconds: number): number {
+  if (!position.lockUntil || nowSeconds >= position.lockUntil) return 0;
+  return position.lockUntil - nowSeconds;
+}
+
+export function applyTieredLock(
+  position: StakingPosition,
+  tier: TieredLockDuration,
+  startTimeSeconds: number,
+): StakingPosition {
+  const option = TIERED_LOCK_OPTIONS[tier];
+  if (!option) throw new Error(`Unknown lock tier: ${tier}`);
+  const lockUntil = option.days > 0 ? startTimeSeconds + option.days * 86400 : null;
+  return {
+    ...position,
+    lockTier: option.tier,
+    multiplier: option.multiplier,
+    multiplierBps: BigInt(option.multiplierBps),
+    lockUntil,
+  };
+}
 
 /** Advance an epoch. A period with no active stake consumes no reward budget. */
 export function advanceEpoch(epoch: StakingEpoch, now: number): StakingEpoch {
@@ -40,10 +101,14 @@ export function advanceEpoch(epoch: StakingEpoch, now: number): StakingEpoch {
   };
 }
 
-/** Settle a position at the current accumulator before changing its stake. */
+/** Settle a position at the current accumulator before changing its stake, factoring in any APY multiplier. */
 export function settlePosition(position: StakingPosition, rewardPerToken: bigint): StakingPosition {
   if (rewardPerToken < position.rewardDebt) throw new Error("Reward accumulator cannot move backwards.");
-  const earned = (position.activeStake * (rewardPerToken - position.rewardDebt)) / REWARD_SCALE;
+  const baseEarned = (position.activeStake * (rewardPerToken - position.rewardDebt)) / REWARD_SCALE;
+  const multiplierBps =
+    position.multiplierBps ??
+    (position.multiplier ? BigInt(Math.round(position.multiplier * 10000)) : 10000n);
+  const earned = (baseEarned * multiplierBps) / 10000n;
   return { ...position, accruedRewards: position.accruedRewards + earned, rewardDebt: rewardPerToken };
 }
 
@@ -58,12 +123,16 @@ export function claimableRewards(
   return settlePosition(position, projected.rewardPerToken).accruedRewards;
 }
 
-/** Apply a stake or unstake after settlement. Negative balances are refused. */
+/** Apply a stake or unstake after settlement. Negative balances and unstakes during lock periods are refused. */
 export function changeStake(
   position: StakingPosition,
   rewardPerToken: bigint,
   delta: bigint,
+  nowSeconds?: number,
 ): StakingPosition {
+  if (delta < 0n && nowSeconds !== undefined && isPositionLocked(position, nowSeconds)) {
+    throw new Error(`Position is locked until ${new Date(position.lockUntil! * 1000).toISOString()}`);
+  }
   const settled = settlePosition(position, rewardPerToken);
   const activeStake = settled.activeStake + delta;
   if (activeStake < 0n) throw new Error("Unstake amount exceeds active stake.");
