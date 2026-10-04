@@ -4676,18 +4676,43 @@ function Wallet() {
       >
         <TokenIcon symbol={token.symbol} size={38} chainBadge={canHoldHere} />
         <View style={{ flex: 1 }}>
-          <Text style={s.label} numberOfLines={1}>
-            {token.name}
-            {/* Market cap rank, only for the not-yet-tradable catalog coins —
-                real ones sourced from CoinGecko alongside the sparkline, not
-                shown for ETH/TERA (already tradable) or Arc (no market yet). */}
-            {!isListed && ranks[token.symbol] ? (
-              <Text style={{ color: colors.faint, fontWeight: "600" }}>
-                {" "}
-                · #{ranks[token.symbol]}
+          <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+            <Text style={s.label} numberOfLines={1}>
+              {token.name}
+              {/* Market cap rank, only for the not-yet-tradable catalog coins —
+                  real ones sourced from CoinGecko alongside the sparkline, not
+                  shown for ETH/TERA (already tradable) or Arc (no market yet). */}
+              {!isListed && ranks[token.symbol] ? (
+                <Text style={{ color: colors.faint, fontWeight: "600" }}>
+                  {" "}
+                  · #{ranks[token.symbol]}
+                </Text>
+              ) : null}
+            </Text>
+            <Pressable
+              hitSlop={8}
+              accessibilityRole="button"
+              accessibilityLabel={
+                isPinned(token.symbol, pinnedAssets)
+                  ? t(`Unpin ${token.symbol}`, `取消自选 ${token.symbol}`)
+                  : t(`Pin ${token.symbol}`, `加入自选 ${token.symbol}`)
+              }
+              onPress={(e: any) => {
+                e?.stopPropagation?.();
+                const next = togglePinned(token.symbol);
+                setPinnedAssetsState(next);
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 16,
+                  color: isPinned(token.symbol, pinnedAssets) ? "#eab308" : colors.muted,
+                }}
+              >
+                {isPinned(token.symbol, pinnedAssets) ? "★" : "☆"}
               </Text>
-            ) : null}
-          </Text>
+            </Pressable>
+          </View>
           <Text style={s.small} numberOfLines={1}>
             {[Number.isFinite(price) && price > 0 ? valueCore.format(price) : "", detail]
               .filter(Boolean)
@@ -4772,17 +4797,45 @@ function Wallet() {
               </Pressable>
             }
           />
+          {pinnedAssets.length > 0 && (
+            <View style={{ gap: 10, marginTop: 16 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                <Text style={{ fontSize: 14, color: "#eab308" }}>★</Text>
+                <Text style={s.eyebrow}>
+                  {t(
+                    `Pinned Watchlist (${pinnedAssets.length})`,
+                    `置顶关注 (${pinnedAssets.length})`,
+                  )}
+                </Text>
+              </View>
+              <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
+                {pinnedAssets.map((sym, i) => {
+                  const matched =
+                    assets.find((a) => a.symbol === sym) ||
+                    popularTokens.find((pt) => pt.symbol === sym) || {
+                      symbol: sym,
+                      name: sym,
+                    };
+                  return marketRow({ symbol: sym, name: (matched as any).name || sym }, i === 0);
+                })}
+              </View>
+            </View>
+          )}
           <View style={{ gap: 10, marginTop: 16 }}>
             <Text style={s.eyebrow}>{t("Popular tokens", "\u70ed\u95e8\u4ee3\u5e01")}</Text>
             <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
-              {popularTokens.map((token, i) => marketRow(token, i === 0))}
+              {sortWithPinned(popularTokens, pinnedAssets).map((token, i) =>
+                marketRow(token, i === 0),
+              )}
             </View>
           </View>
           <View style={{ gap: 10, marginTop: 16 }}>
             <Text style={s.eyebrow}>{t("Your assets", "\u4f60\u7684\u8d44\u4ea7")}</Text>
             {held.length ? (
               <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
-                {held.map(({ asset, amount }, i) => assetRow(asset, amount, i === 0))}
+                {sortWithPinned(held, pinnedAssets).map(({ asset, amount }, i) =>
+                  assetRow(asset, amount, i === 0),
+                )}
                 {hiddenBalancesRow()}
               </View>
             ) : (
@@ -4796,11 +4849,12 @@ function Wallet() {
           <View style={{ gap: 10, marginTop: 16 }}>
             <Text style={s.eyebrow}>{t("All tokens", "\u6240\u6709\u4ee3\u5e01")}</Text>
             <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
-              {assets
-                .filter((asset) => !popularSymbols.has(asset.symbol))
-                .map((asset, i) =>
-                  marketRow({ symbol: asset.symbol, name: asset.name || asset.symbol }, i === 0),
-                )}
+              {sortWithPinned(
+                assets.filter((asset) => !popularSymbols.has(asset.symbol)),
+                pinnedAssets,
+              ).map((asset, i) =>
+                marketRow({ symbol: asset.symbol, name: asset.name || asset.symbol }, i === 0),
+              )}
             </View>
           </View>
         </>
@@ -4880,32 +4934,78 @@ function Wallet() {
         <Gallery key={owner} owner={owner} t={t} onBack={() => setPage("home")} onSend={sendNft} />
       );
     if (page === "home") {
-      // Popular tokens sits between the actions and the assets on a phone, and
-      // heads the second column on a desktop.
+      // Custom Watchlist and Popular tokens
+      const watchlistSection = (
+        <View style={{ gap: 10 }}>
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+              <Text style={{ fontSize: 16, color: "#eab308" }}>★</Text>
+              <Text style={[s.text, { fontWeight: "700" }]}>
+                {t(`Watchlist (${pinnedAssets.length})`, `自选关注 (${pinnedAssets.length})`)}
+              </Text>
+            </View>
+            <Pressable accessibilityRole="button" onPress={() => setPage("tokens")}>
+              <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                {t("Manage ↗", "管理 ↗")}
+              </Text>
+            </Pressable>
+          </View>
+          <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
+            {pinnedAssets.length > 0 ? (
+              pinnedAssets.map((sym, i) => {
+                const matched =
+                  assets.find((a) => a.symbol === sym) ||
+                  popularTokens.find((pt) => pt.symbol === sym) || {
+                    symbol: sym,
+                    name: sym,
+                  };
+                return marketRow({ symbol: sym, name: (matched as any).name || sym }, i === 0);
+              })
+            ) : (
+              <View style={{ paddingVertical: 14, alignItems: "center" }}>
+                <Text style={s.small}>
+                  {t(
+                    "No pinned tokens yet. Tap ☆ on any token to add it to your watchlist.",
+                    "暂无自选代币。点击任意代币旁的 ☆ 即可加入自选。",
+                  )}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+      );
       const popular = (
-      <View style={{ gap: 10 }}>
-        <View
-          style={{
-            flexDirection: "row",
-            justifyContent: "space-between",
-            alignItems: "center",
-          }}
-        >
-          <Text style={[s.text, { fontWeight: "700" }]}>
-            {t("Popular tokens", "\u70ed\u95e8\u4ee3\u5e01")}
-          </Text>
-          <Pressable accessibilityRole="button" onPress={() => setPage("tokens")}>
-            <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
-              {t("View all", "\u67e5\u770b\u5168\u90e8")}
+        <View style={{ gap: 10 }}>
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "center",
+            }}
+          >
+            <Text style={[s.text, { fontWeight: "700" }]}>
+              {t("Popular tokens", "\u70ed\u95e8\u4ee3\u5e01")}
             </Text>
-          </Pressable>
+            <Pressable accessibilityRole="button" onPress={() => setPage("tokens")}>
+              <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                {t("View all", "\u67e5\u770b\u5168\u90e8")}
+              </Text>
+            </Pressable>
+          </View>
+          <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
+            {!balance
+              ? [0, 1, 2, 3, 4].map((i) => tokenRowSkeleton(i, i === 0))
+              : sortWithPinned(popularTokens.slice(0, 5), pinnedAssets).map((token, i) =>
+                  marketRow(token, i === 0),
+                )}
+          </View>
         </View>
-        <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
-          {!balance
-            ? [0, 1, 2, 3, 4].map((i) => tokenRowSkeleton(i, i === 0))
-            : popularTokens.slice(0, 5).map((token, i) => marketRow(token, i === 0))}
-        </View>
-      </View>
       );
       return (
         <>
@@ -5216,6 +5316,7 @@ function Wallet() {
                 </View>
                 <Icon name="chevron-right" size={18} color={colors.muted} />
               </Pressable>
+              {!wide && watchlistSection}
               {!wide && popular}
               <View ref={tourAssetsRef} collapsable={false} style={{ gap: 10 }}>
                 <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
@@ -5252,6 +5353,7 @@ function Wallet() {
               </View>
             </View>
             <View style={wide ? { flex: 5, minWidth: 0, gap: 22 } : { gap: 18 }}>
+              {wide && watchlistSection}
               {wide && popular}
               <View style={{ gap: 10 }}>
                 <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
