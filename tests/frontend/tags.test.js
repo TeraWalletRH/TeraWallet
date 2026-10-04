@@ -13,6 +13,9 @@ import {
   parseTag,
   releaseMessage,
   skeleton,
+  tagPaymentUrl,
+  tagReceiveCardData,
+  generateTagBadgeSvg,
 } from "../../public/tera/core/tags.js";
 
 const ADDRESS = "0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05";
@@ -124,4 +127,38 @@ test("tags are not offered as bridge destinations", () => {
   assert.equal(SCOPE.bridge, false);
   assert.equal(SCOPE.transfer, true);
   assert.equal(SCOPE.privateSend, true);
+});
+
+test("tagPaymentUrl generates clean canonical payment links", () => {
+  assert.equal(tagPaymentUrl("alice"), "https://terawallet.app/pay/@alice");
+  assert.equal(tagPaymentUrl("@bob"), "https://terawallet.app/pay/@bob");
+  assert.equal(tagPaymentUrl("  @Charlie  "), "https://terawallet.app/pay/@charlie");
+});
+
+test("tagReceiveCardData formats data for social card and intent URL", () => {
+  const card = tagReceiveCardData({
+    tag: "@alice",
+    address: ADDRESS,
+    network: "Robinhood Chain",
+  });
+  assert.equal(card.tag, "alice");
+  assert.equal(card.handle, "@alice");
+  assert.equal(card.address, ADDRESS.toLowerCase());
+  assert.equal(card.paymentUrl, "https://terawallet.app/pay/@alice");
+  assert.equal(card.qrUri, `ethereum:${ADDRESS.toLowerCase()}`);
+  assert.match(card.shareText, /Send USDG & crypto directly to my verified handle @alice/);
+  assert.match(card.intentUrl, /https:\/\/x\.com\/intent\/tweet\?text=/);
+  assert.match(card.intentUrl, /terawallet\.app%2Fpay%2F%40alice/);
+});
+
+test("generateTagBadgeSvg produces valid svg with handle and styling", () => {
+  const svg = generateTagBadgeSvg({
+    tag: "@alice",
+    address: ADDRESS,
+  });
+  assert.match(svg, /<svg xmlns="http:\/\/www\.w3\.org\/2000\/svg"/);
+  assert.match(svg, /@alice/);
+  assert.match(svg, /0x5b27…9f05/);
+  assert.match(svg, /VERIFIED TAG/);
+  assert.match(svg, /ROBINHOOD CHAIN/);
 });

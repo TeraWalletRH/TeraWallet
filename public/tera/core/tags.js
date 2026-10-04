@@ -252,3 +252,73 @@ export const scopeRefusal = {
   bridge:
     "A tag names an address on Robinhood Chain. A bridge sends to another chain, where that address is not the same account — paste the destination address instead.",
 };
+
+/** The canonical payment URL for a claimed tag. */
+export function tagPaymentUrl(tag) {
+  const clean = normalise(tag);
+  return `https://terawallet.app/pay/@${clean}`;
+}
+
+/** Structured data for generating a shareable tag receive card and X social post. */
+export function tagReceiveCardData({ tag, address, network = "Robinhood Chain" } = {}) {
+  const clean = normalise(tag);
+  const handle = display(clean);
+  const paymentUrl = tagPaymentUrl(clean);
+  const shareText = `Send USDG & crypto directly to my verified handle ${handle} on @RobinhoodApp Chain via @TeraWalletRH 💳⚡️\n\nNo 42-character hex addresses. 1-click execution.\n\nClaim your handle 👇`;
+  const normalizedAddr = address ? String(address).toLowerCase() : "";
+
+  return {
+    tag: clean,
+    handle,
+    address: normalizedAddr,
+    network,
+    paymentUrl,
+    qrUri: normalizedAddr ? `ethereum:${normalizedAddr}` : paymentUrl,
+    shareText,
+    intentUrl: `https://x.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(paymentUrl)}`,
+  };
+}
+
+/** Generates a high-contrast, scalable SVG payment badge with verified tag handle. */
+export function generateTagBadgeSvg({ tag, address, network = "Robinhood Chain" } = {}) {
+  const clean = normalise(tag);
+  const handle = display(clean);
+  const shortAddr = address ? `${address.slice(0, 6)}…${address.slice(-4)}` : "";
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 340" width="600" height="340">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a140e"/>
+      <stop offset="50%" stop-color="#0f2417"/>
+      <stop offset="100%" stop-color="#050c08"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="80%" cy="20%" r="60%">
+      <stop offset="0%" stop-color="rgba(0, 200, 83, 0.25)"/>
+      <stop offset="100%" stop-color="rgba(0, 200, 83, 0)"/>
+    </radialGradient>
+  </defs>
+  <rect width="600" height="340" rx="16" fill="url(#bg)"/>
+  <rect width="600" height="340" rx="16" fill="url(#glow)"/>
+  <rect x="12" y="12" width="576" height="316" rx="12" fill="none" stroke="rgba(0, 200, 83, 0.35)" stroke-width="2"/>
+  
+  <!-- Header -->
+  <circle cx="48" cy="48" r="16" fill="#00c853"/>
+  <text x="48" y="54" font-family="system-ui, sans-serif" font-weight="900" font-size="16" fill="#050c08" text-anchor="middle">T</text>
+  <text x="76" y="46" font-family="system-ui, sans-serif" font-weight="700" font-size="18" fill="#ffffff">TERA WALLET</text>
+  <text x="76" y="62" font-family="system-ui, sans-serif" font-weight="600" font-size="11" fill="#00e676">${network.toUpperCase()}</text>
+  
+  <!-- Verified Badge -->
+  <rect x="420" y="34" width="144" height="28" rx="14" fill="rgba(0, 200, 83, 0.15)" stroke="#00c853" stroke-width="1"/>
+  <text x="492" y="53" font-family="system-ui, sans-serif" font-weight="700" font-size="12" fill="#00e676" text-anchor="middle">✓ VERIFIED TAG</text>
+  
+  <!-- Handle -->
+  <text x="48" y="140" font-family="system-ui, sans-serif" font-weight="600" font-size="13" fill="#a0aec0">CLAIMED IDENTITY</text>
+  <text x="48" y="190" font-family="system-ui, sans-serif" font-weight="800" font-size="44" fill="#ffffff">${handle}</text>
+  ${shortAddr ? `<text x="48" y="225" font-family="monospace" font-size="14" fill="#00e676">${shortAddr}</text>` : ""}
+  
+  <!-- Footer -->
+  <line x1="48" y1="265" x2="552" y2="265" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>
+  <text x="48" y="295" font-family="system-ui, sans-serif" font-weight="600" font-size="12" fill="#68d391">Scan or send directly via @tags on Robinhood Chain</text>
+</svg>`;
+}
+
