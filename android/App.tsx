@@ -57,6 +57,7 @@ import {
   UNVERIFIABLE,
   value as valueCore,
   slippage as slippageCore,
+  schedules as schedulesCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -651,6 +652,12 @@ function Wallet() {
     [error, setError] = useState(""),
     [selectedGasSpeed, setSelectedGasSpeed] = useState<"eco" | "standard" | "fast">("standard"),
     [slippageBps, setSlippageBps] = useState<number>(slippageCore.DEFAULT_SLIPPAGE_BPS),
+    // The scheduled payment the send screen was opened for, if any. Signing that
+    // send marks this one payment paid; leaving the send screen forgets it.
+    [scheduleRun, setScheduleRun] = useState<null | { id: string; date: string; label: string }>(null),
+    [scheduleForm, setScheduleForm] = useState<Record<string, string>>({}),
+    [scheduleEditId, setScheduleEditId] = useState(""),
+    [scheduleError, setScheduleError] = useState(""),
     [pinnedAssets, setPinnedAssetsState] = useState<string[]>(() => getPinnedAssets()),
     [csvModalOpen, setCsvModalOpen] = useState(false),
     [stakingPosition, setStakingPosition] = useState<any>(null),
@@ -1299,6 +1306,125 @@ function Wallet() {
   }, [prices, data.priceAlerts]);
   // Saved names, cleaned on every read: the stored list is whatever the file held.
   const book = contactsCore.cleanBook(data.contacts);
+  const scheduleToday = schedulesCore.today();
+  const dueScheduled = owner ? schedulesCore.duePayments(data.schedules, scheduleToday) : [];
+  const dueScheduledKey = dueScheduled.map(schedulesCore.reminderKey).join(",");
+  const scheduleAnnounced = useRef(new Set<string>());
+  useEffect(() => {
+    if (page !== "send") setScheduleRun(null);
+  }, [page]);
+  // One reminder per due payment per session, from the browser's own
+  // notifications when the app is in the background. The home card shows them
+  // regardless, until each is paid or skipped.
+  useEffect(() => {
+    for (const due of dueScheduled) {
+      const key = schedulesCore.reminderKey(due);
+      if (scheduleAnnounced.current.has(key)) continue;
+      scheduleAnnounced.current.add(key);
+      notify.showSystem(
+        t("Scheduled payment due", "定期付款到期"),
+        schedulesCore.reminderText(due, scheduleToday, scheduleName(due.schedule)),
+        key,
+        () => setPage("scheduled"),
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dueScheduledKey]);
+  function scheduleName(schedule: any) {
+    return (
+      contactsCore.nameFor(book, schedule.recipient) ||
+      (schedule.tag ? tags.display(schedule.tag) || "" : `${schedule.recipient.slice(0, 6)}…${schedule.recipient.slice(-4)}`)
+    );
+  }
+  function openScheduleForm(id = "") {
+    const existing = id ? schedulesCore.scheduleFor(dataRef.current.schedules, id) : null;
+    setScheduleEditId(existing ? existing.id : "");
+    setScheduleError("");
+    setScheduleForm({
+      label: existing?.label || "",
+      recipient: existing
+        ? (existing.tag && tagsAvailable() ? tags.display(existing.tag) || "" : existing.recipient)
+        : "",
+      asset: existing?.asset || "USDG",
+      amount: existing?.amount || "",
+      frequency: existing?.frequency || "monthly",
+      start: existing?.start || schedulesCore.today(),
+      end: existing?.end || "",
+    });
+    setPage("schedule-edit");
+  }
+  async function saveScheduleForm(guard: () => void) {
+    setScheduleError("");
+    const existing = scheduleEditId
+      ? schedulesCore.scheduleFor(dataRef.current.schedules, scheduleEditId)
+      : null;
+    let recipientAddress = (scheduleForm.recipient || "").trim();
+    let tag = "";
+    // A tag is resolved now so the schedule holds an address, and again when
+    // each payment is made, because a tag can change hands in between.
+    if (recipientAddress.startsWith("@")) {
+      const found = await tags.resolveTag(recipientAddress);
+      guard();
+      tag = found.tag;
+      recipientAddress = found.address;
+    }
+    const result = schedulesCore.parseSchedule(
+      { ...scheduleForm, recipient: recipientAddress, tag },
+      { owner, existing },
+    );
+    if (!result.ok) {
+      setScheduleError(result.reason);
+      return;
+    }
+    const saved = schedulesCore.saveSchedule(dataRef.current.schedules, result.schedule);
+    if (!saved.ok) {
+      setScheduleError(saved.reason);
+      return;
+    }
+    await store({ ...dataRef.current, schedules: saved.schedules });
+    guard();
+    setPage("scheduled");
+    setNotice({
+      title: existing ? t("Schedule updated", "定期付款已更新") : t("Payment scheduled", "已设置定期付款"),
+      body: t(
+        `${result.schedule.label}: ${schedulesCore.describeFrequency(result.schedule).toLowerCase()}, first on ${result.schedule.start}. You'll be reminded when it's due, and you sign each payment.`,
+        `${result.schedule.label}：首次付款日期 ${result.schedule.start}。到期时会提醒你，每笔付款都需你签名。`,
+      ),
+      tone: "success",
+    });
+  }
+  async function settleScheduled(id: string, date: string, status: "paid" | "skipped", hash = "") {
+    const result = schedulesCore.settle(dataRef.current.schedules, id, date, { status, hash });
+    if (!result.ok) throw new Error(result.reason);
+    await store({ ...dataRef.current, schedules: result.schedules });
+  }
+  /** Open the normal send screen with this payment written out. Nothing is sent until the owner signs. */
+  function payScheduled(schedule: any) {
+    const next = schedulesCore.nextPayment(schedule);
+    check(next, t("This schedule has no payments left.", "此定期付款已无剩余付款。"));
+    check(
+      assets.some((a) => a.symbol === schedule.asset),
+      t(`${schedule.asset} is not available to send right now.`, `${schedule.asset} 目前无法发送。`),
+    );
+    setError("");
+    setAssetSymbol(schedule.asset);
+    clearAmount();
+    setAmount(schedule.amount);
+    if (schedule.tag && tagsAvailable()) {
+      setRecipient(tags.display(schedule.tag) || "");
+      setRecipientKind("tag");
+    } else {
+      setRecipient(schedule.recipient);
+      setRecipientKind("address");
+    }
+    setTagLookup({ state: "idle" });
+    setPayNote(schedule.label);
+    setSendMode("public");
+    // The recipient step, so a tag is resolved again and lookalike checks run.
+    setFlowStep(3);
+    setPage("send");
+    setScheduleRun({ id: schedule.id, date: next!.date, label: schedule.label });
+  }
   const inactivity = useRef(Date.now());
   const backgroundLock = useRef<ReturnType<typeof setTimeout> | null>(null);
   function forget() {
@@ -2365,7 +2491,17 @@ function Wallet() {
     const proposal = { ...result, intent: checked, createdAt: Date.now() };
     await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, proposal] });
     guard();
-    showProposal(proposal, { note: notesCore.cleanNote(payNote) || undefined });
+    const run = scheduleRun;
+    showProposal(proposal, {
+      note: notesCore.cleanNote(payNote) || undefined,
+      ...(run
+        ? {
+            afterSubmitted: async (hash: string) => {
+              await settleScheduled(run.id, run.date, "paid", hash).catch(() => {});
+            },
+          }
+        : {}),
+    });
   }
   /**
    * Claim a name for this wallet.
@@ -5243,6 +5379,43 @@ function Wallet() {
                   </Pressable>
                 ))}
               </View>
+              {dueScheduled.length ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setPage("scheduled")}
+                  style={({ pressed }) => [
+                    s.panel,
+                    {
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 12,
+                      borderColor: colors.lime,
+                      borderWidth: 1,
+                      backgroundColor: colors.tint,
+                      opacity: pressed ? 0.7 : 1,
+                    },
+                  ]}
+                >
+                  <View style={s.quickIcon}>
+                    <Icon name="calendar-clock" color={colors.lime} size={22} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.text, { fontWeight: "700", color: colors.lime }]}>
+                      {(() => {
+                        const total = dueScheduled.reduce((sum: number, item: any) => sum + item.count, 0);
+                        return t(
+                          `${total} scheduled payment${total === 1 ? " is" : "s are"} due`,
+                          `${total} 笔定期付款到期`,
+                        );
+                      })()}
+                    </Text>
+                    <Text style={s.small}>
+                      {schedulesCore.reminderText(dueScheduled[0], scheduleToday, scheduleName(dueScheduled[0].schedule))}
+                    </Text>
+                  </View>
+                  <Icon name="chevron-right" size={18} color={colors.lime} />
+                </Pressable>
+              ) : null}
               {data.history?.some((item: any) => item?.status === "pending") ? (
                 <Pressable
                   accessibilityRole="button"
@@ -6196,6 +6369,19 @@ function Wallet() {
             backLabel={t("Back", "返回")}
           />
           <Steps count={5} current={flowStep} label={stepTitle} />
+          {scheduleRun && !isPrivate ? (
+            <View style={[s.panel, { borderColor: colors.lime, borderWidth: 1, backgroundColor: colors.tint, gap: 4 }]}>
+              <Text style={[s.text, { fontWeight: "700", color: colors.lime }]}>
+                {t(`Scheduled payment · ${scheduleRun.label}`, `定期付款 · ${scheduleRun.label}`)}
+              </Text>
+              <Text style={s.small}>
+                {t(
+                  `Due ${scheduleRun.date}. Signing this send marks it paid. Change anything you need first.`,
+                  `到期日 ${scheduleRun.date}。签名此转账即标记为已支付，如需修改请先修改。`,
+                )}
+              </Text>
+            </View>
+          ) : null}
           {flowStep === 0 && (
             <View style={{ gap: 14 }}>
               <Pressable
@@ -7825,6 +8011,252 @@ function Wallet() {
         </>
       );
     }
+    if (page === "scheduled") {
+      const list = schedulesCore.sortedSchedules(data.schedules);
+      return (
+        <>
+          <Header
+            title={t("Scheduled", "定期付款")}
+            onBack={() => setPage("home")}
+            backLabel={t("Home", "首页")}
+            right={
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("New scheduled payment", "新建定期付款")}
+                hitSlop={8}
+                onPress={() => openScheduleForm()}
+                style={s.iconDisc}
+              >
+                <Icon name="plus" size={20} color={colors.ink} />
+              </Pressable>
+            }
+          />
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Tera reminds you when a payment is due. You review and sign each one.",
+              "付款到期时 Tera 会提醒你，每笔付款都由你审核并签名。",
+            )}
+          </Text>
+          {list.length === 0 ? (
+            <View style={[s.panel, { alignItems: "center", gap: 12, paddingVertical: 28 }]}>
+              <Icon name="calendar-clock" size={34} color={colors.lime} />
+              <Text style={[s.text, { textAlign: "center" }]}>
+                {t(
+                  "No scheduled payments yet. Set one up for rent, a salary or anything you pay on a regular day.",
+                  "暂无定期付款。可为房租、工资或任何定期支付设置。",
+                )}
+              </Text>
+              <Button primary onPress={() => openScheduleForm()}>
+                {t("Schedule a payment", "设置定期付款")}
+              </Button>
+            </View>
+          ) : (
+            list.map(({ schedule, next }: any) => {
+              const due = schedule.paused ? 0 : schedulesCore.dueCount(schedule, scheduleToday);
+              const days = next ? schedulesCore.daysUntil(next.date, scheduleToday) : 0;
+              const nextLine = !next
+                ? t("No more payments", "已无后续付款")
+                : schedule.paused
+                  ? t(`${next.date} (paused)`, `${next.date}（已暂停）`)
+                  : days === 0
+                    ? t(`${next.date} · today`, `${next.date} · 今天`)
+                    : days > 0
+                      ? t(`${next.date} · in ${days} day${days === 1 ? "" : "s"}`, `${next.date} · ${days} 天后`)
+                      : t(`${next.date} · overdue`, `${next.date} · 已逾期`);
+              return (
+                <View key={schedule.id} style={[s.panel, { gap: 6 }]}>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                    <Text style={[s.text, { fontWeight: "800", fontSize: 17 }]}>{schedule.label}</Text>
+                    <Text
+                      style={[
+                        s.small,
+                        { fontWeight: "700", color: due ? colors.danger : schedule.paused || !next ? colors.muted : colors.green },
+                      ]}
+                    >
+                      {schedule.paused
+                        ? t("Paused", "已暂停")
+                        : !next
+                          ? t("Ended", "已结束")
+                          : due
+                            ? t(`${due} due`, `${due} 笔到期`)
+                            : t("Scheduled", "已安排")}
+                    </Text>
+                  </View>
+                  <Text style={s.small}>{schedulesCore.describeFrequency(schedule)}</Text>
+                  <Row label={t("Amount", "金额")} value={`${schedule.amount} ${schedule.asset}`} />
+                  <Row label={t("To", "收款方")} value={scheduleName(schedule)} />
+                  <Row label={t("Address", "地址")} value={schedule.recipient} />
+                  <Row label={t("Next payment", "下次付款")} value={nextLine} />
+                  {schedule.end ? <Row label={t("Ends", "结束日期")} value={schedule.end} /> : null}
+                  {schedule.log.slice(0, 3).map((entry: any) => (
+                    <Text key={`${entry.date}-${entry.status}`} style={s.small}>
+                      {entry.date} ·{" "}
+                      {entry.status === "paid"
+                        ? t(`Paid${entry.hash ? ` · ${entry.hash.slice(0, 10)}…` : ""}`, `已支付${entry.hash ? ` · ${entry.hash.slice(0, 10)}…` : ""}`)
+                        : t("Skipped", "已跳过")}
+                    </Text>
+                  ))}
+                  <View style={[s.wrap, { marginTop: 8 }]}>
+                    {due && next ? (
+                      <>
+                        <Button primary onPress={() => void run(async () => payScheduled(schedule))}>
+                          {t("Pay now", "立即支付")}
+                        </Button>
+                        <Button
+                          onPress={() =>
+                            void run(async () => {
+                              await settleScheduled(schedule.id, next.date, "skipped");
+                              setNotice({
+                                title: t("Payment skipped", "已跳过付款"),
+                                body: t(`The ${next.date} payment was skipped. Nothing was sent.`, `${next.date} 的付款已跳过，未发送任何资金。`),
+                                tone: "success",
+                              });
+                            })
+                          }
+                        >
+                          {t("Skip this one", "跳过本次")}
+                        </Button>
+                      </>
+                    ) : null}
+                    <Button onPress={() => openScheduleForm(schedule.id)}>{t("Edit", "编辑")}</Button>
+                    {next ? (
+                      <Button
+                        onPress={() =>
+                          void run(async () => {
+                            await store({
+                              ...dataRef.current,
+                              schedules: schedulesCore.setPaused(dataRef.current.schedules, schedule.id, !schedule.paused),
+                            });
+                          })
+                        }
+                      >
+                        {schedule.paused ? t("Resume", "恢复") : t("Pause", "暂停")}
+                      </Button>
+                    ) : null}
+                    <Button
+                      onPress={() =>
+                        confirm(
+                          t("Remove this scheduled payment?", "删除此定期付款？"),
+                          t(
+                            "It is removed from this device. Nothing already sent is affected.",
+                            "将从此设备删除，已发送的付款不受影响。",
+                          ),
+                          () =>
+                            void run(async () => {
+                              await store({
+                                ...dataRef.current,
+                                schedules: schedulesCore.removeSchedule(dataRef.current.schedules, schedule.id),
+                              });
+                            }),
+                        )
+                      }
+                    >
+                      {t("Remove", "删除")}
+                    </Button>
+                  </View>
+                </View>
+              );
+            })
+          )}
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(schedulesCore.PRIVACY_NOTE, "定期付款保存在此设备的加密数据中，从不发送给 Tera。Tera 无法替你付款：到期时你需要像其他转账一样审核并签名。")}
+          </Text>
+        </>
+      );
+    }
+    if (page === "schedule-edit") {
+      const set = (field: string) => (value: string) => setScheduleForm((current) => ({ ...current, [field]: value }));
+      const choice = (active: boolean, label: string, onPress: () => void, key: string) => (
+        <Pressable
+          key={key}
+          accessibilityRole="button"
+          accessibilityState={{ selected: active }}
+          onPress={onPress}
+          style={{
+            paddingVertical: 8,
+            paddingHorizontal: 14,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: active ? colors.green : colors.line,
+            backgroundColor: active ? colors.tint : colors.wash,
+          }}
+        >
+          <Text style={{ fontSize: 13, fontWeight: "700", color: active ? colors.green : colors.ink }}>{label}</Text>
+        </Pressable>
+      );
+      const frequencyLabels: Record<string, [string, string]> = {
+        weekly: ["Weekly", "每周"],
+        biweekly: ["Every 2 weeks", "每两周"],
+        monthly: ["Monthly", "每月"],
+      };
+      return (
+        <>
+          <Header
+            title={scheduleEditId ? t("Edit schedule", "编辑定期付款") : t("Schedule a payment", "设置定期付款")}
+            onBack={() => setPage("scheduled")}
+            backLabel={t("Back", "返回")}
+          />
+          <Field
+            label={t("Name", "名称")}
+            value={scheduleForm.label || ""}
+            onChangeText={set("label")}
+            maxLength={schedulesCore.LIMITS.maxLabel}
+            autoCapitalize="sentences"
+            placeholder={t("e.g. Rent, Salary, Allowance", "例如：房租、工资、零花钱")}
+          />
+          <Field
+            label={tagsAvailable() ? t("Recipient address or @tag", "收款地址或 @标签") : t("Recipient address", "收款地址")}
+            value={scheduleForm.recipient || ""}
+            onChangeText={set("recipient")}
+            placeholder={tagsAvailable() ? "0x… / @astra" : "0x…"}
+          />
+          <View style={{ gap: 8 }}>
+            <Text style={s.eyebrow}>{t("ASSET", "资产")}</Text>
+            <View style={[s.wrap, { gap: 8 }]}>
+              {assets.map((asset) =>
+                choice(scheduleForm.asset === asset.symbol, asset.symbol, () => set("asset")(asset.symbol), asset.symbol),
+              )}
+            </View>
+          </View>
+          <Field
+            label={t("Amount", "金额")}
+            value={scheduleForm.amount || ""}
+            onChangeText={set("amount")}
+            keyboardType="decimal-pad"
+            placeholder="0.00"
+          />
+          <View style={{ gap: 8 }}>
+            <Text style={s.eyebrow}>{t("REPEATS", "重复")}</Text>
+            <View style={[s.wrap, { gap: 8 }]}>
+              {Object.keys(schedulesCore.FREQUENCIES).map((key) =>
+                choice(scheduleForm.frequency === key, t(...frequencyLabels[key]), () => set("frequency")(key), key),
+              )}
+            </View>
+          </View>
+          <Field
+            label={t("First payment (YYYY-MM-DD)", "首次付款（YYYY-MM-DD）")}
+            value={scheduleForm.start || ""}
+            onChangeText={set("start")}
+            placeholder={scheduleToday}
+          />
+          <Field
+            label={t("Last payment (optional, YYYY-MM-DD)", "最后一次付款（可选，YYYY-MM-DD）")}
+            value={scheduleForm.end || ""}
+            onChangeText={set("end")}
+            placeholder={t("No end date", "无结束日期")}
+          />
+          {scheduleError ? <Text style={[s.small, { color: colors.danger }]}>{scheduleError}</Text> : null}
+          {action(
+            scheduleEditId ? "Save changes" : "Schedule payment",
+            scheduleEditId ? "保存更改" : "设置定期付款",
+            saveScheduleForm,
+          )}
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(schedulesCore.PRIVACY_NOTE, "定期付款保存在此设备的加密数据中，从不发送给 Tera。Tera 无法替你付款：到期时你需要像其他转账一样审核并签名。")}
+          </Text>
+        </>
+      );
+    }
     if (page === "notifications") {
       const items = data.alerts?.items || [];
       const readAt = notificationsReadAt.current;
@@ -8819,6 +9251,16 @@ function Wallet() {
               label={t("Contacts", "联系人")}
               detail={t("Names for the addresses you send to", "为常用地址添加名称")}
               onPress={() => setSettingsSection("contacts")}
+            />
+            <ListRow
+              icon="calendar-clock"
+              label={t("Scheduled payments", "定期付款")}
+              detail={
+                dueScheduled.length
+                  ? t(`${dueScheduled.length} due now`, `${dueScheduled.length} 笔已到期`)
+                  : t("Rent, salaries and other regular payments", "房租、工资等定期付款")
+              }
+              onPress={() => setPage("scheduled")}
             />
             <ListRow
               icon="wallet"
@@ -10474,6 +10916,12 @@ function Wallet() {
             icon: "wallet",
             label: t("Spend", "消费"),
             onPress: openSpend,
+          },
+          {
+            key: "scheduled",
+            icon: "calendar-clock",
+            label: t("Scheduled", "定期付款"),
+            onPress: () => setPage("scheduled"),
           },
           {
             key: "bridge",

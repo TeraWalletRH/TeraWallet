@@ -70,6 +70,12 @@ export type LocalData = {
    * of this file and never sent anywhere; `core/notes.js` cleans them.
    */
   notes?: Record<string, string>;
+  /**
+   * Recurring payments the owner set up. Sealed with the rest of this file and
+   * never sent anywhere; `core/schedules.js` cleans them on every read. Not
+   * trimmed by the retention window — a schedule is a plan, not a record.
+   */
+  schedules?: any[];
   /** Whether the spotlight walkthrough has run on this device already. */
   tourSeen: boolean;
   /**

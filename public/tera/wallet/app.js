@@ -219,6 +219,7 @@ import {
   LIMITS as TAG_LIMITS,
 } from "../core/tags.js";
 import * as contactBook from "../core/contacts.js";
+import * as schedules from "../core/schedules.js";
 import {
   ACTIONS,
   createPreset,
@@ -443,6 +444,7 @@ const titles = {
   nfts: "NFTs",
   agent: "Agent assistant",
   approvals: "Approvals",
+  scheduled: "Scheduled",
   bridge: "Bridge",
   policy: "Private policy",
   sessions: "Agent sessions",
@@ -485,6 +487,9 @@ const state = {
   // Names the owner gave addresses they send to. Kept inside the encrypted
   // vault and never sent to Tera; `core/contacts.js` holds the rules.
   contacts: [],
+  // Recurring payments the owner set up. Kept inside the encrypted vault and
+  // never sent to Tera; `core/schedules.js` holds the rules.
+  schedules: [],
   bridges: [],
   chat: [],
   privacyLog: [],
@@ -654,6 +659,7 @@ function vaultPayload() {
   return {
     records: state.records,
     contacts: state.contacts,
+    schedules: state.schedules,
     bridges: state.bridges,
     drafts: state.drafts,
     versions: state.versions,
@@ -682,6 +688,7 @@ function loadRecords() {
   state.nft = { tokens: [], loading: false, error: "" };
   state.records = [];
   state.contacts = [];
+  state.schedules = [];
   state.drafts = [];
   state.versions = {};
   state.presets = [];
@@ -703,7 +710,9 @@ function loadRecords() {
   state.autoLockMinutes = [0, 5, 15, 30, 60].includes(storedAutoLock) ? storedAutoLock : 15;
   state.trustedOnlyMode = localStorage.getItem(trustedOnlySettingsKey()) === "true";
   const storedFiat = localStorage.getItem(fiatSettingsKey());
-  state.fiatCurrency = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD"].includes(storedFiat) ? storedFiat : "USD";
+  state.fiatCurrency = ["USD", "EUR", "GBP", "JPY", "CAD", "AUD"].includes(storedFiat)
+    ? storedFiat
+    : "USD";
 }
 async function unlockEncryptedStorage(passphrase = "") {
   connected();
@@ -726,13 +735,19 @@ async function unlockEncryptedStorage(passphrase = "") {
   state.vaultKey = key;
   state.keyInfo = info;
   state.vaultKeyEpoch = info?.epoch || 1;
-  if (typeof vault?.autoLockMinutes === "number" && [0, 5, 15, 30, 60].includes(vault.autoLockMinutes)) {
+  if (
+    typeof vault?.autoLockMinutes === "number" &&
+    [0, 5, 15, 30, 60].includes(vault.autoLockMinutes)
+  ) {
     state.autoLockMinutes = vault.autoLockMinutes;
   }
   if (typeof vault?.trustedOnlyMode === "boolean") {
     state.trustedOnlyMode = vault.trustedOnlyMode;
   }
-  if (typeof vault?.fiatCurrency === "string" && ["USD", "EUR", "GBP", "JPY", "CAD", "AUD"].includes(vault.fiatCurrency)) {
+  if (
+    typeof vault?.fiatCurrency === "string" &&
+    ["USD", "EUR", "GBP", "JPY", "CAD", "AUD"].includes(vault.fiatCurrency)
+  ) {
     state.fiatCurrency = vault.fiatCurrency;
   }
   state.priceAlerts = Array.isArray(vault?.priceAlerts) ? vault.priceAlerts : [];
@@ -743,6 +758,7 @@ async function unlockEncryptedStorage(passphrase = "") {
     : [];
   state.drafts = Array.isArray(vault?.drafts) ? vault.drafts : [];
   state.contacts = contactBook.cleanBook(vault?.contacts);
+  state.schedules = schedules.cleanSchedules(vault?.schedules);
   state.bridges = Array.isArray(vault?.bridges)
     ? vault.bridges.filter((r) => sameAddress(r.ownerAddress, state.owner) && isHash(r.requestId))
     : [];
@@ -778,6 +794,7 @@ function lockVault() {
   state.vaultKey = null;
   state.records = [];
   state.contacts = [];
+  state.schedules = [];
   state.drafts = [];
   state.bridges = [];
   state.versions = {};
@@ -815,6 +832,7 @@ function clearEncryptedStorage() {
   state.recovery = null;
   state.records = [];
   state.contacts = [];
+  state.schedules = [];
   state.bridges = [];
   state.nft = { tokens: [], loading: false, error: "" };
   state.drafts = [];
@@ -952,6 +970,7 @@ function render() {
         }),
       agent: () => `<div class="live-agent panel">${chat()}</div>`,
       approvals,
+      scheduled: scheduledPage,
       bridge: () =>
         bridgeView({
           esc,
@@ -981,6 +1000,7 @@ function render() {
     ${state.integrity?.status === "modified" ? `<div class="live-notice integrity-alarm" role="alert"><span><b>This page does not match the published release.</b> ${esc(state.integrity.matched)} of ${esc(state.integrity.checked)} modules match. Do not approve a transaction from this page until you know why. <a href="${href("settings")}">See which files ↗</a></span></div>` : ""}
     ${state.notice ? `<div class="live-notice" role="alert"><span>${esc(state.notice)}</span>${button("Dismiss", "notice-dismiss")}</div>` : ""}
     ${pendingTransactionNudge()}
+    ${key === "scheduled" ? "" : scheduleDueBanner()}
     ${spanBanner()}
     ${tagClaimPrompt()}
     ${state.owner && state.chain !== chainId ? `<div class="live-notice" role="status">Your wallet is on a different network. ${button("Switch network", "switch")}</div>` : ""}
@@ -1662,7 +1682,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
     ${previewBlock(p)}
     ${historyBlock(p)}
     ${boundaryBlock(p, index)}
-    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") + swapLimitRows(p, intent) : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", tagFor(intent.recipient) ? `${displayTag(tagFor(intent.recipient))} · ${intent.recipient}` : intent.recipient) : ""}${intent?.actionType === "TRANSFER" && contactBook.nameFor(state.contacts, intent.recipient) ? pair("Saved as", contactBook.nameFor(state.contacts, intent.recipient)) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
+    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") + swapLimitRows(p, intent) : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", tagFor(intent.recipient) ? `${displayTag(tagFor(intent.recipient))} · ${intent.recipient}` : intent.recipient) : ""}${intent?.actionType === "TRANSFER" && contactBook.nameFor(state.contacts, intent.recipient) ? pair("Saved as", contactBook.nameFor(state.contacts, intent.recipient)) : ""}${p.schedule ? pair("Scheduled payment", `${p.schedule.label || "Payment"} · due ${p.schedule.date}`) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
     ${submitted ? `<p>Transaction: ${explorer(p.txHash)}</p>` : issue ? `<p class="live-blocked">${esc(issue)}</p>` : '<p class="micro">Review the token amount and recipient. Your wallet will ask you to sign and pay the network fee.</p>'}
     <div class="actions">${button("Approve in wallet ↗", "approve", `data-index="${index}" ${issue || submitted || state.busy || state.chain !== chainId ? "disabled" : ""}`)}${button("Prepare again", "reprepare", `data-index="${index}" ${state.busy || submitted || !intent ? "disabled" : ""}`)}${button("Share redacted", "share", `data-index="${index}"`)}${button("Dismiss", "draft-dismiss", `data-index="${index}" ${state.busy ? "disabled" : ""}`)}</div></article>`;
 }
@@ -1834,6 +1854,186 @@ function contactDialog(address = "") {
     state.notice = `Saved ${result.contact.name} for ${contactBook.short(result.contact.address)} on this device.`;
     render();
   };
+}
+// Recurring payments. Tera cannot pay these for the owner — it holds no key —
+// so a due payment is a reminder with the send already written out. "Pay now"
+// opens the normal proposal form filled in; the checks and the wallet signature
+// are the same as any other send. core/schedules.js holds the rules.
+const scheduleAnnounced = new Set();
+function scheduleRecipientName(schedule) {
+  return (
+    contactBook.nameFor(state.contacts, schedule.recipient) ||
+    (schedule.tag ? displayTag(schedule.tag) : short(schedule.recipient))
+  );
+}
+function dueSchedules() {
+  if (!state.owner || !state.vaultKey) return [];
+  return schedules.duePayments(state.schedules, schedules.today());
+}
+function scheduleDueBanner() {
+  const due = dueSchedules();
+  if (!due.length) return "";
+  const on = schedules.today();
+  // The browser's own notification, once per due payment per page session, and
+  // only where the owner already allowed notifications. This page never asks.
+  try {
+    if (typeof Notification !== "undefined" && Notification.permission === "granted")
+      for (const item of due) {
+        const key = schedules.reminderKey(item);
+        if (scheduleAnnounced.has(key)) continue;
+        scheduleAnnounced.add(key);
+        new Notification("Scheduled payment due", {
+          body: schedules.reminderText(item, on, scheduleRecipientName(item.schedule)),
+          tag: key,
+        });
+      }
+  } catch {
+    /* A notification that cannot be shown changes nothing: the banner still is. */
+  }
+  const total = due.reduce((sum, item) => sum + item.count, 0);
+  const first = due[0];
+  return `<div class="live-notice" role="status"><span><b>${total} scheduled payment${total === 1 ? " is" : "s are"} due.</b> ${esc(schedules.reminderText(first, on, scheduleRecipientName(first.schedule)))}</span><a class="btn" href="${href("scheduled")}">Review ↗</a></div>`;
+}
+function scheduleCard({ schedule, next }) {
+  const on = schedules.today();
+  const due = schedule.paused ? 0 : schedules.dueCount(schedule, on);
+  const status = schedule.paused
+    ? chip("Paused", true)
+    : !next
+      ? chip("Ended")
+      : due
+        ? chip(`${due} due`, true)
+        : chip("Scheduled");
+  const nextLine = !next
+    ? "No more payments"
+    : schedule.paused
+      ? `${next.date} (paused)`
+      : (() => {
+          const days = schedules.daysUntil(next.date, on);
+          return days === 0
+            ? `${next.date} · today`
+            : days > 0
+              ? `${next.date} · in ${days} day${days === 1 ? "" : "s"}`
+              : `${next.date} · overdue`;
+        })();
+  const log = schedule.log
+    .slice(0, 3)
+    .map(
+      (entry) =>
+        `<li>${esc(entry.date)} · ${entry.status === "paid" ? `Paid${entry.hash ? ` · ${explorer(entry.hash)}` : ""}` : "Skipped"}</li>`,
+    )
+    .join("");
+  const id = `data-id="${esc(schedule.id)}"`;
+  const dueActions =
+    due && next
+      ? `${button("Pay now ↗", "schedule-pay", `${id} ${state.busy ? "disabled" : ""}`)}${button("Skip this one", "schedule-skip", `${id} data-date="${esc(next.date)}"`)}`
+      : "";
+  return `<article class="proposal"><div class="proposal-top"><span class="eyebrow">${esc(schedules.describeFrequency(schedule))}</span>${status}</div><h2>${esc(schedule.label)}</h2>
+    ${pair("Amount", `${schedule.amount} ${schedule.asset}`)}${pair("To", scheduleRecipientName(schedule))}${pair("Address", schedule.recipient)}${pair("Next payment", nextLine)}${schedule.end ? pair("Ends", schedule.end) : ""}
+    ${log ? `<p class="micro">Recent</p><ul class="micro">${log}</ul>` : ""}
+    <div class="actions">${dueActions}${button("Edit", "schedule-edit", id)}${next ? button(schedule.paused ? "Resume" : "Pause", "schedule-pause", `${id} data-paused="${schedule.paused}"`) : ""}${button("Remove", "schedule-remove", id)}</div></article>`;
+}
+function scheduledPage() {
+  if (!state.owner) return accountPrompt();
+  if (!state.vaultKey)
+    return `<section class="panel"><h2>Unlock to see your scheduled payments.</h2><p>Scheduled payments are kept inside your encrypted vault on this device.</p><div class="actions">${button("Unlock encrypted vault", "vault-unlock")}</div></section>`;
+  const list = schedules.sortedSchedules(state.schedules);
+  return `<div class="toolbar">${button("+ New scheduled payment", "schedule-new")}${chip("You sign every payment")}</div>${
+    list.map(scheduleCard).join("") ||
+    empty(
+      "No scheduled payments yet. Set one up for rent, a salary or anything you pay on a regular day.",
+    )
+  }<p class="micro">${esc(schedules.PRIVACY_NOTE)}</p>`;
+}
+function scheduleDialog(id = "") {
+  connected();
+  if (!state.vaultKey)
+    throw new Error("Unlock your encrypted vault first. Scheduled payments are kept inside it.");
+  if (!state.assetsLoaded) throw new Error("Load the asset registry before scheduling a payment.");
+  const existing = id ? schedules.scheduleFor(state.schedules, id) : null;
+  if (id && !existing) throw new Error("That scheduled payment no longer exists.");
+  const assets = state.assets.filter((a) => isAddress(a.address) && a.status === "ACTIVE");
+  const asset = existing?.asset || "USDG";
+  const recipient = existing
+    ? existing.tag && tagsAvailable()
+      ? displayTag(existing.tag)
+      : existing.recipient
+    : "";
+  const option = (value, label, selected) =>
+    `<option value="${esc(value)}" ${selected ? "selected" : ""}>${esc(label)}</option>`;
+  dialog(
+    existing ? "Edit scheduled payment." : "Schedule a payment.",
+    `<form id="schedule-form"><div class="field"><label for="schedule-label">Name</label><input id="schedule-label" name="label" required maxlength="${schedules.LIMITS.maxLabel}" placeholder="e.g. Rent, Salary, Allowance" autocomplete="off" value="${esc(existing?.label || "")}"></div><div class="field"><label for="schedule-recipient">${tagsAvailable() ? "Recipient address or @tag" : "Recipient address"}</label><input id="schedule-recipient" name="recipient" required placeholder="${tagsAvailable() ? "0x… or @astra" : "0x…"}" autocomplete="off" spellcheck="false" autocapitalize="none" value="${esc(recipient)}"></div><div class="field"><label for="schedule-asset">Asset</label><select id="schedule-asset" name="asset">${assets.map((a) => option(a.symbol, `${a.symbol} · ${a.name}`, a.symbol === asset)).join("")}</select></div><div class="field"><label for="schedule-amount">Amount</label><input id="schedule-amount" name="amount" required inputmode="decimal" placeholder="0.00" pattern="[0-9]+(\\.[0-9]+)?" value="${esc(existing?.amount || "")}"></div><div class="field"><label for="schedule-frequency">Repeats</label><select id="schedule-frequency" name="frequency">${Object.entries(
+      schedules.FREQUENCIES,
+    )
+      .map(([value, f]) => option(value, f.label, value === (existing?.frequency || "monthly")))
+      .join(
+        "",
+      )}</select></div><div class="field"><label for="schedule-start">First payment</label><input id="schedule-start" name="start" type="date" required ${existing ? "" : `min="${schedules.today()}"`} value="${esc(existing?.start || schedules.today())}"></div><div class="field"><label for="schedule-end">Last payment (optional)</label><input id="schedule-end" name="end" type="date" value="${esc(existing?.end || "")}"></div><p class="micro">${esc(schedules.PRIVACY_NOTE)}</p><p class="live-form-error" role="alert"></p><button class="btn primary">${existing ? "Save changes" : "Schedule payment"}</button></form>`,
+  );
+  const form = document.getElementById("schedule-form");
+  form.querySelector("#schedule-label")?.focus();
+  form.onsubmit = async (event) => {
+    event.preventDefault();
+    const submit = form.querySelector("button");
+    const alert = form.querySelector('[role="alert"]');
+    submit.disabled = true;
+    try {
+      const data = new FormData(form);
+      let typed = String(data.get("recipient") || "").trim();
+      let tag = "";
+      // A tag is resolved now so the schedule holds an address, and again when
+      // each payment is made, because a tag can change hands in between.
+      if (typed.startsWith("@")) {
+        if (!tagsAvailable()) throw new Error("Tags are not available. Enter an address.");
+        const found = await resolveTagForSend(typed);
+        tag = found.tag;
+        typed = found.address;
+      }
+      const result = schedules.parseSchedule(
+        {
+          label: data.get("label"),
+          recipient: typed,
+          tag,
+          asset: data.get("asset"),
+          amount: data.get("amount"),
+          frequency: data.get("frequency"),
+          start: data.get("start"),
+          end: data.get("end"),
+        },
+        { owner: state.owner, existing },
+      );
+      if (!result.ok) throw new Error(result.reason);
+      const saved = schedules.saveSchedule(state.schedules, result.schedule);
+      if (!saved.ok) throw new Error(saved.reason);
+      state.schedules = saved.schedules;
+      await persist();
+      closeDialog();
+      state.notice = `${result.schedule.label}: ${schedules.describeFrequency(result.schedule).toLowerCase()}, first on ${result.schedule.start}. You will be reminded here when it is due.`;
+      render();
+    } catch (error) {
+      alert.textContent = errorMessage(error);
+    } finally {
+      submit.disabled = false;
+    }
+  };
+}
+function payScheduled(id) {
+  const schedule = schedules.scheduleFor(state.schedules, id);
+  if (!schedule) throw new Error("That scheduled payment no longer exists.");
+  const next = schedules.nextPayment(schedule);
+  if (!next) throw new Error("This schedule has no payments left.");
+  if (!state.assets.some((a) => a.symbol === schedule.asset && a.status === "ACTIVE"))
+    throw new Error(`${schedule.asset} is not available to send right now.`);
+  // The form opens filled in and nothing is submitted: the owner presses the
+  // button, reads the checks and signs, exactly as for a send they typed.
+  createProposal(schedule.asset, {
+    amount: schedule.amount,
+    ...(schedule.tag && tagsAvailable()
+      ? { recipientTag: schedule.tag }
+      : { recipient: schedule.recipient }),
+    schedule: { id: schedule.id, date: next.date, label: schedule.label },
+  });
 }
 function calculateMonthlySpending(records = [], history = []) {
   const map = new Map();
@@ -2209,6 +2409,8 @@ function applyVaultPayload(payload) {
     );
   if (Array.isArray(payload.drafts)) state.drafts = payload.drafts;
   if (Array.isArray(payload.contacts)) state.contacts = contactBook.cleanBook(payload.contacts);
+  if (Array.isArray(payload.schedules))
+    state.schedules = schedules.cleanSchedules(payload.schedules);
   if (payload.versions) state.versions = pruneVersions(payload.versions, state.vaultRetentionDays);
   if (Array.isArray(payload.presets)) state.presets = payload.presets.map(createPreset);
   if (typeof payload.agentSessionToken === "string")
@@ -2403,6 +2605,7 @@ function forgetEverything() {
   state.balances = {};
   state.records = [];
   state.contacts = [];
+  state.schedules = [];
   state.bridges = [];
   state.nft = { tokens: [], loading: false, error: "" };
   state.drafts = [];
@@ -2830,6 +3033,7 @@ function clearAccount() {
   state.balances = {};
   state.records = [];
   state.contacts = [];
+  state.schedules = [];
   state.drafts = [];
   state.chat = [];
   state.errors = {};
@@ -3010,6 +3214,11 @@ function createProposal(symbol, draft = null) {
     `<form id="proposal-form"><div class="field"><label for="proposal-asset">Asset</label><select id="proposal-asset" name="asset">${assets.map((a) => `<option value="${esc(a.symbol)}" ${a.symbol === symbol ? "selected" : ""}>${esc(a.symbol)} · ${esc(a.name)}</option>`).join("")}</select></div><div class="field"><label for="proposal-action">Action</label><select id="proposal-action" name="action"><option>TRANSFER</option><option>BUY</option><option>SELL</option></select></div><div class="field"><label id="proposal-amount-label" for="proposal-amount">Token amount</label><input id="proposal-amount" name="amount" inputmode="decimal" required placeholder="0.00" pattern="[0-9]+(\\.[0-9]+)?"></div><div class="field" id="proposal-slippage-field" style="display:none"><label for="proposal-slippage">Slippage limit</label><select id="proposal-slippage" name="slippage">${SLIPPAGE_CHOICES.map((bps) => `<option value="${bps}" ${bps === savedSlippageBps() ? "selected" : ""}>${slippageLabel(bps)}${bps === DEFAULT_SLIPPAGE_BPS ? " (default)" : ""}</option>`).join("")}</select><p class="micro">The swap is refused on-chain if it would return more than this much below the quote. Lower protects the price; higher fails less often when the market moves.</p></div>${tagsAvailable() ? '<div class="field"><label for="proposal-recipient-kind">Send to</label><select id="proposal-recipient-kind" name="recipientKind"><option value="address">Another wallet address</option><option value="tag">A Tera tag</option></select></div>' : ""}<div class="field"><label for="proposal-recipient">Recipient</label><input id="proposal-recipient" name="recipient" placeholder="Required for transfers" autocomplete="off"></div><div id="proposal-contacts" class="actions"></div><p id="proposal-contact-status" class="micro" role="status"></p><p id="proposal-tag-status" class="micro" role="status"></p><p id="proposal-help" class="micro"></p><p class="live-form-error" role="alert"></p><button class="btn primary">Run the checks ↗</button></form>`,
   );
   const form = document.getElementById("proposal-form");
+  if (draft?.schedule && form)
+    form.insertAdjacentHTML(
+      "afterbegin",
+      `<div class="note"><strong>Scheduled payment</strong>${esc(draft.schedule.label || "")} due ${esc(draft.schedule.date)}. Signing this transfer marks it paid. Change anything you need first.</div>`,
+    );
   // A draft read out of a message fills the same fields the owner would type
   // into. Nothing is submitted: they still press the button and read the checks.
   if (draft && form) {
@@ -3180,7 +3389,9 @@ function createProposal(symbol, draft = null) {
       if (actionType === "TRANSFER" && state.trustedOnlyMode) {
         const isSaved = state.contacts.some((c) => sameAddress(c.address, recipient));
         if (!isSaved) {
-          throw new Error("Trusted only mode is active. Recipient address must be saved in your contacts.");
+          throw new Error(
+            "Trusted only mode is active. Recipient address must be saved in your contacts.",
+          );
         }
       }
       const rawAmount = data.get("amount").trim();
@@ -3204,7 +3415,11 @@ function createProposal(symbol, draft = null) {
         ...(maxSpendUsdCents === undefined ? {} : { maxSpendUsdCents }),
         ...(swap ? { slippageBps } : {}),
       };
-      await prepare(intent);
+      // A scheduled payment stays tied to its schedule only while it is still
+      // the transfer the schedule describes being paid to someone.
+      const scheduled =
+        draft?.schedule && actionType === "TRANSFER" ? { schedule: draft.schedule } : {};
+      await prepare(intent, "", scheduled);
       closeDialog();
       navigate("approvals");
     } catch (error) {
@@ -3295,7 +3510,7 @@ async function loadPolicyBundle(force = false) {
 
 // `lineage` carries a re-prepared action's history forward; a fresh proposal
 // starts its own.
-async function prepare(intent, lineage = "") {
+async function prepare(intent, lineage = "", extra = {}) {
   connected();
   if (state.busy) throw new Error("Wait for the current request to finish.");
   const version = generation;
@@ -3314,6 +3529,7 @@ async function prepare(intent, lineage = "") {
     // with a service-supplied owner, recipient or amount.
     state.drafts.unshift({
       ...result,
+      ...extra,
       intent: locallyApprovedIntent,
       preparedAt: Date.now(),
       lineage: lineage || newLineage(),
@@ -4025,6 +4241,18 @@ async function approve(index) {
       },
     );
     proposal.txHash = hash;
+    if (proposal.schedule && proposal.intent.actionType === "TRANSFER") {
+      const settled = schedules.settle(
+        state.schedules,
+        proposal.schedule.id,
+        proposal.schedule.date,
+        {
+          status: "paid",
+          hash,
+        },
+      );
+      if (settled.ok) state.schedules = settled.schedules;
+    }
     const record = {
       owner,
       chainId,
@@ -4102,9 +4330,7 @@ function downloadJson(data, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 function downloadCsv(csv, filename) {
-  const url = URL.createObjectURL(
-    new Blob([csv], { type: "text/csv;charset=utf-8;" }),
-  );
+  const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8;" }));
   const link = document.createElement("a");
   link.href = url;
   link.download = filename;
@@ -4230,7 +4456,7 @@ function inspectAsset(symbol) {
   const price = state.prices[symbol];
   const symbolAlerts = (state.priceAlerts || []).filter((item) => item.symbol === symbol);
   const alertsHtml = symbolAlerts.length
-    ? `<div class="alerts-list" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">${symbolAlerts.map(alert => `<div style="display:flex;justify-content:space-between;align-items:center;background:var(--wash);padding:8px 12px;border-radius:8px;font-size:13px;"><span><strong>${esc(alert.symbol)}</strong> ${alert.condition === 'above' ? '≥' : '≤'} $${Number(alert.targetPrice).toLocaleString()}</span><button type="button" class="btn secondary sm" data-action="delete-price-alert" data-id="${esc(alert.id)}" data-symbol="${esc(symbol)}">Remove</button></div>`).join("")}</div>`
+    ? `<div class="alerts-list" style="margin-top:10px;display:flex;flex-direction:column;gap:6px;">${symbolAlerts.map((alert) => `<div style="display:flex;justify-content:space-between;align-items:center;background:var(--wash);padding:8px 12px;border-radius:8px;font-size:13px;"><span><strong>${esc(alert.symbol)}</strong> ${alert.condition === "above" ? "≥" : "≤"} $${Number(alert.targetPrice).toLocaleString()}</span><button type="button" class="btn secondary sm" data-action="delete-price-alert" data-id="${esc(alert.id)}" data-symbol="${esc(symbol)}">Remove</button></div>`).join("")}</div>`
     : `<p style="font-size:12px;color:var(--muted);font-style:italic;">No active price alerts for ${esc(symbol)}.</p>`;
 
   const priceAlertFormHtml = `
@@ -4239,7 +4465,7 @@ function inspectAsset(symbol) {
       <h4 style="margin:0 0 6px 0;font-size:14px;font-weight:700;">🔔 Set Price Alert for ${esc(symbol)}</h4>
       <p style="font-size:12px;color:var(--muted);margin-bottom:8px;">Get notified when ${esc(symbol)} crosses your target price threshold.</p>
       <div style="display:flex;gap:8px;align-items:center;">
-        <input type="number" id="alert-target-price" placeholder="${price ? price : '0.00'}" step="any" style="flex:1;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--wash);color:var(--ink);" />
+        <input type="number" id="alert-target-price" placeholder="${price ? price : "0.00"}" step="any" style="flex:1;padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--wash);color:var(--ink);" />
         <select id="alert-condition" style="padding:8px 12px;border:1px solid var(--line);border-radius:8px;background:var(--wash);color:var(--ink);">
           <option value="above">≥ Above</option>
           <option value="below">≤ Below</option>
@@ -4634,7 +4860,7 @@ document.addEventListener("click", async (event) => {
       if (p?.intent) {
         const lineage = p.lineage || newLineage();
         recordVersion(lineage, p);
-        await prepare(p.intent, lineage);
+        await prepare(p.intent, lineage, p.schedule ? { schedule: p.schedule } : {});
         state.drafts = state.drafts.filter((d) => d !== p);
         void persist();
         render();
@@ -4677,6 +4903,36 @@ document.addEventListener("click", async (event) => {
     if (action === "approve") await approve(index);
     if (action === "receipt-export") exportReceipt(index);
     if (action === "contact-edit") contactDialog(target.dataset.address || "");
+    if (action === "schedule-new") scheduleDialog();
+    if (action === "schedule-edit" && target.dataset.id) scheduleDialog(target.dataset.id);
+    if (action === "schedule-pay" && target.dataset.id) payScheduled(target.dataset.id);
+    if (action === "schedule-skip" && target.dataset.id) {
+      const result = schedules.settle(state.schedules, target.dataset.id, target.dataset.date, {
+        status: "skipped",
+      });
+      if (!result.ok) throw new Error(result.reason);
+      state.schedules = result.schedules;
+      await persist();
+      state.notice = `Skipped the ${target.dataset.date} payment. Nothing was sent.`;
+      render();
+    }
+    if (action === "schedule-pause" && target.dataset.id) {
+      const pause = target.dataset.paused !== "true";
+      state.schedules = schedules.setPaused(state.schedules, target.dataset.id, pause);
+      await persist();
+      state.notice = pause
+        ? "Paused. You will not be reminded until you resume it."
+        : "Resumed. Payments due while it was paused are shown so you can pay or skip each.";
+      render();
+    }
+    if (action === "schedule-remove" && target.dataset.id) {
+      state.schedules = schedules.removeSchedule(state.schedules, target.dataset.id);
+      await persist();
+      closeDialog();
+      state.notice =
+        "Scheduled payment removed from this device. Nothing already sent is affected.";
+      render();
+    }
     if (action === "contact-remove" && target.dataset.address) {
       state.contacts = contactBook.removeContact(state.contacts, target.dataset.address);
       await persist();
