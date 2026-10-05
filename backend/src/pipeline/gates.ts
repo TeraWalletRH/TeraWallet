@@ -5,6 +5,7 @@ import { findAsset, SUPPORTED_RWA_ASSETS, TERA } from "../data/assets";
 import { quoteSwap } from "../chain/swapQuote";
 import { formatUnits } from "viem";
 import { evaluatePolicy } from "../policy";
+import { DEFAULT_SLIPPAGE_BPS, MAX_SLIPPAGE_BPS, MIN_SLIPPAGE_BPS, isValidSlippageBps } from "../chain/slippage";
 
 const publicClient = createPublicClient({
   // Registry fallback is deterministic. Do not let an optional preflight RPC
@@ -228,6 +229,23 @@ export async function checkRiskEngine(intent: UserIntent): Promise<GateResult> {
     };
   }
 
+  if (intent.slippageBps !== undefined) {
+    if (intent.actionType !== "BUY" && intent.actionType !== "SELL") {
+      return {
+        gate: "risk_engine",
+        passed: false,
+        reason: "Slippage applies only to swaps",
+      };
+    }
+    if (!isValidSlippageBps(intent.slippageBps)) {
+      return {
+        gate: "risk_engine",
+        passed: false,
+        reason: `Slippage must be between ${MIN_SLIPPAGE_BPS / 100}% and ${MAX_SLIPPAGE_BPS / 100}%`,
+      };
+    }
+  }
+
   if (intent.transfers && intent.transfers.length > 0) {
     for (const item of intent.transfers) {
       if (BigInt(item.amount) <= 0n) {
@@ -244,7 +262,7 @@ export async function checkRiskEngine(intent: UserIntent): Promise<GateResult> {
     gate: "risk_engine",
     passed: true,
     details: {
-      slippageToleranceBps: 100,
+      slippageToleranceBps: intent.slippageBps ?? DEFAULT_SLIPPAGE_BPS,
       quoteFreshnessSeconds: 120,
       priceImpactPassed: true,
     },

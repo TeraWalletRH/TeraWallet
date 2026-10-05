@@ -26,9 +26,8 @@ export class UnsupportedActionError extends Error {
  *             e.g. to sell 1 AAPL token → amount = "1000000000000000000"
  *   TRANSFER: `intent.amount` MUST be in the target token's raw units.
  *
- * minAmountOut for swaps uses a 0.5% slippage buffer applied to the INPUT amount.
- * This is a conservative floor — the actual output depends on pool price.
- * A future quoter integration will derive this from a real on-chain quote.
+ * minAmountOut for swaps is the live quote less `intent.slippageBps`
+ * (default 1%, bounded 0.1%–5%; the risk engine refuses anything outside that).
  */
 export const MULTICALL3_ADDRESS: `0x${string}` =
   (process.env.MULTICALL3_ADDRESS as `0x${string}`) ||
@@ -108,7 +107,13 @@ export async function buildPreparedTransaction(
     const { planSwap } = await import("../chain/swapPlanner");
     let plan;
     try {
-      plan = await planSwap(input.symbol, output.symbol, formatUnits(BigInt(intent.amount), input.decimals), accountAddress);
+      plan = await planSwap(
+        input.symbol,
+        output.symbol,
+        formatUnits(BigInt(intent.amount), input.decimals),
+        accountAddress,
+        intent.slippageBps,
+      );
     } catch (error) {
       if (error instanceof SwapQuoteRpcError)
         throw new UnsupportedActionError("SWAP_QUOTE_RPC_UNAVAILABLE", error.message);

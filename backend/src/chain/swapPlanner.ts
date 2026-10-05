@@ -11,6 +11,7 @@ import { findAsset } from "../data/assets";
 import { env } from "../env";
 import { encodeWethPath, quoteSwap, type SwapQuote, type SwapRouting } from "./swapQuote";
 import { PERMIT2_ADDRESS, UNIVERSAL_ROUTER } from "../data/assets";
+import { DEFAULT_SLIPPAGE_BPS, MAX_SLIPPAGE_BPS, MIN_SLIPPAGE_BPS, isValidSlippageBps } from "./slippage";
 
 const robinhoodChain = { id: env.rhcChainId };
 const getChainClient = () => createPublicClient({ transport: http(env.rhcRpcUrl) });
@@ -51,9 +52,6 @@ export interface SendPlan {
   swap: UnsignedTx;
 }
 
-// 1% default slippage tolerance between the quote shown and the minimum the
-// swap will accept on-chain. TODO: make this user-configurable later.
-const SLIPPAGE_BPS = 100n;
 const MULTICALL_DEADLINE_SECONDS = 1200; // 20 minutes, matches Uniswap's own frontend
 
 // Sentinel recipient address from Uniswap/swap-router-contracts'
@@ -352,7 +350,10 @@ export async function planSwap(
   toSymbol: string,
   amountIn: number | string,
   recipient: `0x${string}`,
+  slippageBps: number = DEFAULT_SLIPPAGE_BPS,
 ): Promise<SwapPlan | null> {
+  if (!isValidSlippageBps(slippageBps))
+    throw new RangeError(`Slippage must be a whole number of basis points from ${MIN_SLIPPAGE_BPS} to ${MAX_SLIPPAGE_BPS}.`);
   const [tokenIn, tokenOut] = await Promise.all([resolveToken(fromSymbol), resolveToken(toSymbol)]);
   if (!tokenIn || !tokenOut || tokenIn.address === tokenOut.address) return null;
 
@@ -369,7 +370,7 @@ export async function planSwap(
       });
 
   const amountInWei = parseUnits(amountIn.toString(), decimalsIn);
-  const amountOutMinimum = (quote.amountOutWei * (10000n - SLIPPAGE_BPS)) / 10000n;
+  const amountOutMinimum = (quote.amountOutWei * (10000n - BigInt(slippageBps))) / 10000n;
 
   if (quote.routing.type === "v4") {
     // Native ETH goes in transaction value and needs no Permit2 approval.
