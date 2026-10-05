@@ -102,6 +102,19 @@ export function createApi(baseUrl, fetcher = fetch) {
 
 // Only transactions whose exact effect can be checked against the owner's review
 // are executable. The current swap API does not provide a quote.
+// Swap slippage the owner may choose, in basis points. Mirrors
+// backend/src/chain/slippage.ts; an intent without one gets the 1% default.
+export const DEFAULT_SLIPPAGE_BPS = 100;
+export const SLIPPAGE_CHOICES = [10, 50, 100, 200, 300, 500];
+export const isSlippageBps = (value) =>
+  Number.isInteger(value) && value >= SLIPPAGE_CHOICES[0] && value <= SLIPPAGE_CHOICES.at(-1);
+export const slippageLabel = (bps) => `${bps / 100}%`;
+
+/** The least the swap may return: the quote less the owner's slippage. */
+export function swapMinimum(quote, slippageBps = DEFAULT_SLIPPAGE_BPS) {
+  return (BigInt(quote.amountOutWei) * BigInt(10000 - slippageBps)) / 10000n;
+}
+
 export function executionIssue(proposal, owner, chainId, now = Date.now()) {
   const tx = proposal?.preparedTransaction;
   const intent = proposal?.intent || tx?.intent;
@@ -136,6 +149,23 @@ export function executionIssue(proposal, owner, chainId, now = Date.now()) {
     if (!Array.isArray(tx.approvals)) return "Swap approvals are incomplete. Prepare it again.";
     if (Number.isFinite(Date.parse(quote.quotedAt)) && now - Date.parse(quote.quotedAt) > 120000)
       return "This swap quote is stale. Prepare it again.";
+    const slippageBps = intent.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
+    if (!isSlippageBps(slippageBps)) return "The swap's slippage limit is outside 0.1%–5%.";
+    // Every route encodes the minimum as a 32-byte word, so the one the owner
+    // chose must appear in the calldata. A service that loosened it would not.
+    let minimum;
+    try {
+      minimum = swapMinimum(quote, slippageBps);
+    } catch {
+      return "This swap has no verified live quote. Prepare it again.";
+    }
+    if (
+      minimum <= 0n ||
+      !String(tx.data || "")
+        .toLowerCase()
+        .includes(minimum.toString(16).padStart(64, "0"))
+    )
+      return "The prepared swap does not enforce the minimum output you chose. Prepare it again.";
     return null;
   }
   if (intent.actionType === "CLAIM_YIELD")

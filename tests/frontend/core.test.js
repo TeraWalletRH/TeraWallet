@@ -10,6 +10,11 @@ import {
   sendPrepared,
   checkReceipt,
   ZERO_ADDRESS,
+  DEFAULT_SLIPPAGE_BPS,
+  SLIPPAGE_CHOICES,
+  isSlippageBps,
+  slippageLabel,
+  swapMinimum,
 } from "../../public/tera/wallet/core.js";
 import { renderAssistantMarkdown } from "../../public/tera/wallet/markdown.js";
 
@@ -323,4 +328,51 @@ test("a hash alone is pending; only a matching successful mined receipt confirms
     checkReceipt(wallet({ eth_chainId: "0x1" }), record, chainId),
     /Switch back/,
   );
+});
+
+function swapProposal(slippageBps) {
+  const p = proposal();
+  p.intent.actionType = "BUY";
+  delete p.intent.recipient;
+  if (slippageBps !== undefined) p.intent.slippageBps = slippageBps;
+  const quote = {
+    amountOutWei: "2500000000",
+    decimalsOut: 6,
+    quotedAt: new Date().toISOString(),
+    route: "direct",
+  };
+  const minimum = swapMinimum(quote, slippageBps);
+  p.preparedTransaction = {
+    ...p.preparedTransaction,
+    data: `0x04e45aaf${"0".repeat(64 * 5)}${minimum.toString(16).padStart(64, "0")}${"0".repeat(64)}`,
+    approvals: [],
+    quote,
+  };
+  return p;
+}
+
+test("a swap must encode the minimum output the owner's slippage limit allows", () => {
+  assert.equal(executionIssue(swapProposal(), owner, chainId), null);
+  assert.equal(executionIssue(swapProposal(300), owner, chainId), null);
+  // The service built it at 1% while the owner asked for 0.5%.
+  const loosened = swapProposal(100);
+  loosened.intent.slippageBps = 50;
+  assert.match(executionIssue(loosened, owner, chainId), /minimum output/);
+});
+
+test("a swap slippage limit outside 0.1%–5% cannot execute", () => {
+  for (const bps of [0, 9, 501, 2.5]) {
+    const p = swapProposal();
+    p.intent.slippageBps = bps;
+    assert.match(executionIssue(p, owner, chainId), /slippage/);
+  }
+});
+
+test("the swap minimum is the quote less the slippage limit", () => {
+  const quote = { amountOutWei: "2500000000" };
+  assert.equal(swapMinimum(quote), 2475000000n);
+  assert.equal(swapMinimum(quote, 50), 2487500000n);
+  assert.equal(swapMinimum(quote, DEFAULT_SLIPPAGE_BPS), 2475000000n);
+  assert.ok(SLIPPAGE_CHOICES.every(isSlippageBps));
+  assert.equal(slippageLabel(50), "0.5%");
 });

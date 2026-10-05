@@ -15,6 +15,8 @@ export interface UserIntent {
   maxSpendUsdCents?: number;
   recipient?: `0x${string}`;
   transfers?: TransferItem[];
+  /** Swap slippage tolerance in basis points (BUY/SELL only). Defaults to 100. */
+  slippageBps?: number;
   policyVersion?: number;
   policySigner?: `0x${string}`;
   policySignature?: `0x${string}`;

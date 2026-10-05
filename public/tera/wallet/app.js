@@ -14,6 +14,11 @@ import {
   ZERO_ADDRESS,
   evaluateLocalPolicy,
   assertWallet,
+  DEFAULT_SLIPPAGE_BPS,
+  SLIPPAGE_CHOICES,
+  isSlippageBps,
+  slippageLabel,
+  swapMinimum,
 } from "./core.js";
 import { ThemeManager } from "./theme.js";
 import { copyToClipboard, shareText } from "./share.js";
@@ -575,6 +580,25 @@ function trustedOnlySettingsKey() {
 }
 function fiatSettingsKey() {
   return `${storageKey()}:fiat`;
+}
+function slippageSettingsKey() {
+  return `${storageKey()}:slippage`;
+}
+// The last slippage limit chosen on this browser, so the next swap starts there.
+function savedSlippageBps() {
+  try {
+    const stored = Number(localStorage.getItem(slippageSettingsKey()));
+    return isSlippageBps(stored) ? stored : DEFAULT_SLIPPAGE_BPS;
+  } catch {
+    return DEFAULT_SLIPPAGE_BPS;
+  }
+}
+function saveSlippageBps(bps) {
+  try {
+    localStorage.setItem(slippageSettingsKey(), String(bps));
+  } catch {
+    /* Remembering the choice is a convenience; the swap does not depend on it. */
+  }
 }
 const FIAT_RATES = {
   USD: { symbol: "$", rate: 1.0 },
@@ -1583,6 +1607,19 @@ function balanceDeltaBlock(p) {
     </div>
   </section>`;
 }
+// The owner's slippage limit and the output it guarantees, beside the quote.
+function swapLimitRows(p, intent) {
+  const quote = p.quote || p.preparedTransaction?.quote;
+  const bps = intent?.slippageBps ?? DEFAULT_SLIPPAGE_BPS;
+  let minimum = "";
+  try {
+    if (quote?.amountOutWei && Number.isInteger(quote.decimalsOut) && isSlippageBps(bps))
+      minimum = formatUnits(swapMinimum(quote, bps), quote.decimalsOut);
+  } catch {
+    /* Without a readable quote there is no minimum to state. */
+  }
+  return `${pair("Slippage limit", slippageLabel(bps))}${minimum ? pair("Minimum output", minimum) : ""}`;
+}
 function proposalCard(p, index = state.drafts.indexOf(p)) {
   const intent = p.intent || p.preparedTransaction?.intent;
   const asset = assetFor(intent?.assetAddress);
@@ -1609,7 +1646,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
     ${gateSummaryBlock(p)}
     ${balanceDeltaBlock(p)}
     ${gasSelector}
-    <ul class="status-list">`${GATES.map((name, i) => {
+    <ul class="status-list">${GATES.map((name, i) => {
       const g = p.gates?.find((g) => g.gate === name);
       const detail = explainGate(name, g);
       const status =
@@ -1625,7 +1662,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
     ${previewBlock(p)}
     ${historyBlock(p)}
     ${boundaryBlock(p, index)}
-    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", tagFor(intent.recipient) ? `${displayTag(tagFor(intent.recipient))} · ${intent.recipient}` : intent.recipient) : ""}${intent?.actionType === "TRANSFER" && contactBook.nameFor(state.contacts, intent.recipient) ? pair("Saved as", contactBook.nameFor(state.contacts, intent.recipient)) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
+    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") + swapLimitRows(p, intent) : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", tagFor(intent.recipient) ? `${displayTag(tagFor(intent.recipient))} · ${intent.recipient}` : intent.recipient) : ""}${intent?.actionType === "TRANSFER" && contactBook.nameFor(state.contacts, intent.recipient) ? pair("Saved as", contactBook.nameFor(state.contacts, intent.recipient)) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
     ${submitted ? `<p>Transaction: ${explorer(p.txHash)}</p>` : issue ? `<p class="live-blocked">${esc(issue)}</p>` : '<p class="micro">Review the token amount and recipient. Your wallet will ask you to sign and pay the network fee.</p>'}
     <div class="actions">${button("Approve in wallet ↗", "approve", `data-index="${index}" ${issue || submitted || state.busy || state.chain !== chainId ? "disabled" : ""}`)}${button("Prepare again", "reprepare", `data-index="${index}" ${state.busy || submitted || !intent ? "disabled" : ""}`)}${button("Share redacted", "share", `data-index="${index}"`)}${button("Dismiss", "draft-dismiss", `data-index="${index}" ${state.busy ? "disabled" : ""}`)}</div></article>`;
 }
@@ -2970,7 +3007,7 @@ function createProposal(symbol, draft = null) {
   const assets = state.assets.filter((a) => isAddress(a.address) && a.status === "ACTIVE");
   dialog(
     "Prepare an exact action.",
-    `<form id="proposal-form"><div class="field"><label for="proposal-asset">Asset</label><select id="proposal-asset" name="asset">${assets.map((a) => `<option value="${esc(a.symbol)}" ${a.symbol === symbol ? "selected" : ""}>${esc(a.symbol)} · ${esc(a.name)}</option>`).join("")}</select></div><div class="field"><label for="proposal-action">Action</label><select id="proposal-action" name="action"><option>TRANSFER</option><option>BUY</option><option>SELL</option></select></div><div class="field"><label id="proposal-amount-label" for="proposal-amount">Token amount</label><input id="proposal-amount" name="amount" inputmode="decimal" required placeholder="0.00" pattern="[0-9]+(\\.[0-9]+)?"></div>${tagsAvailable() ? '<div class="field"><label for="proposal-recipient-kind">Send to</label><select id="proposal-recipient-kind" name="recipientKind"><option value="address">Another wallet address</option><option value="tag">A Tera tag</option></select></div>' : ""}<div class="field"><label for="proposal-recipient">Recipient</label><input id="proposal-recipient" name="recipient" placeholder="Required for transfers" autocomplete="off"></div><div id="proposal-contacts" class="actions"></div><p id="proposal-contact-status" class="micro" role="status"></p><p id="proposal-tag-status" class="micro" role="status"></p><p id="proposal-help" class="micro"></p><p class="live-form-error" role="alert"></p><button class="btn primary">Run the checks ↗</button></form>`,
+    `<form id="proposal-form"><div class="field"><label for="proposal-asset">Asset</label><select id="proposal-asset" name="asset">${assets.map((a) => `<option value="${esc(a.symbol)}" ${a.symbol === symbol ? "selected" : ""}>${esc(a.symbol)} · ${esc(a.name)}</option>`).join("")}</select></div><div class="field"><label for="proposal-action">Action</label><select id="proposal-action" name="action"><option>TRANSFER</option><option>BUY</option><option>SELL</option></select></div><div class="field"><label id="proposal-amount-label" for="proposal-amount">Token amount</label><input id="proposal-amount" name="amount" inputmode="decimal" required placeholder="0.00" pattern="[0-9]+(\\.[0-9]+)?"></div><div class="field" id="proposal-slippage-field" style="display:none"><label for="proposal-slippage">Slippage limit</label><select id="proposal-slippage" name="slippage">${SLIPPAGE_CHOICES.map((bps) => `<option value="${bps}" ${bps === savedSlippageBps() ? "selected" : ""}>${slippageLabel(bps)}${bps === DEFAULT_SLIPPAGE_BPS ? " (default)" : ""}</option>`).join("")}</select><p class="micro">The swap is refused on-chain if it would return more than this much below the quote. Lower protects the price; higher fails less often when the market moves.</p></div>${tagsAvailable() ? '<div class="field"><label for="proposal-recipient-kind">Send to</label><select id="proposal-recipient-kind" name="recipientKind"><option value="address">Another wallet address</option><option value="tag">A Tera tag</option></select></div>' : ""}<div class="field"><label for="proposal-recipient">Recipient</label><input id="proposal-recipient" name="recipient" placeholder="Required for transfers" autocomplete="off"></div><div id="proposal-contacts" class="actions"></div><p id="proposal-contact-status" class="micro" role="status"></p><p id="proposal-tag-status" class="micro" role="status"></p><p id="proposal-help" class="micro"></p><p class="live-form-error" role="alert"></p><button class="btn primary">Run the checks ↗</button></form>`,
   );
   const form = document.getElementById("proposal-form");
   // A draft read out of a message fills the same fields the owner would type
@@ -2996,6 +3033,9 @@ function createProposal(symbol, draft = null) {
     const help = document.getElementById("proposal-help");
     const recipient = document.getElementById("proposal-recipient");
     if (!amountLabel || !help || !recipient || !asset) return;
+    const slippageField = document.getElementById("proposal-slippage-field");
+    if (slippageField)
+      slippageField.style.display = action === "BUY" || action === "SELL" ? "" : "none";
     if (action === "BUY") {
       amountLabel.textContent = "USD amount to spend (USDG)";
       help.textContent =
@@ -3149,6 +3189,11 @@ function createProposal(symbol, draft = null) {
       const maxSpendUsdCents = actionType === "BUY" ? Number(parseUnits(rawAmount, 2)) : undefined;
       if (maxSpendUsdCents !== undefined && !Number.isSafeInteger(maxSpendUsdCents))
         throw new Error("USD amount is outside the supported range.");
+      const swap = actionType === "BUY" || actionType === "SELL";
+      const slippageBps = swap ? Number(data.get("slippage")) : undefined;
+      if (swap && !isSlippageBps(slippageBps))
+        throw new Error("Choose a slippage limit from the list.");
+      if (swap) saveSlippageBps(slippageBps);
       const intent = {
         ownerAddress: state.owner,
         accountAddress: state.owner,
@@ -3157,6 +3202,7 @@ function createProposal(symbol, draft = null) {
         amount,
         ...(actionType === "TRANSFER" ? { recipient } : {}),
         ...(maxSpendUsdCents === undefined ? {} : { maxSpendUsdCents }),
+        ...(swap ? { slippageBps } : {}),
       };
       await prepare(intent);
       closeDialog();
