@@ -19,7 +19,7 @@ export type IntelligenceInput = {
   checkRecipientContract?: boolean;
   steps: number;
   simulation?: "checking" | "passed" | "needs-attention";
-  quote?: { route: string; priceImpactPct: number; amountOut: string; minimumOut: string; comparedRoutes?: Array<{ route: string; amountOut: string }> };
+  quote?: { route: string; priceImpactPct: number; amountOut: string; minimumOut: string; slippage?: string; comparedRoutes?: Array<{ route: string; amountOut: string }> };
   estimatedFeeEth?: string;
   gasEstimateUnavailable?: boolean;
 };
@@ -57,8 +57,8 @@ export function reviewIntelligence(input: IntelligenceInput): ReviewIntelligence
   }
   const route = input.quote
     ? zh
-      ? `路线：${input.quote.route}；预计 ${input.quote.amountOut}，最低 ${input.quote.minimumOut}（滑点上限 1%）。${input.quote.comparedRoutes && input.quote.comparedRoutes.length > 1 ? `已比较：${input.quote.comparedRoutes.map((candidate) => `${candidate.route} ${candidate.amountOut}`).join(" / ")}。` : ""}网络费另计。`
-      : `${input.quote.route}; expected ${input.quote.amountOut}, minimum ${input.quote.minimumOut} (1% slippage limit).${input.quote.comparedRoutes && input.quote.comparedRoutes.length > 1 ? ` Compared: ${input.quote.comparedRoutes.map((candidate) => `${candidate.route} ${candidate.amountOut}`).join(" vs ")}.` : ""} Gas is separate.`
+      ? `路线：${input.quote.route}；预计 ${input.quote.amountOut}，最低 ${input.quote.minimumOut}（滑点上限 ${input.quote.slippage || "1%"}）。${input.quote.comparedRoutes && input.quote.comparedRoutes.length > 1 ? `已比较：${input.quote.comparedRoutes.map((candidate) => `${candidate.route} ${candidate.amountOut}`).join(" / ")}。` : ""}网络费另计。`
+      : `${input.quote.route}; expected ${input.quote.amountOut}, minimum ${input.quote.minimumOut} (${input.quote.slippage || "1%"} slippage limit).${input.quote.comparedRoutes && input.quote.comparedRoutes.length > 1 ? ` Compared: ${input.quote.comparedRoutes.map((candidate) => `${candidate.route} ${candidate.amountOut}`).join(" vs ")}.` : ""} Gas is separate.`
     : undefined;
   return { preview, risks, safer, route, networkFee: input.estimatedFeeEth
     ? zh ? `按当前 gas 价格估算网络费约 ${input.estimatedFeeEth} ETH；签名前会重新检查。` : `Estimated network fee ~${input.estimatedFeeEth} ETH at the current gas price; rechecked before signing.`

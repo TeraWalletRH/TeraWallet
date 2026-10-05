@@ -56,6 +56,7 @@ import {
   spend as spendCore,
   UNVERIFIABLE,
   value as valueCore,
+  slippage as slippageCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -649,6 +650,7 @@ function Wallet() {
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [selectedGasSpeed, setSelectedGasSpeed] = useState<"eco" | "standard" | "fast">("standard"),
+    [slippageBps, setSlippageBps] = useState<number>(slippageCore.DEFAULT_SLIPPAGE_BPS),
     [pinnedAssets, setPinnedAssetsState] = useState<string[]>(() => getPinnedAssets()),
     [csvModalOpen, setCsvModalOpen] = useState(false),
     [stakingPosition, setStakingPosition] = useState<any>(null),
@@ -2447,15 +2449,15 @@ function Wallet() {
           : `${expDate.toLocaleTimeString()} (${Math.max(1, Math.round((expDate.getTime() - Date.now()) / 3600000))}h)`,
       ]);
     }
+    const swapSlippage = i.slippageBps ?? slippageCore.DEFAULT_SLIPPAGE_BPS;
+    const swapMinimumOut = q ? formatUnits(slippageCore.swapMinimum(q, swapSlippage), q.decimalsOut) : "";
     if (q) {
       rows.push([
         t("Expected output", "预计收到"),
         `${formatUnits(BigInt(q.amountOutWei), q.decimalsOut)} ${i.actionType === "BUY" ? asset.symbol : teraTrade ? "ETH" : "USDG"}`,
       ]);
-      rows.push([
-        t("Minimum output", "最低收到"),
-        formatUnits((BigInt(q.amountOutWei) * 9900n) / 10000n, q.decimalsOut),
-      ]);
+      rows.push([t("Slippage limit", "滑点上限"), slippageCore.slippageLabel(swapSlippage)]);
+      rows.push([t("Minimum output", "最低收到"), swapMinimumOut]);
     }
     // What the five checks actually reported, rather than a sentence written
     // once and shown regardless. A proposal only reaches this sheet when every
@@ -2485,7 +2487,8 @@ function Wallet() {
           comparedRoutes: q.comparedRoutes,
           priceImpactPct: q.priceImpactPct,
           amountOut: `${q.amountOut} ${i.actionType === "BUY" ? asset.symbol : teraTrade ? "ETH" : "USDG"}`,
-          minimumOut: `${formatUnits((BigInt(q.amountOutWei) * 9900n) / 10000n, q.decimalsOut)} ${i.actionType === "BUY" ? asset.symbol : teraTrade ? "ETH" : "USDG"}`,
+          minimumOut: `${swapMinimumOut} ${i.actionType === "BUY" ? asset.symbol : teraTrade ? "ETH" : "USDG"}`,
+          slippage: slippageCore.slippageLabel(swapSlippage),
         } : undefined,
       },
       verify: () => {
@@ -2647,6 +2650,7 @@ function Wallet() {
         amount,
         trade === "BUY" ? (selectedAsset.symbol === "TERA" ? 18 : 6) : selectedAsset.decimals,
       ),
+      slippageBps,
     };
     const checked = await policyFor(input);
     guard();
@@ -6661,6 +6665,48 @@ function Wallet() {
               </Text>
             )}
           </View>
+          {/* Web only for now: the Android release keeps the 1% default until it ships this. */}
+          {Platform.OS === "web" && (
+            <View style={[s.panel, { gap: 10 }]}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                <Text style={s.eyebrow}>{t("SLIPPAGE LIMIT", "滑点上限")}</Text>
+                <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                  {slippageCore.slippageLabel(slippageBps)}
+                </Text>
+              </View>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                {slippageCore.SLIPPAGE_CHOICES.map((bps: number) => {
+                  const active = slippageBps === bps;
+                  return (
+                    <Pressable
+                      key={bps}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      onPress={() => setSlippageBps(bps)}
+                      style={{
+                        paddingVertical: 8,
+                        paddingHorizontal: 14,
+                        borderRadius: 999,
+                        borderWidth: 1,
+                        borderColor: active ? colors.green : colors.line,
+                        backgroundColor: active ? colors.tint : colors.wash,
+                      }}
+                    >
+                      <Text style={{ fontSize: 13, fontWeight: "700", color: active ? colors.green : colors.ink }}>
+                        {slippageCore.slippageLabel(bps)}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <Text style={s.small}>
+                {t(
+                  "The swap is refused on-chain if it would return more than this below the quote. Lower protects the price; higher fails less often when the market moves.",
+                  "若成交低于报价超过此比例，兑换将在链上被拒绝。越低越保护价格；越高在行情波动时越不易失败。",
+                )}
+              </Text>
+            </View>
+          )}
           {action("Review live route", "审核实时路线", prepareTrade)}
         </>
       );

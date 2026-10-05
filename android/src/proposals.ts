@@ -10,6 +10,7 @@ import {
 } from "viem";
 import { chain, USDG, type Tx } from "./config";
 import { check, checkGates, positive, same, txCheck, verifyTransfer } from "./validation";
+import { slippage } from "./core";
 const ROUTER = "0xcaf681a66d020601342297493863e78c959e5cb2";
 const UNIVERSAL = "0x8876789976decbfcbbbe364623c63652db8c0904";
 const PERMIT = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
@@ -49,8 +50,12 @@ export function verifyProposal(proposal: any, owner: string, now = Date.now()): 
       Date.parse(tx.expiresAt) > now,
     "Swap quote expired. Prepare again. / 兑换报价已过期，请重新准备。",
   );
+  // The minimum is rebuilt from the slippage this device put on the intent, so a
+  // service that loosened it produces calldata that fails the comparison below.
+  const slippageBps = intent.slippageBps ?? slippage.DEFAULT_SLIPPAGE_BPS;
+  check(slippage.isSlippageBps(slippageBps), "Slippage limit is outside 0.1%–5%. / 滑点上限超出 0.1%–5%。");
   const amount = positive(intent.amount),
-    minimum = (positive(q.amountOutWei) * 9900n) / 10000n;
+    minimum = slippage.swapMinimum({ amountOutWei: positive(q.amountOutWei) }, slippageBps);
   check(minimum > 0n);
   const tokenIn: Address =
     intent.actionType === "BUY" ? (teraTrade ? zeroAddress : USDG) : intent.assetAddress;

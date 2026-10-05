@@ -1,8 +1,8 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-5a2bdadb4edb",
-  "builtAt": "2026-10-05T15:00:57.014Z",
+  "release": "r-f0ebc2b0c8c8",
+  "builtAt": "2026-10-05T15:36:38.356Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
@@ -103,6 +103,11 @@
       "bytes": 6419
     },
     {
+      "path": "core/slippage.js",
+      "hash": "sha256-5b232pMbGKHOyPAqECR9Nka/FNdEpUvBnbQrYPi2TGM=",
+      "bytes": 913
+    },
+    {
       "path": "core/spend.js",
       "hash": "sha256-bp0/uy8CvmEu5pppg0uXg6AL1zY/GHOZpNL/YWbnC/o=",
       "bytes": 6641
@@ -169,8 +174,8 @@
     },
     {
       "path": "wallet/core.js",
-      "hash": "sha256-/2OeU2sZsanarjdeWOYjDZ8Zpzu+Kn0C+s63IRNQuUo=",
-      "bytes": 14276
+      "hash": "sha256-CU88tKdJN7ZkmFmuIbsv1Yz5QDg3saW9riYiY+UEzEs=",
+      "bytes": 13833
     },
     {
       "path": "wallet/demo.js",
@@ -278,5 +283,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-Wiva207bp/pt+DuQgmKewxka8c/S8+qyh1lt/rweccc="
+  "filesHash": "sha256-8OvCsMjIhwZmSZhnDK7wBQVxt+TjQ11BKI6XjwNPDQg="
 }

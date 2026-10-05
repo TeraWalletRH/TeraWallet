@@ -1,3 +1,12 @@
+import { DEFAULT_SLIPPAGE_BPS, isSlippageBps, swapMinimum } from "../core/slippage.js";
+export {
+  DEFAULT_SLIPPAGE_BPS,
+  SLIPPAGE_CHOICES,
+  isSlippageBps,
+  slippageLabel,
+  swapMinimum,
+} from "../core/slippage.js";
+
 export const GATES = [
   "asset_registry",
   "eligibility_preflight",
@@ -102,19 +111,6 @@ export function createApi(baseUrl, fetcher = fetch) {
 
 // Only transactions whose exact effect can be checked against the owner's review
 // are executable. The current swap API does not provide a quote.
-// Swap slippage the owner may choose, in basis points. Mirrors
-// backend/src/chain/slippage.ts; an intent without one gets the 1% default.
-export const DEFAULT_SLIPPAGE_BPS = 100;
-export const SLIPPAGE_CHOICES = [10, 50, 100, 200, 300, 500];
-export const isSlippageBps = (value) =>
-  Number.isInteger(value) && value >= SLIPPAGE_CHOICES[0] && value <= SLIPPAGE_CHOICES.at(-1);
-export const slippageLabel = (bps) => `${bps / 100}%`;
-
-/** The least the swap may return: the quote less the owner's slippage. */
-export function swapMinimum(quote, slippageBps = DEFAULT_SLIPPAGE_BPS) {
-  return (BigInt(quote.amountOutWei) * BigInt(10000 - slippageBps)) / 10000n;
-}
-
 export function executionIssue(proposal, owner, chainId, now = Date.now()) {
   const tx = proposal?.preparedTransaction;
   const intent = proposal?.intent || tx?.intent;
