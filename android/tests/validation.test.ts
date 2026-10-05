@@ -120,6 +120,57 @@ describe("signing boundary", () => {
     });
     expect(() => verifyProposal(p, owner)).toThrow();
   });
+  it("rebuilds the swap minimum from the owner's slippage limit", () => {
+    const tokenOut = "0x3333333333333333333333333333333333333333";
+    const params = {
+      tokenIn: USDG,
+      tokenOut,
+      fee: 500,
+      recipient: owner,
+      amountIn: 100n,
+      amountOutMinimum: 995n,
+      sqrtPriceLimitX96: 0n,
+    } as const;
+    const p: any = {
+      intent: {
+        ownerAddress: owner,
+        assetAddress: tokenOut,
+        actionType: "BUY",
+        amount: "100",
+        slippageBps: 50,
+      },
+      gates: [
+        "asset_registry",
+        "eligibility_preflight",
+        "policy_vault",
+        "risk_engine",
+        "approval_controller",
+      ].map((gate) => ({ gate, passed: true })),
+      preparedTransaction: {
+        to: "0xcaf681a66d020601342297493863e78c959e5cb2",
+        value: "0",
+        chainId: 4663,
+        data: encodeFunctionData({ abi: swapAbi, functionName: "exactInputSingle", args: [params] }),
+        approvals: [],
+        expiresAt: new Date(Date.now() + 120000).toISOString(),
+        quote: {
+          quotedAt: new Date().toISOString(),
+          amountOutWei: "1000",
+          routing: { type: "direct", fee: 500 },
+        },
+      },
+    };
+    expect(verifyProposal(p, owner)).toHaveLength(1);
+    // Calldata built at the 1% default does not enforce the 0.5% the owner chose.
+    p.preparedTransaction.data = encodeFunctionData({
+      abi: swapAbi,
+      functionName: "exactInputSingle",
+      args: [{ ...params, amountOutMinimum: 990n }],
+    });
+    expect(() => verifyProposal(p, owner)).toThrow();
+    p.intent.slippageBps = 5000;
+    expect(() => verifyProposal(p, owner)).toThrow(/slippage/i);
+  });
 });
 
 describe("service check verdicts", () => {

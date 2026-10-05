@@ -15,6 +15,8 @@ export * as parse from "../../public/tera/core/parse.js";
 export * as tags from "../../public/tera/core/tags.js";
 // Names the owner gives addresses they send to. Kept on the device only.
 export * as contacts from "../../public/tera/core/contacts.js";
+// The swap slippage limit the owner chose, and the minimum output it guarantees.
+export * as slippage from "../../public/tera/core/slippage.js";
 
 // What holdings are worth. Shared because the honest part of a valuation is arithmetic,
 // not presentation: an unpriced holding must be left out of the total and named, on both
