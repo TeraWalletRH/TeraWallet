@@ -81,6 +81,11 @@ export type LocalData = {
    * file and never sent anywhere; `core/watched.js` cleans them on every read.
    */
   watched?: { address: string; name: string; tag: string; addedAt: number }[];
+  /**
+   * Limit orders. Sealed with the rest of this file and never sent anywhere;
+   * `core/limit-orders.js` cleans them on every read.
+   */
+  limitOrders?: any[];
   /** Whether the spotlight walkthrough has run on this device already. */
   tourSeen: boolean;
   /**
