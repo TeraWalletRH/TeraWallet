@@ -218,3 +218,115 @@ test("stored orders are cleaned, sorted, and capped by live orders", () => {
     false,
   );
 });
+
+test("a stop-loss sells at or below its price; a take-profit at or above", async () => {
+  const { protect, describeOrder: describe } =
+    await import("../../public/tera/core/limit-orders.js");
+  const made = protect([], {
+    asset: "TERA",
+    amount: "1000",
+    stop: "0.36",
+    take: "0.60",
+    expiry: "never",
+    price: 0.45,
+    now: NOW,
+  });
+  assert.ok(made.ok, made.reason);
+  const [stop, take] = made.created;
+  assert.equal(stop.kind, "stop");
+  assert.equal(stop.side, "sell");
+  assert.equal(take.kind, "take");
+  assert.equal(stop.linked, take.id);
+  assert.equal(take.linked, stop.id);
+  assert.equal(meetsLimit(stop, 0.36), true);
+  assert.equal(meetsLimit(stop, 0.37), false);
+  assert.equal(meetsLimit(take, 0.6), true);
+  assert.equal(meetsLimit(take, 0.59), false);
+  assert.equal(describe(stop), "Stop-loss: sell 1000 TERA if it falls to $0.36");
+  assert.equal(describe(take), "Take-profit: sell 1000 TERA if it rises to $0.60");
+  // A stop or take-profit is always a sell, whatever the form said.
+  assert.equal(
+    parseOrder({ kind: "stop", side: "buy", asset: "TERA", amount: "1", limit: "1", expiry: "day" })
+      .order.side,
+    "sell",
+  );
+});
+
+test("whichever linked order becomes ready first cancels the other", async () => {
+  const { protect } = await import("../../public/tera/core/limit-orders.js");
+  let list = protect([], {
+    asset: "TERA",
+    amount: "1000",
+    stop: "0.36",
+    take: "0.60",
+    expiry: "never",
+    price: 0.45,
+    now: NOW,
+  }).orders;
+  let result = evaluate(list, { TERA: 0.35 }, NOW + 1);
+  assert.deepEqual(
+    result.ready.map((o) => o.kind),
+    ["stop"],
+  );
+  assert.match(readyText(result.ready[0]), /TERA fell to your \$0.36 stop-loss \(now \$0.35\)/);
+  assert.deepEqual(
+    result.cancelledLinked.map((o) => o.kind),
+    ["take"],
+  );
+  list = result.orders;
+  // The price recovers past the target: the cancelled take-profit stays cancelled.
+  result = evaluate(list, { TERA: 0.7 }, NOW + 2);
+  assert.deepEqual(result.ready, []);
+  assert.deepEqual(
+    result.orders.map((o) => [o.kind, o.status]),
+    [
+      ["stop", "ready"],
+      ["take", "cancelled"],
+    ],
+  );
+  // An unlinked stop is left alone by another order becoming ready.
+  const lone = parseOrder(
+    { kind: "stop", asset: "SPCX", amount: "1", limit: "300", expiry: "never" },
+    { now: NOW },
+  ).order;
+  const other = order({ side: "sell", amount: "1", limit: "500" });
+  result = evaluate([lone, other], { SPCX: 510 }, NOW + 3);
+  assert.equal(result.orders[0].status, "open");
+  assert.equal(result.orders[1].status, "ready");
+});
+
+test("protect refuses levels that would fire at once or cross", async () => {
+  const { protect } = await import("../../public/tera/core/limit-orders.js");
+  const base = { asset: "TERA", amount: "10", expiry: "week", price: 0.45, now: NOW };
+  assert.match(protect([], { ...base }).reason, /Set a stop-loss/);
+  assert.match(protect([], { ...base, stop: "0.5" }).reason, /below today's price/);
+  assert.match(protect([], { ...base, take: "0.4" }).reason, /above today's price/);
+  assert.match(
+    protect([], { ...base, stop: "0.6", take: "0.5", price: undefined }).reason,
+    /below the take-profit/,
+  );
+  const single = protect([], { ...base, stop: "0.40" });
+  assert.ok(single.ok);
+  assert.equal(single.created.length, 1);
+  assert.equal(single.created[0].linked, undefined);
+});
+
+test("suggested levels are measured from the average cost, else today's price", async () => {
+  const { suggestLevels } = await import("../../public/tera/core/limit-orders.js");
+  assert.deepEqual(suggestLevels({ average: 0.4, price: 0.5 }), {
+    stop: "0.36",
+    take: "0.48",
+    from: "cost",
+  });
+  assert.deepEqual(suggestLevels({ average: null, price: 400 }), {
+    stop: "360",
+    take: "480",
+    from: "price",
+  });
+  assert.deepEqual(suggestLevels({ price: 0.000012345 }), {
+    stop: "0.00001111",
+    take: "0.00001481",
+    from: "price",
+  });
+  assert.deepEqual(suggestLevels({}), { stop: "", take: "", from: "none" });
+});

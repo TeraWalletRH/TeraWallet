@@ -25,6 +25,24 @@
 //   The minimum output never asks for less than the limit allows, to within the
 //   0.1% the smallest slippage setting can express.
 //
+// Three kinds share these rules:
+//
+//   A limit order buys at or below its price, or sells at or above it.
+//   A take-profit sells at or above its price — a sell limit by its proper name,
+//   enforced on chain the same way.
+//   A stop-loss sells at or below its price, to cap a loss. Its price is not
+//   enforced on chain, and cannot usefully be: a stop fires because the price is
+//   falling, so a swap that insisted on the stop price would revert exactly when
+//   it is needed. Its minimum comes from the live quote and the owner's slippage
+//   limit, and the screen says how far below the stop the price now is.
+//
+// A stop-loss and a take-profit set together on one holding are linked: when
+// either becomes ready, the other is cancelled, so the same tokens are never
+// offered for sale twice.
+//
+// Nothing sells on its own. A stop is only as quick as the owner's tap after
+// they are told, and the screens say so.
+//
 // Orders are kept in the owner's encrypted data on this device and never sent
 // to Tera.
 
@@ -38,6 +56,9 @@ export const EXPIRIES = {
   month: { label: "1 month", days: 30 },
   never: { label: "Until cancelled", days: null },
 };
+
+/** What an order does when its price is reached. */
+export const KINDS = ["limit", "stop", "take"];
 
 /** What a trade in `asset` is paired with: ETH for TERA, USDG for everything else. */
 export const pairFor = (asset) => (asset === "TERA" ? "ETH" : "USDG");
@@ -61,7 +82,20 @@ const isAmount = (value) => typeof value === "string" && AMOUNT.test(value) && /
  */
 export function parseOrder(input, { existing = null, now = Date.now() } = {}) {
   const fail = (reason) => ({ ok: false, order: null, reason });
-  const side = input?.side === "sell" ? "sell" : input?.side === "buy" ? "buy" : "";
+  const kind = KINDS.includes(input?.kind)
+    ? input.kind
+    : KINDS.includes(existing?.kind)
+      ? existing.kind
+      : "limit";
+  // Stops and take-profits only ever sell what is held.
+  const side =
+    kind !== "limit"
+      ? "sell"
+      : input?.side === "sell"
+        ? "sell"
+        : input?.side === "buy"
+          ? "buy"
+          : "";
   if (!side) return fail("Choose buy or sell.");
   const asset = String(input?.asset ?? "").trim();
   if (!SYMBOL.test(asset) || asset === "USDG") return fail("Choose a token other than USDG.");
@@ -79,6 +113,7 @@ export function parseOrder(input, { existing = null, now = Date.now() } = {}) {
     ok: true,
     order: {
       id: existing?.id || newId(now),
+      kind,
       side,
       asset,
       pair: pairFor(asset),
@@ -89,6 +124,10 @@ export function parseOrder(input, { existing = null, now = Date.now() } = {}) {
       expiresAt: days === null ? null : (existing ? now : createdAt) + days * DAY_MS,
       status: "open",
       createdAt,
+      ...(typeof (input?.linked ?? existing?.linked) === "string" &&
+      (input?.linked ?? existing?.linked)
+        ? { linked: input?.linked ?? existing?.linked }
+        : {}),
     },
     reason: "",
   };
@@ -115,6 +154,7 @@ export function cleanOrders(list) {
       status: STATUSES.includes(entry.status) ? entry.status : "open",
     };
     if (Number.isSafeInteger(entry.readyAt)) order.readyAt = entry.readyAt;
+    if (typeof entry.cancelledBy === "string") order.cancelledBy = entry.cancelledBy;
     if (Number.isFinite(entry.readyPrice)) order.readyPrice = entry.readyPrice;
     if (entry.fill && HASH.test(entry.fill.hash))
       order.fill = {
@@ -157,6 +197,7 @@ export function saveOrder(orders, order) {
 export function meetsLimit(order, price) {
   if (!Number.isFinite(price) || price <= 0) return false;
   const limit = Number(order.limit);
+  if (order.kind === "stop") return price <= limit;
   return order.side === "buy" ? price <= limit : price >= limit;
 }
 
@@ -168,6 +209,7 @@ export function meetsLimit(order, price) {
  * whether anything changed (so the caller writes only when it must).
  */
 export function evaluate(orders, prices, now = Date.now()) {
+  /** @type {any[]} */
   const ready = [];
   const expired = [];
   let changed = false;
@@ -192,7 +234,36 @@ export function evaluate(orders, prices, now = Date.now()) {
     }
     return order;
   });
-  return { orders: next, ready, expired, changed };
+  // A linked pair: the first to become ready cancels the other.
+  const readyIds = new Set(ready.map((order) => order.id));
+  const cancelledLinked = [];
+  const settled = next.map((order) => {
+    if (!order.linked || readyIds.has(order.id)) return order;
+    if (order.status !== "open" && order.status !== "ready") return order;
+    if (!readyIds.has(order.linked)) return order;
+    changed = true;
+    const done = { ...order, status: "cancelled", cancelledBy: order.linked };
+    cancelledLinked.push(done);
+    return done;
+  });
+  // Two linked orders ready on the same read: the stop wins, as it protects capital.
+  for (const order of ready) {
+    const sibling = settled.find((entry) => entry.id === order.linked);
+    if (sibling && sibling.status === "ready" && readyIds.has(sibling.id)) {
+      const keep = order.kind === "stop" ? order : sibling;
+      const drop = keep === order ? sibling : order;
+      const index = settled.findIndex((entry) => entry.id === drop.id);
+      settled[index] = { ...drop, status: "cancelled", cancelledBy: keep.id };
+      readyIds.delete(drop.id);
+    }
+  }
+  return {
+    orders: settled,
+    ready: ready.filter((order) => readyIds.has(order.id)),
+    expired,
+    cancelledLinked,
+    changed,
+  };
 }
 
 /** Cancel an open or ready order. Finished orders are left as they are. */
@@ -317,6 +388,10 @@ export function slippageForLimit(quoteOut, minimumOut, userBps, minBps = 10) {
 
 /** "Buy TERA with 50 USDG at $0.40 or lower" */
 export function describeOrder(order) {
+  if (order.kind === "stop")
+    return `Stop-loss: sell ${order.amount} ${order.asset} if it falls to $${order.limit}`;
+  if (order.kind === "take")
+    return `Take-profit: sell ${order.amount} ${order.asset} if it rises to $${order.limit}`;
   return order.side === "buy"
     ? `Buy ${order.asset} with ${order.amount} ${order.pair} at $${order.limit} or lower`
     : `Sell ${order.amount} ${order.asset} at $${order.limit} or higher`;
@@ -324,6 +399,11 @@ export function describeOrder(order) {
 
 /** The notification when an order becomes ready. */
 export function readyText(order) {
+  const now = Number.isFinite(order.readyPrice) ? ` (now $${order.readyPrice})` : "";
+  if (order.kind === "stop")
+    return `${order.asset} fell to your $${order.limit} stop-loss${now}. Your sell is ready to sign.`;
+  if (order.kind === "take")
+    return `${order.asset} reached your $${order.limit} take-profit${now}. Your sell is ready to sign.`;
   const verb = order.side === "buy" ? "buy" : "sell";
   const price = Number.isFinite(order.readyPrice) ? ` (now $${order.readyPrice})` : "";
   return `${order.asset} reached your $${order.limit} target${price}. Your ${verb} is ready to sign.`;
@@ -335,6 +415,85 @@ export function sortedOrders(orders) {
   return [...cleanOrders(orders)].sort(
     (a, b) => rank[a.status] - rank[b.status] || b.createdAt - a.createdAt,
   );
+}
+
+/**
+ * Protect a holding with a stop-loss, a take-profit, or both — linked so that
+ * whichever becomes ready first cancels the other.
+ *
+ * `price` is today's price, used to refuse a stop already above it or a target
+ * already below it (each would be ready the moment it was placed).
+ *
+ * @param {any[] | undefined} orders
+ * @param {{ asset: string, amount: string, stop?: string, take?: string, expiry: string, price?: number, now?: number }} input
+ * @returns {{ ok: boolean, orders: any[], created: any[], reason: string }}
+ */
+export function protect(
+  orders,
+  { asset, amount, stop = "", take = "", expiry, price, now = Date.now() },
+) {
+  const current = cleanOrders(orders);
+  const fail = (reason) => ({ ok: false, orders: current, created: [], reason });
+  const stopPrice = String(stop).trim().replace(/^\$/, "");
+  const takePrice = String(take).trim().replace(/^\$/, "");
+  if (!stopPrice && !takePrice) return fail("Set a stop-loss, a take-profit, or both.");
+  if (stopPrice && takePrice && Number(stopPrice) >= Number(takePrice))
+    return fail("The stop-loss must be below the take-profit.");
+  if (Number.isFinite(price) && price > 0) {
+    if (stopPrice && Number(stopPrice) >= price)
+      return fail("The stop-loss must be below today's price, or it would fire at once.");
+    if (takePrice && Number(takePrice) <= price)
+      return fail("The take-profit must be above today's price, or it would fire at once.");
+  }
+  const created = [];
+  for (const [kind, limit] of [
+    ["stop", stopPrice],
+    ["take", takePrice],
+  ]) {
+    if (!limit) continue;
+    const parsed = parseOrder(
+      { kind, asset, amount, limit, expiry },
+      { now: now + created.length },
+    );
+    if (!parsed.ok) return fail(parsed.reason);
+    created.push(parsed.order);
+  }
+  if (created.length === 2) {
+    created[0].linked = created[1].id;
+    created[1].linked = created[0].id;
+  }
+  let next = current;
+  for (const order of created) {
+    const saved = saveOrder(next, order);
+    if (!saved.ok) return fail(saved.reason);
+    next = saved.orders;
+  }
+  return { ok: true, orders: next, created, reason: "" };
+}
+
+/** A price as a short decimal string with four significant digits. */
+function roundPrice(value) {
+  if (!Number.isFinite(value) || value <= 0) return "";
+  const digits = Math.max(0, 3 - Math.floor(Math.log10(value)));
+  const text = value.toFixed(Math.min(digits, 12));
+  return text.includes(".") ? text.replace(/0+$/, "").replace(/\.$/, "") : text;
+}
+
+/**
+ * Suggested stop and target: a fixed distance from the owner's average cost
+ * when it is known, otherwise from today's price. Returns strings for the form
+ * and which figure they were measured from.
+ *
+ * @param {{ average?: number | null, price?: number | null, down?: number, up?: number }} input
+ */
+export function suggestLevels({ average = null, price = null, down = 10, up = 20 }) {
+  const base = Number.isFinite(average) && average > 0 ? average : price;
+  if (!Number.isFinite(base) || base <= 0) return { stop: "", take: "", from: "none" };
+  return {
+    stop: roundPrice(base * (1 - down / 100)),
+    take: roundPrice(base * (1 + up / 100)),
+    from: base === average ? "cost" : "price",
+  };
 }
 
 export const PRIVACY_NOTE =
