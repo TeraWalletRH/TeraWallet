@@ -58,6 +58,7 @@ import {
   value as valueCore,
   slippage as slippageCore,
   schedules as schedulesCore,
+  watched as watchedCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -658,6 +659,17 @@ function Wallet() {
     [scheduleForm, setScheduleForm] = useState<Record<string, string>>({}),
     [scheduleEditId, setScheduleEditId] = useState(""),
     [scheduleError, setScheduleError] = useState(""),
+    // Watched wallets: which one is open, the form, and the balances read for
+    // each (null while unread or when the read failed). Never the signing account.
+    [watchOpen, setWatchOpen] = useState(""),
+    [watchForm, setWatchForm] = useState<{ address: string; name: string; editing: boolean }>({
+      address: "",
+      name: "",
+      editing: false,
+    }),
+    [watchError, setWatchError] = useState(""),
+    [watchBalances, setWatchBalances] = useState<Record<string, Record<string, string> | null>>({}),
+    [watchHistory, setWatchHistory] = useState<ChainHistoryEntry[] | null>(null),
     [pinnedAssets, setPinnedAssetsState] = useState<string[]>(() => getPinnedAssets()),
     [csvModalOpen, setCsvModalOpen] = useState(false),
     [stakingPosition, setStakingPosition] = useState<any>(null),
@@ -1306,6 +1318,86 @@ function Wallet() {
   }, [prices, data.priceAlerts]);
   // Saved names, cleaned on every read: the stored list is whatever the file held.
   const book = contactsCore.cleanBook(data.contacts);
+  const watchedList = watchedCore.sortedWatched(data.watched);
+  const watchedKey = watchedList.map((entry: any) => entry.address).join(",");
+  /** What a watched wallet holds is valued with the same rule as the owner's, and never added to it. */
+  function watchedValuation(address: string) {
+    const held = watchBalances[address];
+    return held
+      ? valueCore.totalValue(
+          assets.map((asset) => ({
+            symbol: asset.symbol,
+            amount: formatUnits(BigInt(held[asset.symbol] || "0"), asset.decimals),
+          })),
+          prices,
+        )
+      : null;
+  }
+  async function readWatched(addresses: string[]) {
+    const rows = await Promise.all(
+      addresses.map(async (address) => {
+        try {
+          return [address, await balances(address as Address, assets)] as const;
+        } catch {
+          return [address, null] as const;
+        }
+      }),
+    );
+    setWatchBalances((current) => ({ ...current, ...Object.fromEntries(rows) }));
+  }
+  useEffect(() => {
+    if (!owner || !watchedKey || (page !== "home" && page !== "watching")) return;
+    void readWatched(watchedKey.split(","));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, watchedKey, owner, assets.length]);
+  useEffect(() => {
+    if (page !== "watch-view" || !watchOpen) return;
+    let live = true;
+    setWatchHistory(null);
+    void readWatched([watchOpen]);
+    void fetchChainHistory(watchOpen as Address, t)
+      .then((entries) => live && setWatchHistory(entries))
+      .catch(() => live && setWatchHistory([]));
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, watchOpen]);
+  function openWatchForm(address = "") {
+    const existing = address ? watchedCore.watchedFor(dataRef.current.watched, address) : null;
+    setWatchError("");
+    setWatchForm({
+      address: existing ? existing.address : "",
+      name: existing?.name || "",
+      editing: !!existing,
+    });
+    setPage("watch-add");
+  }
+  async function saveWatchForm(guard: () => void) {
+    setWatchError("");
+    let address = watchForm.address.trim();
+    let tag = "";
+    if (address.startsWith("@")) {
+      const found = await tags.resolveTag(address);
+      guard();
+      tag = found.tag;
+      address = found.address;
+    }
+    const result = watchedCore.watch(dataRef.current.watched, {
+      address,
+      name: watchForm.name,
+      tag,
+      own: [owner, ...accounts.map((entry) => entry.address)].filter(Boolean),
+    });
+    if (!result.ok) {
+      setWatchError(result.reason);
+      return;
+    }
+    await store({ ...dataRef.current, watched: result.list });
+    guard();
+    setWatchOpen(result.entry.address);
+    setPage("watch-view");
+  }
   const scheduleToday = schedulesCore.today();
   const dueScheduled = owner ? schedulesCore.duePayments(data.schedules, scheduleToday) : [];
   const dueScheduledKey = dueScheduled.map(schedulesCore.reminderKey).join(",");
@@ -5379,6 +5471,40 @@ function Wallet() {
                   </Pressable>
                 ))}
               </View>
+              {watchedList.length ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setPage("watching")}
+                  style={({ pressed }) => [
+                    s.panel,
+                    { flexDirection: "row", alignItems: "center", gap: 12, opacity: pressed ? 0.7 : 1 },
+                  ]}
+                >
+                  <View style={s.quickIcon}>
+                    <Icon name="eye-outline" color={colors.lime} size={22} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.text, { fontWeight: "700" }]}>
+                      {t(
+                        `Watching ${watchedList.length} wallet${watchedList.length === 1 ? "" : "s"}`,
+                        `正在观察 ${watchedList.length} 个钱包`,
+                      )}
+                    </Text>
+                    <Text style={s.small}>
+                      {(() => {
+                        const values = watchedList.map((entry: any) => watchedValuation(entry.address));
+                        if (values.some((v: any) => v === null)) return t("Reading balances…", "正在读取余额…");
+                        const sum = values.reduce((acc: number, v: any) => acc + (v.total || 0), 0);
+                        return t(
+                          `${shownValue(formatFiat(sum, data.fiatCurrency || "USD"))} watched · not counted in your total`,
+                          `观察总值 ${shownValue(formatFiat(sum, data.fiatCurrency || "USD"))} · 不计入你的总资产`,
+                        );
+                      })()}
+                    </Text>
+                  </View>
+                  <Icon name="chevron-right" size={18} color={colors.muted} />
+                </Pressable>
+              ) : null}
               {dueScheduled.length ? (
                 <Pressable
                   accessibilityRole="button"
@@ -8011,6 +8137,250 @@ function Wallet() {
         </>
       );
     }
+    if (page === "watching") {
+      return (
+        <>
+          <Header
+            title={t("Watching", "观察钱包")}
+            onBack={() => setPage("home")}
+            backLabel={t("Home", "首页")}
+            right={
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("Watch a wallet", "添加观察钱包")}
+                hitSlop={8}
+                onPress={() => openWatchForm()}
+                style={s.iconDisc}
+              >
+                <Icon name="plus" size={20} color={colors.ink} />
+              </Pressable>
+            }
+          />
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Follow any wallet without its key. You can see it, never send from it.",
+              "无需私钥即可关注任意钱包。只能查看，无法从中发送。",
+            )}
+          </Text>
+          {watchedList.length === 0 ? (
+            <View style={[s.panel, { alignItems: "center", gap: 12, paddingVertical: 28 }]}>
+              <Icon name="eye-outline" size={34} color={colors.lime} />
+              <Text style={[s.text, { textAlign: "center" }]}>
+                {t(
+                  "You're not watching any wallets yet. Add a cold wallet, a treasury or a family member's address.",
+                  "暂无观察钱包。可添加冷钱包、资金库或家人的地址。",
+                )}
+              </Text>
+              <Button primary onPress={() => openWatchForm()}>
+                {t("Watch a wallet", "添加观察钱包")}
+              </Button>
+            </View>
+          ) : (
+            <Group>
+              {watchedList.map((entry: any) => {
+                const valuation = watchedValuation(entry.address);
+                return (
+                  <ListRow
+                    key={entry.address}
+                    icon="eye-outline"
+                    label={entry.name}
+                    detail={`${entry.tag ? `${tags.display(entry.tag)} · ` : ""}${entry.address.slice(0, 6)}…${entry.address.slice(-4)}`}
+                    onPress={() => {
+                      setWatchOpen(entry.address);
+                      setPage("watch-view");
+                    }}
+                    right={
+                      <Text style={[s.small, { fontWeight: "700", color: colors.ink }]}>
+                        {valuation === null
+                          ? "…"
+                          : valuation.total === null
+                            ? "—"
+                            : shownValue(formatFiat(valuation.total, data.fiatCurrency || "USD"))}
+                      </Text>
+                    }
+                  />
+                );
+              })}
+            </Group>
+          )}
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              watchedCore.PRIVACY_NOTE,
+              "你观察的钱包保存在此设备的加密数据中，从不发送给 Tera。其余额和记录与你自己的钱包一样从网络读取，因此网络可以看到被查询的地址。",
+            )}
+          </Text>
+        </>
+      );
+    }
+    if (page === "watch-add") {
+      return (
+        <>
+          <Header
+            title={watchForm.editing ? t("Rename watched wallet", "重命名观察钱包") : t("Watch a wallet", "添加观察钱包")}
+            onBack={() => setPage(watchForm.editing ? "watch-view" : "watching")}
+            backLabel={t("Back", "返回")}
+          />
+          {watchForm.editing ? (
+            <Row label={t("Address", "地址")} value={watchForm.address} />
+          ) : (
+            <Field
+              label={tagsAvailable() ? t("Address or @tag", "地址或 @标签") : t("Address", "地址")}
+              value={watchForm.address}
+              onChangeText={(value) => setWatchForm((current) => ({ ...current, address: value }))}
+              placeholder={tagsAvailable() ? "0x… / @astra" : "0x…"}
+            />
+          )}
+          <Field
+            label={t("Name", "名称")}
+            value={watchForm.name}
+            onChangeText={(value) => setWatchForm((current) => ({ ...current, name: value }))}
+            maxLength={contactsCore.LIMITS.maxLength}
+            autoCapitalize="sentences"
+            placeholder={t("e.g. Cold storage, Treasury, Mum", "例如：冷钱包、资金库、妈妈")}
+          />
+          {watchError ? <Text style={[s.small, { color: colors.danger }]}>{watchError}</Text> : null}
+          {action(
+            watchForm.editing ? "Save name" : "Start watching",
+            watchForm.editing ? "保存名称" : "开始观察",
+            saveWatchForm,
+          )}
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              watchedCore.READ_ONLY,
+              "仅观察。Tera 没有此钱包的私钥，因此无法在此发送、兑换或签名。",
+            )}
+          </Text>
+        </>
+      );
+    }
+    if (page === "watch-view") {
+      const entry = watchedCore.watchedFor(data.watched, watchOpen);
+      if (!entry) {
+        return (
+          <>
+            <Header title={t("Watching", "观察钱包")} onBack={() => setPage("watching")} backLabel={t("Back", "返回")} />
+            <Text style={s.small}>{t("This wallet is no longer watched.", "已不再观察此钱包。")}</Text>
+          </>
+        );
+      }
+      const held = watchBalances[entry.address];
+      const valuation = watchedValuation(entry.address);
+      const rows = held
+        ? assets
+            .map((asset) => ({ asset, amount: formatUnits(BigInt(held[asset.symbol] || "0"), asset.decimals) }))
+            .filter(({ amount }) => Number(amount) > 0)
+        : [];
+      return (
+        <>
+          <Header title={entry.name} onBack={() => setPage("watching")} backLabel={t("Watching", "观察钱包")} />
+          <View style={[s.panel, { borderColor: colors.lime, borderWidth: 1, backgroundColor: colors.tint, flexDirection: "row", gap: 10, alignItems: "center" }]}>
+            <Icon name="eye-outline" size={20} color={colors.lime} />
+            <Text style={[s.small, { flex: 1, color: colors.ink }]}>
+              {t(watchedCore.READ_ONLY, "仅观察。Tera 没有此钱包的私钥，因此无法在此发送、兑换或签名。")}
+            </Text>
+          </View>
+          <View style={[s.panel, { alignItems: "center", gap: 6, paddingVertical: 22 }]}>
+            <Text style={s.eyebrow}>{t("WATCHED VALUE · NOT YOURS", "观察价值 · 不计入你的资产")}</Text>
+            <Text style={{ fontSize: 34, fontWeight: "700", color: colors.ink }}>
+              {valuation === null
+                ? "…"
+                : valuation.total === null
+                  ? "—"
+                  : shownValue(formatFiat(valuation.total, data.fiatCurrency || "USD"))}
+            </Text>
+            {valuation && valuation.unpriced.length ? (
+              <Text style={s.small}>
+                {t(
+                  `${valuation.unpriced.length} holding${valuation.unpriced.length === 1 ? "" : "s"} without a price left out`,
+                  `${valuation.unpriced.length} 项无报价资产未计入`,
+                )}
+              </Text>
+            ) : null}
+            {held === null ? (
+              <Text style={[s.small, { color: colors.danger }]}>
+                {t("Couldn't read this wallet's balances. Try again shortly.", "无法读取此钱包余额，请稍后重试。")}
+              </Text>
+            ) : null}
+          </View>
+          <View style={s.panel}>
+            <Row label={t("Address", "地址")} value={entry.address} />
+            {entry.tag ? <Row label={t("Tag when added", "添加时的标签")} value={tags.display(entry.tag) || ""} /> : null}
+            <View style={[s.wrap, { marginTop: 10 }]}>
+              <Button
+                onPress={() =>
+                  void Clipboard.setStringAsync(entry.address).then(() =>
+                    setNotice({ title: t("Address copied", "地址已复制"), body: entry.address, tone: "success" }),
+                  )
+                }
+              >
+                {t("Copy address", "复制地址")}
+              </Button>
+              <Button onPress={() => openWatchForm(entry.address)}>{t("Rename", "重命名")}</Button>
+              <Button
+                onPress={() =>
+                  confirm(
+                    t("Stop watching this wallet?", "停止观察此钱包？"),
+                    t("It is removed from this device. The wallet itself is not affected.", "将从此设备删除，钱包本身不受影响。"),
+                    () =>
+                      void run(async () => {
+                        await store({ ...dataRef.current, watched: watchedCore.unwatch(dataRef.current.watched, entry.address) });
+                        setPage("watching");
+                      }),
+                  )
+                }
+              >
+                {t("Stop watching", "停止观察")}
+              </Button>
+            </View>
+          </View>
+          <Text style={[s.text, { fontWeight: "700" }]}>{t("Holdings", "持仓")}</Text>
+          <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
+            {held === undefined ? (
+              <Text style={[s.small, { paddingVertical: 14 }]}>{t("Reading balances…", "正在读取余额…")}</Text>
+            ) : rows.length === 0 ? (
+              <Text style={[s.small, { paddingVertical: 14 }]}>{t("No tokens Tera tracks are held here.", "此钱包未持有 Tera 追踪的代币。")}</Text>
+            ) : (
+              rows.map(({ asset, amount }) => {
+                const value = valueCore.valueOf(amount, prices[asset.symbol]);
+                return (
+                  <View key={asset.symbol} style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12 }}>
+                    <TokenIcon symbol={asset.symbol} size={32} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.text, { fontWeight: "700" }]}>{asset.symbol}</Text>
+                      <Text style={s.small}>{shownValue(shortAmount(amount))}</Text>
+                    </View>
+                    <Text style={[s.text, { fontWeight: "700" }]}>
+                      {value === null ? "—" : shownValue(formatFiat(value, data.fiatCurrency || "USD"))}
+                    </Text>
+                  </View>
+                );
+              })
+            )}
+          </View>
+          <Text style={[s.text, { fontWeight: "700" }]}>{t("Recent activity", "近期记录")}</Text>
+          <View style={[s.panel, { gap: 10 }]}>
+            {watchHistory === null ? (
+              <Text style={s.small}>{t("Reading activity…", "正在读取记录…")}</Text>
+            ) : watchHistory.length === 0 ? (
+              <Text style={s.small}>{t("No activity found on chain.", "链上未找到记录。")}</Text>
+            ) : (
+              [...watchHistory]
+                .sort((a, b) => b.timestamp - a.timestamp)
+                .slice(0, 15)
+                .map((item) => (
+                  <View key={item.hash} style={{ gap: 2 }}>
+                    <Text style={[s.text, { color: item.direction === "receive" ? colors.green : colors.ink }]}>{item.title}</Text>
+                    <Text style={s.small}>
+                      {new Date(item.timestamp).toLocaleString()}
+                      {item.status === "failed" ? t(" · failed", " · 失败") : ""}
+                    </Text>
+                  </View>
+                ))
+            )}
+          </View>
+        </>
+      );
+    }
     if (page === "scheduled") {
       const list = schedulesCore.sortedSchedules(data.schedules);
       return (
@@ -9251,6 +9621,16 @@ function Wallet() {
               label={t("Contacts", "联系人")}
               detail={t("Names for the addresses you send to", "为常用地址添加名称")}
               onPress={() => setSettingsSection("contacts")}
+            />
+            <ListRow
+              icon="eye-outline"
+              label={t("Watched wallets", "观察钱包")}
+              detail={
+                watchedList.length
+                  ? t(`${watchedList.length} watched · view only`, `${watchedList.length} 个 · 仅查看`)
+                  : t("Follow any wallet without its key", "无需私钥关注任意钱包")
+              }
+              onPress={() => setPage("watching")}
             />
             <ListRow
               icon="calendar-clock"
@@ -10922,6 +11302,12 @@ function Wallet() {
             icon: "calendar-clock",
             label: t("Scheduled", "定期付款"),
             onPress: () => setPage("scheduled"),
+          },
+          {
+            key: "watching",
+            icon: "eye-outline",
+            label: t("Watching", "观察钱包"),
+            onPress: () => setPage("watching"),
           },
           {
             key: "bridge",

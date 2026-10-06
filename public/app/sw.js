@@ -5,10 +5,10 @@
 //
 // scripts/build-web.mjs fills in BUILD and FILES. A new build is a new cache,
 // and the old one is deleted once the new one is ready.
-const BUILD = "3dec96d7e5f75213";
+const BUILD = "d25ba0e3bc641833";
 const FILES = [
-  "/app/_expo/static/js/web/index-f1350169cf0d68138c7baabe537b7820.js",
-  "/app/_expo/static/js/web/native-ca649c957a7e9560681cbdfd53b94acd.js",
+  "/app/_expo/static/js/web/index-72ee73e3be956dd5be920309b9e488b5.js",
+  "/app/_expo/static/js/web/native-4b24628e96951e2a3ac993906ab4338e.js",
   "/app/apple-touch-icon.png",
   "/app/assets/assets/RH-RWA-Assets-Media/amazon.011a040ad5744ef03634d45133707895.png",
   "/app/assets/assets/RH-RWA-Assets-Media/apple.7eb2afd24c5c70287d47aae4b2905a30.png",
