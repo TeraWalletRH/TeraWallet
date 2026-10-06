@@ -675,7 +675,12 @@ function Wallet() {
     [watchBalances, setWatchBalances] = useState<Record<string, Record<string, string> | null>>({}),
     [watchHistory, setWatchHistory] = useState<ChainHistoryEntry[] | null>(null),
     // The limit order the swap screen was opened for, the order form, and its error.
-    [limitRun, setLimitRun] = useState<null | { id: string; side: "buy" | "sell"; asset: string }>(null),
+    [limitRun, setLimitRun] = useState<
+      null | { id: string; side: "buy" | "sell"; asset: string; kind: "limit" | "stop" | "take"; limit: string }
+    >(null),
+    // The protect form: a stop-loss and/or take-profit on one holding.
+    [protectForm, setProtectForm] = useState<Record<string, string>>({}),
+    [protectError, setProtectError] = useState(""),
     [limitForm, setLimitForm] = useState<Record<string, string>>({}),
     [limitEditId, setLimitEditId] = useState(""),
     [orderError, setOrderError] = useState(""),
@@ -1342,10 +1347,14 @@ function Wallet() {
     void store({ ...dataRef.current, limitOrders: result.orders }).catch(() => {});
     for (const order of result.ready) {
       const body = limitCore.readyText(order);
-      setNotice({ title: t("Limit order ready", "限价单已就绪"), body, tone: "success" });
-      notify.showSystem(t("Limit order ready", "限价单已就绪"), body, `limit:${order.id}`, () =>
-        setPage("limit-orders"),
-      );
+      const title =
+        order.kind === "stop"
+          ? t("Stop-loss reached", "已触及止损")
+          : order.kind === "take"
+            ? t("Take-profit reached", "已触及止盈")
+            : t("Limit order ready", "限价单已就绪");
+      setNotice({ title, body, tone: order.kind === "stop" ? "error" : "success" });
+      notify.showSystem(title, body, `limit:${order.id}`, () => setPage("limit-orders"));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [prices, data.limitOrders, owner]);
@@ -1591,6 +1600,50 @@ function Wallet() {
       tone: "success",
     });
   }
+  /** Protect a holding with a stop-loss and/or take-profit, suggested from the average cost when known. */
+  function openProtect(symbol: string) {
+    const heldNow = allHeld.find(({ asset }) => asset.symbol === symbol);
+    const row = pnlSummary?.rows.find((entry: any) => entry.symbol === symbol);
+    const levels = limitCore.suggestLevels({ average: row?.average ?? null, price: prices[symbol] ?? null });
+    setProtectError("");
+    setProtectForm({
+      asset: symbol,
+      amount: heldNow ? heldNow.amount : "",
+      stop: levels.stop,
+      take: levels.take,
+      useStop: "yes",
+      useTake: "yes",
+      from: levels.from,
+      expiry: "never",
+    });
+    setPage("protect");
+  }
+  async function saveProtect(guard: () => void) {
+    setProtectError("");
+    const result = limitCore.protect(dataRef.current.limitOrders, {
+      asset: protectForm.asset,
+      amount: protectForm.amount,
+      stop: protectForm.useStop === "yes" ? protectForm.stop : "",
+      take: protectForm.useTake === "yes" ? protectForm.take : "",
+      expiry: protectForm.expiry,
+      price: prices[protectForm.asset],
+    });
+    if (!result.ok) {
+      setProtectError(result.reason);
+      return;
+    }
+    await store({ ...dataRef.current, limitOrders: result.orders });
+    guard();
+    setPage("limit-orders");
+    setNotice({
+      title: t("Holding protected", "已设置保护"),
+      body: t(
+        `${result.created.map((order: any) => limitCore.describeOrder(order)).join(". ")}.${result.created.length === 2 ? " Whichever is reached first cancels the other." : ""} You'll be told when one is ready, and you sign the sale.`,
+        `${result.created.map((order: any) => limitCore.describeOrder(order)).join("。")}。${result.created.length === 2 ? "先触发的一方会自动取消另一方。" : ""}就绪时会通知你，卖出由你签名。`,
+      ),
+      tone: "success",
+    });
+  }
   /** Open the swap screen with a ready order written out; the limit is enforced when it is prepared. */
   function executeLimit(order: any) {
     check(order.status === "ready", t("This order isn't ready yet.", "此订单尚未就绪。"));
@@ -1606,7 +1659,7 @@ function Wallet() {
     clearAmount();
     setAmount(order.amount);
     setPage("swap");
-    setLimitRun({ id: order.id, side: order.side, asset: order.asset });
+    setLimitRun({ id: order.id, side: order.side, asset: order.asset, kind: order.kind, limit: order.limit });
   }
   /** Open the normal send screen with this payment written out. Nothing is sent until the owner signs. */
   function payScheduled(schedule: any) {
@@ -3128,7 +3181,7 @@ function Wallet() {
         : null;
     let p = await prepareWith(slippageBps);
     let limitTight = false;
-    if (limitOrder && limitOrder.status === "ready") {
+    if (limitOrder && limitOrder.status === "ready" && limitOrder.kind !== "stop") {
       // The minimum output is set from the limit price, so a price that moved back
       // past the limit makes the swap revert instead of filling worse.
       const q = p.preparedTransaction?.quote;
@@ -7388,14 +7441,30 @@ function Wallet() {
           {limitRun ? (
             <View style={[s.panel, { borderColor: colors.lime, borderWidth: 1, backgroundColor: colors.tint, gap: 4 }]}>
               <Text style={[s.text, { fontWeight: "700", color: colors.lime }]}>
-                {t(`Limit order · ${limitRun.side === "buy" ? "Buy" : "Sell"} ${limitRun.asset}`, `限价单 · ${limitRun.side === "buy" ? "买入" : "卖出"} ${limitRun.asset}`)}
+                {limitRun.kind === "stop"
+                  ? t(`Stop-loss · Sell ${limitRun.asset}`, `止损 · 卖出 ${limitRun.asset}`)
+                  : limitRun.kind === "take"
+                    ? t(`Take-profit · Sell ${limitRun.asset}`, `止盈 · 卖出 ${limitRun.asset}`)
+                    : t(`Limit order · ${limitRun.side === "buy" ? "Buy" : "Sell"} ${limitRun.asset}`, `限价单 · ${limitRun.side === "buy" ? "买入" : "卖出"} ${limitRun.asset}`)}
               </Text>
               <Text style={s.small}>
                 {trade === (limitRun.side === "buy" ? "BUY" : "SELL") && assetSymbol === limitRun.asset
-                  ? t(
-                      "The swap's minimum output is set from your limit price, so it reverts rather than fill worse.",
-                      "兑换的最低收到按你的限价设置，价格变差时将回滚而不会以更差价格成交。",
-                    )
+                  ? limitRun.kind === "stop"
+                    ? (() => {
+                        const now = prices[limitRun.asset];
+                        const below =
+                          Number.isFinite(now) && Number(limitRun.limit) > 0
+                            ? ((Number(limitRun.limit) - now) / Number(limitRun.limit)) * 100
+                            : null;
+                        return t(
+                          `Stop-loss at $${limitRun.limit}${below !== null ? `; the price is now ${valueCore.format(now)}${below > 0 ? `, ${below.toFixed(1)}% below your stop` : ""}` : ""}. A stop sells at the live price, protected by your slippage limit, not by the stop price.`,
+                          `止损价 $${limitRun.limit}${below !== null ? `；当前价格 ${valueCore.format(now)}${below > 0 ? `，低于止损价 ${below.toFixed(1)}%` : ""}` : ""}。止损按实时价格卖出，受滑点上限保护，而非止损价。`,
+                        );
+                      })()
+                    : t(
+                        "The swap's minimum output is set from your price, so it reverts rather than fill worse.",
+                        "兑换的最低收到按你的价格设置，价格变差时将回滚而不会以更差价格成交。",
+                      )
                   : t(
                       "This swap no longer matches the order, so the limit won't apply to it.",
                       "此兑换已与订单不一致，限价不再适用。",
@@ -7693,6 +7762,11 @@ function Wallet() {
                         {t("Profit & loss details ›", "盈亏详情 ›")}
                       </Text>
                     </Pressable>
+                    {limitTradable(tokenDetailSymbol) ? (
+                      <Button onPress={() => openProtect(tokenDetailSymbol)}>
+                        {t("Protect with stop-loss / take-profit", "设置止损 / 止盈")}
+                      </Button>
+                    ) : null}
                   </>
                 );
               })()}
@@ -8691,6 +8765,152 @@ function Wallet() {
         </>
       );
     }
+    if (page === "protect") {
+      const set = (field: string) => (value: string) => setProtectForm((current) => ({ ...current, [field]: value }));
+      const symbol = protectForm.asset || "";
+      const row = pnlSummary?.rows.find((entry: any) => entry.symbol === symbol);
+      const price = prices[symbol];
+      const qty = Number(protectForm.amount) || 0;
+      const atLevel = (level: string) => {
+        const target = Number(level);
+        if (!(target > 0) || !qty) return null;
+        const proceeds = target * qty;
+        return row?.average != null ? { proceeds, pnl: proceeds - row.average * qty } : { proceeds, pnl: null };
+      };
+      const toggle = (field: string, label: string) => (
+        <Pressable
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: protectForm[field] === "yes" }}
+          onPress={() => set(field)(protectForm[field] === "yes" ? "no" : "yes")}
+          style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+        >
+          <Icon
+            name={protectForm[field] === "yes" ? "checkbox-marked" : "checkbox-blank-outline"}
+            size={22}
+            color={protectForm[field] === "yes" ? colors.green : colors.muted}
+          />
+          <Text style={[s.text, { fontWeight: "700" }]}>{label}</Text>
+        </Pressable>
+      );
+      const outcome = (level: string) => {
+        const result = atLevel(level);
+        if (!result) return null;
+        return (
+          <Text style={s.small}>
+            {t(
+              `Sells for about ${formatFiat(result.proceeds, data.fiatCurrency || "USD")}${result.pnl !== null ? ` · ${signedFiat(result.pnl)} vs your cost` : ""}`,
+              `约可卖得 ${formatFiat(result.proceeds, data.fiatCurrency || "USD")}${result.pnl !== null ? ` · 相对成本 ${signedFiat(result.pnl)}` : ""}`,
+            )}
+          </Text>
+        );
+      };
+      const expiryLabels: Record<string, [string, string]> = {
+        day: ["1 day", "1 天"],
+        week: ["1 week", "1 周"],
+        month: ["1 month", "1 个月"],
+        never: ["Until cancelled", "直到取消"],
+      };
+      return (
+        <>
+          <Header title={t(`Protect ${symbol}`, `保护 ${symbol}`)} onBack={() => setPage("pnl")} backLabel={t("Back", "返回")} />
+          <View style={s.panel}>
+            <Row label={t("Price now", "当前价格")} value={Number.isFinite(price) ? valueCore.format(price) : "—"} />
+            {row?.average != null ? (
+              <Row label={t("Your average cost", "你的平均成本")} value={formatFiat(row.average, data.fiatCurrency || "USD")} />
+            ) : null}
+            {protectForm.from !== "none" ? (
+              <Text style={s.small}>
+                {protectForm.from === "cost"
+                  ? t("Suggested: 10% below and 20% above your average cost.", "建议值：低于平均成本 10%、高于 20%。")
+                  : t("Suggested: 10% below and 20% above today's price.", "建议值：低于当前价格 10%、高于 20%。")}
+              </Text>
+            ) : null}
+          </View>
+          <Field
+            label={t(`Amount to sell (${symbol})`, `卖出数量（${symbol}）`)}
+            value={protectForm.amount || ""}
+            onChangeText={set("amount")}
+            keyboardType="decimal-pad"
+            placeholder="0.00"
+          />
+          <View style={[s.panel, { gap: 8 }]}>
+            {toggle("useStop", t("Stop-loss", "止损"))}
+            {protectForm.useStop === "yes" ? (
+              <>
+                <Field
+                  label={t("Sell if the price falls to ($)", "价格跌至以下时卖出（美元）")}
+                  value={protectForm.stop || ""}
+                  onChangeText={set("stop")}
+                  keyboardType="decimal-pad"
+                  placeholder="0.00"
+                />
+                {outcome(protectForm.stop || "")}
+                <Text style={s.small}>
+                  {t(
+                    "A stop sells at the live price when you sign, protected by your slippage limit. It can fill below the stop if the price keeps falling.",
+                    "止损在你签名时按实时价格卖出，受滑点上限保护。若价格持续下跌，成交价可能低于止损价。",
+                  )}
+                </Text>
+              </>
+            ) : null}
+          </View>
+          <View style={[s.panel, { gap: 8 }]}>
+            {toggle("useTake", t("Take-profit", "止盈"))}
+            {protectForm.useTake === "yes" ? (
+              <>
+                <Field
+                  label={t("Sell if the price rises to ($)", "价格涨至以下时卖出（美元）")}
+                  value={protectForm.take || ""}
+                  onChangeText={set("take")}
+                  keyboardType="decimal-pad"
+                  placeholder="0.00"
+                />
+                {outcome(protectForm.take || "")}
+                <Text style={s.small}>
+                  {t(
+                    "A take-profit is enforced on chain: the sale can't fill below your price.",
+                    "止盈在链上强制执行：成交价不会低于你的价格。",
+                  )}
+                </Text>
+              </>
+            ) : null}
+          </View>
+          <View style={{ gap: 8 }}>
+            <Text style={s.eyebrow}>{t("EXPIRES AFTER", "有效期")}</Text>
+            <View style={[s.wrap, { gap: 8 }]}>
+              {Object.keys(limitCore.EXPIRIES).map((key) => (
+                <Pressable
+                  key={key}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: protectForm.expiry === key }}
+                  onPress={() => set("expiry")(key)}
+                  style={{
+                    paddingVertical: 8,
+                    paddingHorizontal: 14,
+                    borderRadius: 999,
+                    borderWidth: 1,
+                    borderColor: protectForm.expiry === key ? colors.green : colors.line,
+                    backgroundColor: protectForm.expiry === key ? colors.tint : colors.wash,
+                  }}
+                >
+                  <Text style={{ fontSize: 13, fontWeight: "700", color: protectForm.expiry === key ? colors.green : colors.ink }}>
+                    {t(...expiryLabels[key])}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+          {protectError ? <Text style={[s.small, { color: colors.danger }]}>{protectError}</Text> : null}
+          {action("Protect holding", "设置保护", saveProtect)}
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Nothing sells on its own. Tera tells you when a level is reached and you sign the sale, so a stop is only as quick as your tap.",
+              "不会自动卖出。达到价格时 Tera 会通知你，由你签名卖出，因此止损的速度取决于你的操作。",
+            )}
+          </Text>
+        </>
+      );
+    }
     if (page === "pnl") {
       const total = pnlSummary?.total;
       const sourceLabel = (source: string) =>
@@ -8796,6 +9016,34 @@ function Wallet() {
                       value={`${shownValue(signedFiat(row.realized))}${row.realizedEstimated ? t(" (est.)", "（估算）") : ""}`}
                     />
                   ) : null}
+                  {row.qty > 0
+                    ? limitList
+                        .filter(
+                          (order: any) =>
+                            order.asset === row.symbol &&
+                            (order.kind === "stop" || order.kind === "take") &&
+                            (order.status === "open" || order.status === "ready"),
+                        )
+                        .map((order: any) => {
+                          const level = Number(order.limit);
+                          const qtyAt = Math.min(Number(order.amount), row.qty);
+                          const pnlAt = row.average !== null ? (level - row.average) * qtyAt : null;
+                          return (
+                            <Row
+                              key={order.id}
+                              label={order.kind === "stop" ? t("Stop-loss", "止损") : t("Take-profit", "止盈")}
+                              value={`$${order.limit}${pnlAt !== null ? ` · ${shownValue(signedFiat(pnlAt))}` : ""}${order.status === "ready" ? t(" · ready", " · 已就绪") : ""}`}
+                            />
+                          );
+                        })
+                    : null}
+                  {row.qty > 0 && limitTradable(row.symbol) ? (
+                    <Pressable accessibilityRole="button" onPress={() => openProtect(row.symbol)}>
+                      <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                        {t("Protect with a stop-loss / take-profit", "设置止损 / 止盈保护")}
+                      </Text>
+                    </Pressable>
+                  ) : null}
                   {costEdit?.symbol === row.symbol ? (
                     <>
                       <Field
@@ -8888,7 +9136,13 @@ function Wallet() {
                 <View key={order.id} style={[s.panel, { gap: 6, opacity: live ? 1 : 0.75 }]}>
                   <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                     <Text style={[s.text, { fontWeight: "800", fontSize: 16, flex: 1 }]}>
-                      {order.side === "buy" ? t(`Buy ${order.asset}`, `买入 ${order.asset}`) : t(`Sell ${order.asset}`, `卖出 ${order.asset}`)}
+                      {order.kind === "stop"
+                        ? t(`Stop-loss · ${order.asset}`, `止损 · ${order.asset}`)
+                        : order.kind === "take"
+                          ? t(`Take-profit · ${order.asset}`, `止盈 · ${order.asset}`)
+                          : order.side === "buy"
+                            ? t(`Buy ${order.asset}`, `买入 ${order.asset}`)
+                            : t(`Sell ${order.asset}`, `卖出 ${order.asset}`)}
                     </Text>
                     <Text
                       style={[
@@ -8901,9 +9155,19 @@ function Wallet() {
                   </View>
                   <Text style={s.small}>{limitCore.describeOrder(order)}</Text>
                   <Row
-                    label={t("Target", "目标价")}
-                    value={`$${order.limit} ${order.side === "buy" ? t("or lower", "或更低") : t("or higher", "或更高")}`}
+                    label={order.kind === "stop" ? t("Stop", "止损价") : t("Target", "目标价")}
+                    value={`$${order.limit} ${order.side === "buy" || order.kind === "stop" ? t("or lower", "或更低") : t("or higher", "或更高")}`}
                   />
+                  {order.linked && live ? (
+                    <Text style={s.small}>
+                      {t("Linked: whichever is reached first cancels the other.", "已关联：先触发的一方会取消另一方。")}
+                    </Text>
+                  ) : null}
+                  {order.status === "cancelled" && order.cancelledBy ? (
+                    <Text style={s.small}>
+                      {t("Cancelled because its linked order was reached.", "因关联订单已触发而取消。")}
+                    </Text>
+                  ) : null}
                   {live && (
                     <Row label={t("Price now", "当前价格")} value={Number.isFinite(price) ? valueCore.format(price) : "—"} />
                   )}
@@ -8935,7 +9199,7 @@ function Wallet() {
                         {order.side === "buy" ? t("Buy now", "立即买入") : t("Sell now", "立即卖出")}
                       </Button>
                     )}
-                    {order.status === "open" && (
+                    {order.status === "open" && order.kind === "limit" && (
                       <Button onPress={() => openLimitForm(order.id)}>{t("Edit", "编辑")}</Button>
                     )}
                     {live ? (
