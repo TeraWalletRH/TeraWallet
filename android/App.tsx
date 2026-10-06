@@ -59,6 +59,7 @@ import {
   slippage as slippageCore,
   schedules as schedulesCore,
   watched as watchedCore,
+  limitOrders as limitCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -672,6 +673,11 @@ function Wallet() {
     [watchError, setWatchError] = useState(""),
     [watchBalances, setWatchBalances] = useState<Record<string, Record<string, string> | null>>({}),
     [watchHistory, setWatchHistory] = useState<ChainHistoryEntry[] | null>(null),
+    // The limit order the swap screen was opened for, the order form, and its error.
+    [limitRun, setLimitRun] = useState<null | { id: string; side: "buy" | "sell"; asset: string }>(null),
+    [limitForm, setLimitForm] = useState<Record<string, string>>({}),
+    [limitEditId, setLimitEditId] = useState(""),
+    [orderError, setOrderError] = useState(""),
     [pinnedAssets, setPinnedAssetsState] = useState<string[]>(() => getPinnedAssets()),
     [csvModalOpen, setCsvModalOpen] = useState(false),
     [stakingPosition, setStakingPosition] = useState<any>(null),
@@ -1318,6 +1324,27 @@ function Wallet() {
       void run(() => store({ ...dataRef.current, priceAlerts: updatedAlerts }));
     }
   }, [prices, data.priceAlerts]);
+  // Limit orders are checked against every price the wallet reads. An order that
+  // reaches its price becomes ready and is announced once; it fills only when
+  // the owner signs.
+  useEffect(() => {
+    if (!owner || !Array.isArray(data.limitOrders) || !data.limitOrders.length) return;
+    if (!prices || Object.keys(prices).length < 2) return;
+    const result = limitCore.evaluate(data.limitOrders, prices);
+    if (!result.changed) return;
+    void store({ ...dataRef.current, limitOrders: result.orders }).catch(() => {});
+    for (const order of result.ready) {
+      const body = limitCore.readyText(order);
+      setNotice({ title: t("Limit order ready", "限价单已就绪"), body, tone: "success" });
+      notify.showSystem(t("Limit order ready", "限价单已就绪"), body, `limit:${order.id}`, () =>
+        setPage("limit-orders"),
+      );
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prices, data.limitOrders, owner]);
+  useEffect(() => {
+    if (page !== "swap") setLimitRun(null);
+  }, [page]);
   // Saved names, cleaned on every read: the stored list is whatever the file held.
   const book = contactsCore.cleanBook(data.contacts);
   const watchedList = watchedCore.sortedWatched(data.watched);
@@ -1505,6 +1532,74 @@ function Wallet() {
     const result = schedulesCore.settle(dataRef.current.schedules, id, date, { status, hash, ...fill });
     if (!result.ok) throw new Error(result.reason);
     await store({ ...dataRef.current, schedules: result.schedules });
+  }
+  const limitList = limitCore.sortedOrders(data.limitOrders);
+  const readyOrders = limitList.filter((order: any) => order.status === "ready");
+  const limitTradable = (symbol: string) =>
+    symbol !== "USDG" && (symbol === "ETH" || symbol === "TERA" || listedSymbols.includes(symbol));
+  function openLimitForm(id = "", preset: { asset?: string; side?: string } = {}) {
+    const existing = id ? limitCore.orderFor(dataRef.current.limitOrders, id) : null;
+    setLimitEditId(existing ? existing.id : "");
+    setOrderError("");
+    const asset = existing?.asset || (preset.asset && limitTradable(preset.asset) ? preset.asset : "TERA");
+    setLimitForm({
+      side: existing?.side || preset.side || "buy",
+      asset,
+      amount: existing?.amount || "",
+      limit: existing?.limit || "",
+      expiry: existing?.expiry || "week",
+    });
+    setPage("limit-edit");
+  }
+  async function saveLimitForm(guard: () => void) {
+    setOrderError("");
+    const existing = limitEditId ? limitCore.orderFor(dataRef.current.limitOrders, limitEditId) : null;
+    const parsed = limitCore.parseOrder(limitForm, { existing });
+    if (!parsed.ok) {
+      setOrderError(parsed.reason);
+      return;
+    }
+    // An order whose price is already met is ready at once, rather than waiting for the next refresh.
+    const evaluated = limitCore.evaluate([parsed.order], prices).orders[0] || parsed.order;
+    const saved = limitCore.saveOrder(dataRef.current.limitOrders, evaluated);
+    if (!saved.ok) {
+      setOrderError(saved.reason);
+      return;
+    }
+    await store({ ...dataRef.current, limitOrders: saved.orders });
+    guard();
+    setPage("limit-orders");
+    setNotice({
+      title: evaluated.status === "ready" ? t("Limit order ready", "限价单已就绪") : t("Limit order placed", "已设置限价单"),
+      body:
+        evaluated.status === "ready"
+          ? t(
+              `${limitCore.describeOrder(evaluated)}. The price is already there, so it's ready to sign now.`,
+              `${limitCore.describeOrder(evaluated)}。价格已达到，可立即签名。`,
+            )
+          : t(
+              `${limitCore.describeOrder(evaluated)}. You'll be told when the price gets there, and you sign it then.`,
+              `${limitCore.describeOrder(evaluated)}。价格到达时会通知你，届时由你签名。`,
+            ),
+      tone: "success",
+    });
+  }
+  /** Open the swap screen with a ready order written out; the limit is enforced when it is prepared. */
+  function executeLimit(order: any) {
+    check(order.status === "ready", t("This order isn't ready yet.", "此订单尚未就绪。"));
+    check(
+      assets.some((a) => a.symbol === order.asset),
+      t(`${order.asset} is not available to trade right now.`, `${order.asset} 目前无法交易。`),
+    );
+    setError("");
+    setSwapReturnPage("limit-orders");
+    setSwapReceivePicker(false);
+    setTrade(order.side === "buy" ? "BUY" : "SELL");
+    setAssetSymbol(order.asset);
+    clearAmount();
+    setAmount(order.amount);
+    setPage("swap");
+    setLimitRun({ id: order.id, side: order.side, asset: order.asset });
   }
   /** Open the normal send screen with this payment written out. Nothing is sent until the owner signs. */
   function payScheduled(schedule: any) {
@@ -2916,22 +3011,58 @@ function Wallet() {
     setPage("spend");
   }
   async function prepareTrade(guard: () => void) {
-    const input = {
-      ownerAddress: owner,
-      accountAddress: owner,
-      assetAddress: selectedAsset.address,
-      actionType: trade,
-      amount: units(
-        amount,
-        trade === "BUY" ? (selectedAsset.symbol === "TERA" ? 18 : 6) : selectedAsset.decimals,
-      ),
-      slippageBps,
+    const prepareWith = async (bps: number) => {
+      const input = {
+        ownerAddress: owner,
+        accountAddress: owner,
+        assetAddress: selectedAsset.address,
+        actionType: trade,
+        amount: units(
+          amount,
+          trade === "BUY" ? (selectedAsset.symbol === "TERA" ? 18 : 6) : selectedAsset.decimals,
+        ),
+        slippageBps: bps,
+      };
+      const checked = await policyFor(input);
+      guard();
+      const result = await api("/api/intent/prepare", checked);
+      guard();
+      return { ...result, intent: checked, createdAt: Date.now() };
     };
-    const checked = await policyFor(input);
-    guard();
-    const result = await api("/api/intent/prepare", checked);
-    guard();
-    const p = { ...result, intent: checked, createdAt: Date.now() };
+    // A ready limit order, if this swap is still the trade it describes.
+    const limitOrder =
+      limitRun &&
+      selectedAsset.symbol === limitRun.asset &&
+      trade === (limitRun.side === "buy" ? "BUY" : "SELL")
+        ? limitCore.orderFor(dataRef.current.limitOrders, limitRun.id)
+        : null;
+    let p = await prepareWith(slippageBps);
+    let limitTight = false;
+    if (limitOrder && limitOrder.status === "ready") {
+      // The minimum output is set from the limit price, so a price that moved back
+      // past the limit makes the swap revert instead of filling worse.
+      const q = p.preparedTransaction?.quote;
+      check(q, t("No live quote is available right now.", "目前没有可用的实时报价。"));
+      const minimum = limitCore.limitMinimum({
+        side: limitOrder.side,
+        asset: limitOrder.asset,
+        amount,
+        limit: limitOrder.limit,
+        decimalsOut: q.decimalsOut,
+        ethPrice: prices.ETH || 0,
+      });
+      const plan = limitCore.slippageForLimit(q.amountOutWei, minimum, slippageBps);
+      check(plan.ok, plan.reason);
+      if (plan.bps !== slippageBps) {
+        p = await prepareWith(plan.bps);
+        const q2 = p.preparedTransaction?.quote;
+        check(
+          q2 && (plan.tight || slippageCore.swapMinimum(q2, plan.bps) >= minimum),
+          t("The price moved while preparing. Try again.", "准备期间价格变动，请重试。"),
+        );
+      }
+      limitTight = plan.tight;
+    }
     await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, p] });
     guard();
     // Tied to the recurring buy only while it is still the buy it describes.
@@ -2942,6 +3073,40 @@ function Wallet() {
     const quote = p.preparedTransaction?.quote;
     const tokenOut = selectedAsset.address;
     const spent = amount;
+    if (limitOrder && limitOrder.status === "ready" && quote) {
+      if (limitTight)
+        setNotice({
+          title: t("Very close to your limit", "非常接近你的限价"),
+          body: t(
+            "The live price is within 0.1% of your limit, so the swap's minimum may be up to 0.1% below it.",
+            "实时价格与限价相差不到 0.1%，兑换的最低收到可能比限价低至多 0.1%。",
+          ),
+          tone: "success",
+        });
+      // What a sell receives is the pair: USDG, or ETH (no token transfer to read) for TERA.
+      const outToken =
+        limitOrder.side === "buy" ? tokenOut : limitOrder.pair === "ETH" ? zeroAddress : USDG;
+      showProposal(p, {
+        afterSubmitted: async (hash: string) => {
+          const quoted = formatUnits(BigInt(quote.amountOutWei), quote.decimalsOut);
+          const filled = limitCore.fillOrder(dataRef.current.limitOrders, limitOrder.id, {
+            hash,
+            spent,
+            received: quoted,
+            estimated: true,
+          });
+          if (filled.ok) await store({ ...dataRef.current, limitOrders: filled.orders }).catch(() => {});
+          void readReceived(hash, outToken, quote.decimalsOut).then((received) => {
+            if (!received) return;
+            void store({
+              ...dataRef.current,
+              limitOrders: limitCore.recordFill(dataRef.current.limitOrders, limitOrder.id, hash, received),
+            }).catch(() => {});
+          });
+        },
+      });
+      return;
+    }
     showProposal(
       p,
       run && quote
@@ -2966,10 +3131,24 @@ function Wallet() {
    * stays and stays marked as an estimate.
    */
   async function recordBuyFill(id: string, hash: string, token: string, decimals: number) {
+    const received = await readReceived(hash, token, decimals);
+    if (!received) return;
+    await store({
+      ...dataRef.current,
+      schedules: schedulesCore.recordFill(dataRef.current.schedules, id, hash, received),
+    }).catch(() => {});
+  }
+  /**
+   * What a confirmed swap actually delivered to this wallet: the sum of the
+   * token transfers to it in the receipt. "" when it cannot be read — native
+   * ETH has no transfer to read, and a receipt can time out — in which case
+   * the quoted figure stays, marked as an estimate.
+   */
+  async function readReceived(hash: string, token: string, decimals: number) {
     try {
-      if (token === zeroAddress) return;
+      if (token === zeroAddress) return "";
       const receipt = await client.waitForTransactionReceipt({ hash: hash as Hex, timeout: 180_000 });
-      if (receipt.status !== "success") return;
+      if (receipt.status !== "success") return "";
       const transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
       const toTopic = `0x${owner.slice(2).toLowerCase().padStart(64, "0")}`;
       let total = 0n;
@@ -2978,13 +3157,9 @@ function Wallet() {
         if (log.topics[0]?.toLowerCase() !== transferTopic || log.topics[2]?.toLowerCase() !== toTopic) continue;
         total += BigInt(log.data);
       }
-      if (total <= 0n) return;
-      await store({
-        ...dataRef.current,
-        schedules: schedulesCore.recordFill(dataRef.current.schedules, id, hash, formatUnits(total, decimals)),
-      });
+      return total > 0n ? formatUnits(total, decimals) : "";
     } catch {
-      // The quoted figure remains, marked as an estimate.
+      return "";
     }
   }
   async function preparePrivateSend(guard: () => void) {
@@ -5569,6 +5744,38 @@ function Wallet() {
                   </Pressable>
                 ))}
               </View>
+              {readyOrders.length ? (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setPage("limit-orders")}
+                  style={({ pressed }) => [
+                    s.panel,
+                    {
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 12,
+                      borderColor: colors.lime,
+                      borderWidth: 1,
+                      backgroundColor: colors.tint,
+                      opacity: pressed ? 0.7 : 1,
+                    },
+                  ]}
+                >
+                  <View style={s.quickIcon}>
+                    <Icon name="target" color={colors.lime} size={22} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[s.text, { fontWeight: "700", color: colors.lime }]}>
+                      {t(
+                        `${readyOrders.length} limit order${readyOrders.length === 1 ? " is" : "s are"} ready`,
+                        `${readyOrders.length} 个限价单已就绪`,
+                      )}
+                    </Text>
+                    <Text style={s.small}>{limitCore.readyText(readyOrders[0])}</Text>
+                  </View>
+                  <Icon name="chevron-right" size={18} color={colors.lime} />
+                </Pressable>
+              ) : null}
               {watchedList.length ? (
                 <Pressable
                   accessibilityRole="button"
@@ -7005,6 +7212,24 @@ function Wallet() {
           <Text style={[s.small, { textAlign: "center" }]}>
             {t("Choose tokens, then review the live route.", "选择代币，然后审核实时路线。")}
           </Text>
+          {limitRun ? (
+            <View style={[s.panel, { borderColor: colors.lime, borderWidth: 1, backgroundColor: colors.tint, gap: 4 }]}>
+              <Text style={[s.text, { fontWeight: "700", color: colors.lime }]}>
+                {t(`Limit order · ${limitRun.side === "buy" ? "Buy" : "Sell"} ${limitRun.asset}`, `限价单 · ${limitRun.side === "buy" ? "买入" : "卖出"} ${limitRun.asset}`)}
+              </Text>
+              <Text style={s.small}>
+                {trade === (limitRun.side === "buy" ? "BUY" : "SELL") && assetSymbol === limitRun.asset
+                  ? t(
+                      "The swap's minimum output is set from your limit price, so it reverts rather than fill worse.",
+                      "兑换的最低收到按你的限价设置，价格变差时将回滚而不会以更差价格成交。",
+                    )
+                  : t(
+                      "This swap no longer matches the order, so the limit won't apply to it.",
+                      "此兑换已与订单不一致，限价不再适用。",
+                    )}
+              </Text>
+            </View>
+          ) : null}
           {scheduleRun?.kind === "buy" ? (
             <View style={[s.panel, { borderColor: colors.lime, borderWidth: 1, backgroundColor: colors.tint, gap: 4 }]}>
               <Text style={[s.text, { fontWeight: "700", color: colors.lime }]}>
@@ -7136,6 +7361,19 @@ function Wallet() {
             </View>
           )}
           {action("Review live route", "审核实时路线", prepareTrade)}
+          {!limitRun && (
+            <Pressable
+              accessibilityRole="button"
+              onPress={() =>
+                openLimitForm("", { asset: assetSymbol, side: trade === "SELL" ? "sell" : "buy" })
+              }
+              style={{ alignSelf: "center", padding: 8 }}
+            >
+              <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                {t("Set a limit order instead", "改为设置限价单")}
+              </Text>
+            </Pressable>
+          )}
         </>
       );
     }
@@ -8250,6 +8488,243 @@ function Wallet() {
             ) : null}
           </View>
           <Button onPress={() => void probeNow()}>{t("Check now", "立即检测")}</Button>
+        </>
+      );
+    }
+    if (page === "limit-orders") {
+      const statusLabel: Record<string, [string, string]> = {
+        open: ["Waiting", "等待中"],
+        ready: ["Ready to sign", "待签名"],
+        filled: ["Filled", "已成交"],
+        cancelled: ["Cancelled", "已取消"],
+        expired: ["Expired", "已过期"],
+      };
+      return (
+        <>
+          <Header
+            title={t("Limit orders", "限价单")}
+            onBack={() => setPage("home")}
+            backLabel={t("Home", "首页")}
+            right={
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("New limit order", "新建限价单")}
+                hitSlop={8}
+                onPress={() => openLimitForm()}
+                style={s.iconDisc}
+              >
+                <Icon name="plus" size={20} color={colors.ink} />
+              </Pressable>
+            }
+          />
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Buy or sell when the price reaches your target. You sign when it's ready, and the swap can't fill worse than your limit.",
+              "价格达到目标时买入或卖出。就绪时由你签名，成交价不会差于你的限价。",
+            )}
+          </Text>
+          {limitList.length === 0 ? (
+            <View style={[s.panel, { alignItems: "center", gap: 12, paddingVertical: 28 }]}>
+              <Icon name="target" size={34} color={colors.lime} />
+              <Text style={[s.text, { textAlign: "center" }]}>
+                {t("No limit orders yet.", "暂无限价单。")}
+              </Text>
+              <Button primary onPress={() => openLimitForm()}>
+                {t("Place a limit order", "设置限价单")}
+              </Button>
+            </View>
+          ) : (
+            limitList.map((order: any) => {
+              const price = prices[order.asset];
+              const live = order.status === "open" || order.status === "ready";
+              return (
+                <View key={order.id} style={[s.panel, { gap: 6, opacity: live ? 1 : 0.75 }]}>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                    <Text style={[s.text, { fontWeight: "800", fontSize: 16, flex: 1 }]}>
+                      {order.side === "buy" ? t(`Buy ${order.asset}`, `买入 ${order.asset}`) : t(`Sell ${order.asset}`, `卖出 ${order.asset}`)}
+                    </Text>
+                    <Text
+                      style={[
+                        s.small,
+                        { fontWeight: "700", color: order.status === "ready" ? colors.lime : live ? colors.green : colors.muted },
+                      ]}
+                    >
+                      {t(...statusLabel[order.status])}
+                    </Text>
+                  </View>
+                  <Text style={s.small}>{limitCore.describeOrder(order)}</Text>
+                  <Row
+                    label={t("Target", "目标价")}
+                    value={`$${order.limit} ${order.side === "buy" ? t("or lower", "或更低") : t("or higher", "或更高")}`}
+                  />
+                  {live && (
+                    <Row label={t("Price now", "当前价格")} value={Number.isFinite(price) ? valueCore.format(price) : "—"} />
+                  )}
+                  {live && (
+                    <Row
+                      label={t("Expires", "到期")}
+                      value={order.expiresAt ? new Date(order.expiresAt).toLocaleString() : t("Until cancelled", "直到取消")}
+                    />
+                  )}
+                  {order.status === "ready" && order.readyAt ? (
+                    <Text style={s.small}>
+                      {t(
+                        `Reached ${Number.isFinite(order.readyPrice) ? valueCore.format(order.readyPrice) : "your target"} at ${new Date(order.readyAt).toLocaleString()}.${Number.isFinite(price) && !limitCore.meetsLimit(order, price) ? " The price has since moved away; your limit still applies when you sign." : ""}`,
+                        `于 ${new Date(order.readyAt).toLocaleString()} 达到 ${Number.isFinite(order.readyPrice) ? valueCore.format(order.readyPrice) : "目标价"}。${Number.isFinite(price) && !limitCore.meetsLimit(order, price) ? "此后价格已偏离；签名时仍按你的限价执行。" : ""}`,
+                      )}
+                    </Text>
+                  ) : null}
+                  {order.fill ? (
+                    <Text style={s.small}>
+                      {t(
+                        `Filled: ${order.side === "buy" ? `spent ${order.fill.spent} ${order.pair}, received ${shortAmount(order.fill.received || "0")} ${order.asset}` : `sold ${order.fill.spent} ${order.asset}, received ${shortAmount(order.fill.received || "0")} ${order.pair}`}${order.fill.estimated ? " (quoted)" : ""}`,
+                        `已成交：${order.side === "buy" ? `花费 ${order.fill.spent} ${order.pair}，收到 ${shortAmount(order.fill.received || "0")} ${order.asset}` : `卖出 ${order.fill.spent} ${order.asset}，收到 ${shortAmount(order.fill.received || "0")} ${order.pair}`}${order.fill.estimated ? "（报价）" : ""}`,
+                      )}
+                    </Text>
+                  ) : null}
+                  <View style={[s.wrap, { marginTop: 8 }]}>
+                    {order.status === "ready" && (
+                      <Button primary onPress={() => void run(async () => executeLimit(order))}>
+                        {order.side === "buy" ? t("Buy now", "立即买入") : t("Sell now", "立即卖出")}
+                      </Button>
+                    )}
+                    {order.status === "open" && (
+                      <Button onPress={() => openLimitForm(order.id)}>{t("Edit", "编辑")}</Button>
+                    )}
+                    {live ? (
+                      <Button
+                        onPress={() =>
+                          void run(async () => {
+                            await store({ ...dataRef.current, limitOrders: limitCore.cancelOrder(dataRef.current.limitOrders, order.id) });
+                          })
+                        }
+                      >
+                        {t("Cancel", "取消订单")}
+                      </Button>
+                    ) : (
+                      <Button
+                        onPress={() =>
+                          void run(async () => {
+                            await store({ ...dataRef.current, limitOrders: limitCore.removeOrder(dataRef.current.limitOrders, order.id) });
+                          })
+                        }
+                      >
+                        {t("Remove", "删除")}
+                      </Button>
+                    )}
+                  </View>
+                </View>
+              );
+            })
+          )}
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              limitCore.PRIVACY_NOTE,
+              "限价单保存在此设备的加密数据中，从不发送给 Tera。Tera 无法替你成交：订单就绪时由你签名，兑换的最低收到按你的限价设置。",
+            )}
+          </Text>
+        </>
+      );
+    }
+    if (page === "limit-edit") {
+      const set = (field: string) => (value: string) => setLimitForm((current) => ({ ...current, [field]: value }));
+      const isBuy = limitForm.side !== "sell";
+      const pair = limitCore.pairFor(limitForm.asset || "");
+      const price = prices[limitForm.asset || ""];
+      const choice = (active: boolean, label: string, onPress: () => void, key: string) => (
+        <Pressable
+          key={key}
+          accessibilityRole="button"
+          accessibilityState={{ selected: active }}
+          onPress={onPress}
+          style={{
+            paddingVertical: 8,
+            paddingHorizontal: 14,
+            borderRadius: 999,
+            borderWidth: 1,
+            borderColor: active ? colors.green : colors.line,
+            backgroundColor: active ? colors.tint : colors.wash,
+          }}
+        >
+          <Text style={{ fontSize: 13, fontWeight: "700", color: active ? colors.green : colors.ink }}>{label}</Text>
+        </Pressable>
+      );
+      const expiryLabels: Record<string, [string, string]> = {
+        day: ["1 day", "1 天"],
+        week: ["1 week", "1 周"],
+        month: ["1 month", "1 个月"],
+        never: ["Until cancelled", "直到取消"],
+      };
+      return (
+        <>
+          <Header
+            title={limitEditId ? t("Edit limit order", "编辑限价单") : t("Limit order", "限价单")}
+            onBack={() => setPage("limit-orders")}
+            backLabel={t("Back", "返回")}
+          />
+          <View style={[s.wrap, { gap: 8 }]}>
+            {choice(isBuy, t("Buy", "买入"), () => set("side")("buy"), "buy")}
+            {choice(!isBuy, t("Sell", "卖出"), () => set("side")("sell"), "sell")}
+          </View>
+          <View style={{ gap: 8 }}>
+            <Text style={s.eyebrow}>{t("TOKEN", "代币")}</Text>
+            <View style={[s.wrap, { gap: 8 }]}>
+              {assets
+                .filter((a) => limitTradable(a.symbol))
+                .map((asset) => choice(limitForm.asset === asset.symbol, asset.symbol, () => set("asset")(asset.symbol), asset.symbol))}
+            </View>
+          </View>
+          <Field
+            label={
+              isBuy
+                ? t(`Spend (${pair})`, `花费（${pair}）`)
+                : t(`Sell (${limitForm.asset || ""})`, `卖出（${limitForm.asset || ""}）`)
+            }
+            value={limitForm.amount || ""}
+            onChangeText={set("amount")}
+            keyboardType="decimal-pad"
+            placeholder="0.00"
+          />
+          <Field
+            label={
+              isBuy
+                ? t("Buy when the price is at or below ($)", "价格低于或等于时买入（美元）")
+                : t("Sell when the price is at or above ($)", "价格高于或等于时卖出（美元）")
+            }
+            value={limitForm.limit || ""}
+            onChangeText={set("limit")}
+            keyboardType="decimal-pad"
+            placeholder={Number.isFinite(price) ? String(price) : "0.00"}
+            hint={
+              Number.isFinite(price)
+                ? t(`Price now: ${valueCore.format(price)}`, `当前价格：${valueCore.format(price)}`)
+                : undefined
+            }
+          />
+          {pair === "ETH" ? (
+            <Text style={s.small}>
+              {t(
+                "TERA trades against ETH, so your dollar limit is turned into ETH at the ETH price when you sign.",
+                "TERA 与 ETH 交易，因此你的美元限价会在签名时按当时的 ETH 价格换算。",
+              )}
+            </Text>
+          ) : null}
+          <View style={{ gap: 8 }}>
+            <Text style={s.eyebrow}>{t("EXPIRES AFTER", "有效期")}</Text>
+            <View style={[s.wrap, { gap: 8 }]}>
+              {Object.keys(limitCore.EXPIRIES).map((key) =>
+                choice(limitForm.expiry === key, t(...expiryLabels[key]), () => set("expiry")(key), key),
+              )}
+            </View>
+          </View>
+          {orderError ? <Text style={[s.small, { color: colors.danger }]}>{orderError}</Text> : null}
+          {action(limitEditId ? "Save order" : "Place order", limitEditId ? "保存订单" : "设置订单", saveLimitForm)}
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Nothing trades on its own. When the price gets there you'll be told, and you sign it then.",
+              "订单不会自动成交。价格到达时会通知你，届时由你签名。",
+            )}
+          </Text>
         </>
       );
     }
@@ -11503,6 +11978,12 @@ function Wallet() {
             icon: "eye-outline",
             label: t("Watching", "观察钱包"),
             onPress: () => setPage("watching"),
+          },
+          {
+            key: "limit-orders",
+            icon: "target",
+            label: t("Limit orders", "限价单"),
+            onPress: () => setPage("limit-orders"),
           },
           {
             key: "bridge",
