@@ -32,7 +32,7 @@ import { StatusBar } from "expo-status-bar";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "./src/speech";
-import { erc20Abi, formatUnits, parseUnits, zeroAddress, isAddress, getAddress, type Address } from "viem";
+import { erc20Abi, formatUnits, parseUnits, zeroAddress, isAddress, getAddress, type Address, type Hex } from "viem";
 import { api } from "./src/api";
 import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
@@ -655,7 +655,9 @@ function Wallet() {
     [slippageBps, setSlippageBps] = useState<number>(slippageCore.DEFAULT_SLIPPAGE_BPS),
     // The scheduled payment the send screen was opened for, if any. Signing that
     // send marks this one payment paid; leaving the send screen forgets it.
-    [scheduleRun, setScheduleRun] = useState<null | { id: string; date: string; label: string }>(null),
+    [scheduleRun, setScheduleRun] = useState<
+      null | { id: string; date: string; label: string; kind: "payment" | "buy"; asset: string; amount: string }
+    >(null),
     [scheduleForm, setScheduleForm] = useState<Record<string, string>>({}),
     [scheduleEditId, setScheduleEditId] = useState(""),
     [scheduleError, setScheduleError] = useState(""),
@@ -1403,7 +1405,7 @@ function Wallet() {
   const dueScheduledKey = dueScheduled.map(schedulesCore.reminderKey).join(",");
   const scheduleAnnounced = useRef(new Set<string>());
   useEffect(() => {
-    if (page !== "send") setScheduleRun(null);
+    if (page !== "send" && page !== "swap") setScheduleRun(null);
   }, [page]);
   // One reminder per due payment per session, from the browser's own
   // notifications when the app is in the background. The home card shows them
@@ -1414,7 +1416,9 @@ function Wallet() {
       if (scheduleAnnounced.current.has(key)) continue;
       scheduleAnnounced.current.add(key);
       notify.showSystem(
-        t("Scheduled payment due", "定期付款到期"),
+        due.schedule.kind === "buy"
+          ? t("Recurring buy due", "定期买入到期")
+          : t("Scheduled payment due", "定期付款到期"),
         schedulesCore.reminderText(due, scheduleToday, scheduleName(due.schedule)),
         key,
         () => setPage("scheduled"),
@@ -1428,18 +1432,20 @@ function Wallet() {
       (schedule.tag ? tags.display(schedule.tag) || "" : `${schedule.recipient.slice(0, 6)}…${schedule.recipient.slice(-4)}`)
     );
   }
-  function openScheduleForm(id = "") {
+  function openScheduleForm(id = "", kind: "payment" | "buy" = "payment") {
     const existing = id ? schedulesCore.scheduleFor(dataRef.current.schedules, id) : null;
     setScheduleEditId(existing ? existing.id : "");
     setScheduleError("");
+    const formKind = existing?.kind || kind;
     setScheduleForm({
+      kind: formKind,
       label: existing?.label || "",
       recipient: existing
         ? (existing.tag && tagsAvailable() ? tags.display(existing.tag) || "" : existing.recipient)
         : "",
-      asset: existing?.asset || "USDG",
+      asset: existing?.asset || (formKind === "buy" ? "TERA" : "USDG"),
       amount: existing?.amount || "",
-      frequency: existing?.frequency || "monthly",
+      frequency: existing?.frequency || (formKind === "buy" ? "weekly" : "monthly"),
       start: existing?.start || schedulesCore.today(),
       end: existing?.end || "",
     });
@@ -1454,7 +1460,7 @@ function Wallet() {
     let tag = "";
     // A tag is resolved now so the schedule holds an address, and again when
     // each payment is made, because a tag can change hands in between.
-    if (recipientAddress.startsWith("@")) {
+    if (scheduleForm.kind !== "buy" && recipientAddress.startsWith("@")) {
       const found = await tags.resolveTag(recipientAddress);
       guard();
       tag = found.tag;
@@ -1477,7 +1483,11 @@ function Wallet() {
     guard();
     setPage("scheduled");
     setNotice({
-      title: existing ? t("Schedule updated", "定期付款已更新") : t("Payment scheduled", "已设置定期付款"),
+      title: existing
+        ? t("Schedule updated", "定期计划已更新")
+        : result.schedule.kind === "buy"
+          ? t("Recurring buy set", "已设置定期买入")
+          : t("Payment scheduled", "已设置定期付款"),
       body: t(
         `${result.schedule.label}: ${schedulesCore.describeFrequency(result.schedule).toLowerCase()}, first on ${result.schedule.start}. You'll be reminded when it's due, and you sign each payment.`,
         `${result.schedule.label}：首次付款日期 ${result.schedule.start}。到期时会提醒你，每笔付款都需你签名。`,
@@ -1485,8 +1495,14 @@ function Wallet() {
       tone: "success",
     });
   }
-  async function settleScheduled(id: string, date: string, status: "paid" | "skipped", hash = "") {
-    const result = schedulesCore.settle(dataRef.current.schedules, id, date, { status, hash });
+  async function settleScheduled(
+    id: string,
+    date: string,
+    status: "paid" | "skipped",
+    hash = "",
+    fill: { spent?: string; received?: string; estimated?: boolean } = {},
+  ) {
+    const result = schedulesCore.settle(dataRef.current.schedules, id, date, { status, hash, ...fill });
     if (!result.ok) throw new Error(result.reason);
     await store({ ...dataRef.current, schedules: result.schedules });
   }
@@ -1494,6 +1510,30 @@ function Wallet() {
   function payScheduled(schedule: any) {
     const next = schedulesCore.nextPayment(schedule);
     check(next, t("This schedule has no payments left.", "此定期付款已无剩余付款。"));
+    if (schedule.kind === "buy") {
+      check(
+        assets.some((a) => a.symbol === schedule.asset),
+        t(`${schedule.asset} is not available to buy right now.`, `${schedule.asset} 目前无法买入。`),
+      );
+      // The swap screen, filled in. The owner reads the live quote and signs.
+      setError("");
+      setSwapReturnPage("scheduled");
+      setSwapReceivePicker(false);
+      setTrade("BUY");
+      setAssetSymbol(schedule.asset);
+      clearAmount();
+      setAmount(schedule.amount);
+      setPage("swap");
+      setScheduleRun({
+        id: schedule.id,
+        date: next!.date,
+        label: schedule.label,
+        kind: "buy",
+        asset: schedule.asset,
+        amount: schedule.amount,
+      });
+      return;
+    }
     check(
       assets.some((a) => a.symbol === schedule.asset),
       t(`${schedule.asset} is not available to send right now.`, `${schedule.asset} 目前无法发送。`),
@@ -1515,7 +1555,14 @@ function Wallet() {
     // The recipient step, so a tag is resolved again and lookalike checks run.
     setFlowStep(3);
     setPage("send");
-    setScheduleRun({ id: schedule.id, date: next!.date, label: schedule.label });
+    setScheduleRun({
+      id: schedule.id,
+      date: next!.date,
+      label: schedule.label,
+      kind: "payment",
+      asset: schedule.asset,
+      amount: schedule.amount,
+    });
   }
   const inactivity = useRef(Date.now());
   const backgroundLock = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -2583,7 +2630,7 @@ function Wallet() {
     const proposal = { ...result, intent: checked, createdAt: Date.now() };
     await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, proposal] });
     guard();
-    const run = scheduleRun;
+    const run = scheduleRun?.kind === "payment" ? scheduleRun : null;
     showProposal(proposal, {
       note: notesCore.cleanNote(payNote) || undefined,
       ...(run
@@ -2887,7 +2934,58 @@ function Wallet() {
     const p = { ...result, intent: checked, createdAt: Date.now() };
     await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, p] });
     guard();
-    showProposal(p);
+    // Tied to the recurring buy only while it is still the buy it describes.
+    const run =
+      scheduleRun?.kind === "buy" && trade === "BUY" && selectedAsset.symbol === scheduleRun.asset
+        ? scheduleRun
+        : null;
+    const quote = p.preparedTransaction?.quote;
+    const tokenOut = selectedAsset.address;
+    const spent = amount;
+    showProposal(
+      p,
+      run && quote
+        ? {
+            afterSubmitted: async (hash: string) => {
+              const quoted = formatUnits(BigInt(quote.amountOutWei), quote.decimalsOut);
+              await settleScheduled(run.id, run.date, "paid", hash, {
+                spent,
+                received: quoted,
+                estimated: true,
+              }).catch(() => {});
+              void recordBuyFill(run.id, hash, tokenOut, quote.decimalsOut);
+            },
+          }
+        : {},
+    );
+  }
+  /**
+   * Replace a recurring buy's quoted amount with what the transaction actually
+   * delivered: the token transfers to this wallet in its receipt. Runs in the
+   * background after signing; if the receipt cannot be read, the quoted amount
+   * stays and stays marked as an estimate.
+   */
+  async function recordBuyFill(id: string, hash: string, token: string, decimals: number) {
+    try {
+      if (token === zeroAddress) return;
+      const receipt = await client.waitForTransactionReceipt({ hash: hash as Hex, timeout: 180_000 });
+      if (receipt.status !== "success") return;
+      const transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+      const toTopic = `0x${owner.slice(2).toLowerCase().padStart(64, "0")}`;
+      let total = 0n;
+      for (const log of receipt.logs) {
+        if (log.address.toLowerCase() !== token.toLowerCase()) continue;
+        if (log.topics[0]?.toLowerCase() !== transferTopic || log.topics[2]?.toLowerCase() !== toTopic) continue;
+        total += BigInt(log.data);
+      }
+      if (total <= 0n) return;
+      await store({
+        ...dataRef.current,
+        schedules: schedulesCore.recordFill(dataRef.current.schedules, id, hash, formatUnits(total, decimals)),
+      });
+    } catch {
+      // The quoted figure remains, marked as an estimate.
+    }
   }
   async function preparePrivateSend(guard: () => void) {
     const asset = selectedAsset.symbol;
@@ -5530,8 +5628,8 @@ function Wallet() {
                       {(() => {
                         const total = dueScheduled.reduce((sum: number, item: any) => sum + item.count, 0);
                         return t(
-                          `${total} scheduled payment${total === 1 ? " is" : "s are"} due`,
-                          `${total} 笔定期付款到期`,
+                          `${total} scheduled ${total === 1 ? "item is" : "items are"} due`,
+                          `${total} 项定期计划到期`,
                         );
                       })()}
                     </Text>
@@ -6907,6 +7005,24 @@ function Wallet() {
           <Text style={[s.small, { textAlign: "center" }]}>
             {t("Choose tokens, then review the live route.", "选择代币，然后审核实时路线。")}
           </Text>
+          {scheduleRun?.kind === "buy" ? (
+            <View style={[s.panel, { borderColor: colors.lime, borderWidth: 1, backgroundColor: colors.tint, gap: 4 }]}>
+              <Text style={[s.text, { fontWeight: "700", color: colors.lime }]}>
+                {t(`Recurring buy · ${scheduleRun.label}`, `定期买入 · ${scheduleRun.label}`)}
+              </Text>
+              <Text style={s.small}>
+                {trade === "BUY" && assetSymbol === scheduleRun.asset
+                  ? t(
+                      `Due ${scheduleRun.date}. Signing this swap records the buy. You'll see the live quote before you sign.`,
+                      `到期日 ${scheduleRun.date}。签名此兑换即记录本次买入，签名前会显示实时报价。`,
+                    )
+                  : t(
+                      `This swap no longer matches the ${scheduleRun.asset} buy, so it won't be recorded against it.`,
+                      `此兑换已与 ${scheduleRun.asset} 定期买入不一致，不会计入该计划。`,
+                    )}
+              </Text>
+            </View>
+          ) : null}
           <View style={s.panel}>
             <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
               <Text style={s.eyebrow}>{t("YOU PAY", "你支付")}</Text>
@@ -8403,8 +8519,8 @@ function Wallet() {
           />
           <Text style={[s.small, { textAlign: "center" }]}>
             {t(
-              "Tera reminds you when a payment is due. You review and sign each one.",
-              "付款到期时 Tera 会提醒你，每笔付款都由你审核并签名。",
+              "Payments and recurring buys. Tera reminds you when one is due; you review and sign each one.",
+              "定期付款与定期买入。到期时 Tera 会提醒你，每一笔都由你审核并签名。",
             )}
           </Text>
           {list.length === 0 ? (
@@ -8418,6 +8534,9 @@ function Wallet() {
               </Text>
               <Button primary onPress={() => openScheduleForm()}>
                 {t("Schedule a payment", "设置定期付款")}
+              </Button>
+              <Button onPress={() => openScheduleForm("", "buy")}>
+                {t("Set up a recurring buy", "设置定期买入")}
               </Button>
             </View>
           ) : (
@@ -8452,17 +8571,54 @@ function Wallet() {
                             : t("Scheduled", "已安排")}
                     </Text>
                   </View>
-                  <Text style={s.small}>{schedulesCore.describeFrequency(schedule)}</Text>
-                  <Row label={t("Amount", "金额")} value={`${schedule.amount} ${schedule.asset}`} />
-                  <Row label={t("To", "收款方")} value={scheduleName(schedule)} />
-                  <Row label={t("Address", "地址")} value={schedule.recipient} />
+                  <Text style={s.small}>
+                    {schedule.kind === "buy" ? t("Recurring buy · ", "定期买入 · ") : ""}
+                    {schedulesCore.describeFrequency(schedule)}
+                  </Text>
+                  {schedule.kind === "buy" ? (
+                    (() => {
+                      const progress = schedulesCore.buyProgress(schedule);
+                      const average =
+                        progress.average === null
+                          ? "—"
+                          : schedule.payAsset === "USDG"
+                            ? `${formatFiat(progress.average, "USD")} / ${schedule.asset}`
+                            : `${shortAmount(String(progress.average))} ${schedule.payAsset} / ${schedule.asset}`;
+                      return (
+                        <>
+                          <Row label={t("Buy", "买入")} value={schedule.asset} />
+                          <Row label={t("Each time", "每次花费")} value={`${schedule.amount} ${schedule.payAsset}`} />
+                          <Row
+                            label={t("Bought so far", "累计买入")}
+                            value={`${shortAmount(progress.received)} ${schedule.asset}${progress.buys ? t(` · ${progress.buys} buys`, ` · ${progress.buys} 次`) : ""}`}
+                          />
+                          <Row label={t("Spent so far", "累计花费")} value={`${shortAmount(progress.spent)} ${schedule.payAsset}`} />
+                          <Row
+                            label={t("Average price", "平均价格")}
+                            value={`${average}${progress.estimated ? t(" (est.)", "（估算）") : ""}`}
+                          />
+                        </>
+                      );
+                    })()
+                  ) : (
+                    <>
+                      <Row label={t("Amount", "金额")} value={`${schedule.amount} ${schedule.asset}`} />
+                      <Row label={t("To", "收款方")} value={scheduleName(schedule)} />
+                      <Row label={t("Address", "地址")} value={schedule.recipient} />
+                    </>
+                  )}
                   <Row label={t("Next payment", "下次付款")} value={nextLine} />
                   {schedule.end ? <Row label={t("Ends", "结束日期")} value={schedule.end} /> : null}
                   {schedule.log.slice(0, 3).map((entry: any) => (
                     <Text key={`${entry.date}-${entry.status}`} style={s.small}>
                       {entry.date} ·{" "}
                       {entry.status === "paid"
-                        ? t(`Paid${entry.hash ? ` · ${entry.hash.slice(0, 10)}…` : ""}`, `已支付${entry.hash ? ` · ${entry.hash.slice(0, 10)}…` : ""}`)
+                        ? schedule.kind === "buy" && entry.received
+                          ? t(
+                              `Bought ${shortAmount(entry.received)} ${schedule.asset}${entry.estimated ? " (quoted)" : ""} for ${entry.spent} ${schedule.payAsset}`,
+                              `以 ${entry.spent} ${schedule.payAsset} 买入 ${shortAmount(entry.received)} ${schedule.asset}${entry.estimated ? "（报价）" : ""}`,
+                            )
+                          : t(`Paid${entry.hash ? ` · ${entry.hash.slice(0, 10)}…` : ""}`, `已支付${entry.hash ? ` · ${entry.hash.slice(0, 10)}…` : ""}`)
                         : t("Skipped", "已跳过")}
                     </Text>
                   ))}
@@ -8470,7 +8626,7 @@ function Wallet() {
                     {due && next ? (
                       <>
                         <Button primary onPress={() => void run(async () => payScheduled(schedule))}>
-                          {t("Pay now", "立即支付")}
+                          {schedule.kind === "buy" ? t("Buy now", "立即买入") : t("Pay now", "立即支付")}
                         </Button>
                         <Button
                           onPress={() =>
@@ -8478,7 +8634,7 @@ function Wallet() {
                               await settleScheduled(schedule.id, next.date, "skipped");
                               setNotice({
                                 title: t("Payment skipped", "已跳过付款"),
-                                body: t(`The ${next.date} payment was skipped. Nothing was sent.`, `${next.date} 的付款已跳过，未发送任何资金。`),
+                                body: t(`The ${next.date} ${schedule.kind === "buy" ? "buy" : "payment"} was skipped. Nothing was sent.`, `${next.date} 的${schedule.kind === "buy" ? "买入" : "付款"}已跳过，未发送任何资金。`),
                                 tone: "success",
                               });
                             })
@@ -8536,6 +8692,7 @@ function Wallet() {
     }
     if (page === "schedule-edit") {
       const set = (field: string) => (value: string) => setScheduleForm((current) => ({ ...current, [field]: value }));
+      const isBuy = scheduleForm.kind === "buy";
       const choice = (active: boolean, label: string, onPress: () => void, key: string) => (
         <Pressable
           key={key}
@@ -8562,34 +8719,72 @@ function Wallet() {
       return (
         <>
           <Header
-            title={scheduleEditId ? t("Edit schedule", "编辑定期付款") : t("Schedule a payment", "设置定期付款")}
+            title={
+              scheduleEditId
+                ? t("Edit schedule", "编辑定期计划")
+                : isBuy
+                  ? t("Recurring buy", "定期买入")
+                  : t("Schedule a payment", "设置定期付款")
+            }
             onBack={() => setPage("scheduled")}
             backLabel={t("Back", "返回")}
           />
+          {!scheduleEditId && (
+            <View style={[s.wrap, { gap: 8 }]}>
+              {choice(!isBuy, t("Payment", "付款"), () => setScheduleForm((current) => ({ ...current, kind: "payment", asset: "USDG", frequency: "monthly" })), "payment")}
+              {choice(isBuy, t("Recurring buy", "定期买入"), () => setScheduleForm((current) => ({ ...current, kind: "buy", asset: "TERA", frequency: "weekly" })), "buy")}
+            </View>
+          )}
+          {isBuy && (
+            <Text style={s.small}>
+              {t(
+                "Buy a fixed amount on a schedule (dollar-cost averaging). When it's due, the swap opens filled in and you sign at the live price.",
+                "按计划定额买入（定投）。到期时兑换页面会自动填好，你按实时价格签名。",
+              )}
+            </Text>
+          )}
           <Field
             label={t("Name", "名称")}
             value={scheduleForm.label || ""}
             onChangeText={set("label")}
             maxLength={schedulesCore.LIMITS.maxLabel}
             autoCapitalize="sentences"
-            placeholder={t("e.g. Rent, Salary, Allowance", "例如：房租、工资、零花钱")}
+            placeholder={
+              isBuy ? t("e.g. Weekly TERA", "例如：每周买 TERA") : t("e.g. Rent, Salary, Allowance", "例如：房租、工资、零花钱")
+            }
           />
-          <Field
-            label={tagsAvailable() ? t("Recipient address or @tag", "收款地址或 @标签") : t("Recipient address", "收款地址")}
-            value={scheduleForm.recipient || ""}
-            onChangeText={set("recipient")}
-            placeholder={tagsAvailable() ? "0x… / @astra" : "0x…"}
-          />
+          {!isBuy && (
+            <Field
+              label={tagsAvailable() ? t("Recipient address or @tag", "收款地址或 @标签") : t("Recipient address", "收款地址")}
+              value={scheduleForm.recipient || ""}
+              onChangeText={set("recipient")}
+              placeholder={tagsAvailable() ? "0x… / @astra" : "0x…"}
+            />
+          )}
           <View style={{ gap: 8 }}>
-            <Text style={s.eyebrow}>{t("ASSET", "资产")}</Text>
+            <Text style={s.eyebrow}>{isBuy ? t("BUY", "买入") : t("ASSET", "资产")}</Text>
             <View style={[s.wrap, { gap: 8 }]}>
-              {assets.map((asset) =>
+              {(isBuy
+                ? assets.filter(
+                    (a) =>
+                      a.symbol !== "USDG" &&
+                      (a.symbol === "ETH" || a.symbol === "TERA" || listedSymbols.includes(a.symbol)),
+                  )
+                : assets
+              ).map((asset) =>
                 choice(scheduleForm.asset === asset.symbol, asset.symbol, () => set("asset")(asset.symbol), asset.symbol),
               )}
             </View>
           </View>
           <Field
-            label={t("Amount", "金额")}
+            label={
+              isBuy
+                ? t(
+                    `Spend each time (${schedulesCore.payAssetFor(scheduleForm.asset || "")})`,
+                    `每次花费（${schedulesCore.payAssetFor(scheduleForm.asset || "")}）`,
+                  )
+                : t("Amount", "金额")
+            }
             value={scheduleForm.amount || ""}
             onChangeText={set("amount")}
             keyboardType="decimal-pad"
@@ -8617,8 +8812,8 @@ function Wallet() {
           />
           {scheduleError ? <Text style={[s.small, { color: colors.danger }]}>{scheduleError}</Text> : null}
           {action(
-            scheduleEditId ? "Save changes" : "Schedule payment",
-            scheduleEditId ? "保存更改" : "设置定期付款",
+            scheduleEditId ? "Save changes" : isBuy ? "Set up recurring buy" : "Schedule payment",
+            scheduleEditId ? "保存更改" : isBuy ? "设置定期买入" : "设置定期付款",
             saveScheduleForm,
           )}
           <Text style={[s.small, { textAlign: "center" }]}>
@@ -9638,7 +9833,7 @@ function Wallet() {
               detail={
                 dueScheduled.length
                   ? t(`${dueScheduled.length} due now`, `${dueScheduled.length} 笔已到期`)
-                  : t("Rent, salaries and other regular payments", "房租、工资等定期付款")
+                  : t("Regular payments and recurring buys", "定期付款与定期买入")
               }
               onPress={() => setPage("scheduled")}
             />

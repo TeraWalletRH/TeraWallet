@@ -32,11 +32,25 @@
 //   and the review shows the address that will be signed.
 //
 //   Robinhood Chain only, the same as contacts and tags.
+//
+// A schedule is one of two kinds. A payment sends an asset to someone. A buy
+// (dollar-cost averaging) spends a fixed amount on an asset at each date: when
+// it is due the swap screen opens filled in, the owner reads the live quote and
+// signs. Each completed buy records what was spent and what was received, so
+// the owner can see their average price. The amount received is first the
+// quoted figure and is replaced by what the transaction actually delivered
+// once its receipt is read; until then it is marked as an estimate.
 
 export const ScheduleError = class ScheduleError extends Error {};
 
 /** The published limits, quoted in the form and in the tests. */
 export const LIMITS = { maxSchedules: 50, maxLabel: 40, maxLog: 24 };
+
+/** What a schedule does at each date. */
+export const KINDS = ["payment", "buy"];
+
+/** What a buy of `asset` is paid with: ETH for TERA, USDG for everything else. */
+export const payAssetFor = (asset) => (asset === "TERA" ? "ETH" : "USDG");
 
 /** How often a schedule repeats. Days between payments, or monthly by date. */
 export const FREQUENCIES = {
@@ -210,18 +224,29 @@ const cleanTag = (text) => {
  */
 export function parseSchedule(input, { owner = "", existing = null, now = Date.now() } = {}) {
   const fail = (reason) => ({ ok: false, schedule: null, reason });
+  const kind = input?.kind === "buy" ? "buy" : "payment";
   const label = cleanLabel(input?.label);
-  if (!label) return fail("Give the payment a name, like Rent.");
+  if (!label)
+    return fail(
+      kind === "buy"
+        ? "Give the buy a name, like Weekly TERA."
+        : "Give the payment a name, like Rent.",
+    );
 
-  const recipient = String(input?.recipient ?? "")
-    .trim()
-    .toLowerCase();
-  if (!ADDRESS.test(recipient)) return fail("Enter a valid recipient address.");
-  if (owner && recipient === String(owner).toLowerCase())
-    return fail("This is your own wallet. Choose who the payment goes to.");
+  let recipient = "";
+  if (kind === "payment") {
+    recipient = String(input?.recipient ?? "")
+      .trim()
+      .toLowerCase();
+    if (!ADDRESS.test(recipient)) return fail("Enter a valid recipient address.");
+    if (owner && recipient === String(owner).toLowerCase())
+      return fail("This is your own wallet. Choose who the payment goes to.");
+  }
 
   const asset = String(input?.asset ?? "").trim();
-  if (!SYMBOL.test(asset)) return fail("Choose the asset to pay in.");
+  if (!SYMBOL.test(asset))
+    return fail(kind === "buy" ? "Choose what to buy." : "Choose the asset to pay in.");
+  if (kind === "buy" && asset === "USDG") return fail("Choose an asset other than USDG to buy.");
 
   const amount = String(input?.amount ?? "").trim();
   if (!AMOUNT.test(amount) || !/[1-9]/.test(amount)) return fail("Enter an amount above zero.");
@@ -242,10 +267,14 @@ export function parseSchedule(input, { owner = "", existing = null, now = Date.n
   const sameTiming = existing && existing.start === start && existing.frequency === frequency;
   const schedule = {
     id: existing?.id || newId(now),
+    kind,
     label,
     recipient,
-    tag: cleanTag(input?.tag),
+    tag: kind === "payment" ? cleanTag(input?.tag) : "",
     asset,
+    // What a buy spends, fixed by the asset so a stored schedule cannot name a
+    // pair the swap screen does not offer.
+    payAsset: kind === "buy" ? payAssetFor(asset) : asset,
     amount,
     frequency,
     start,
@@ -255,8 +284,10 @@ export function parseSchedule(input, { owner = "", existing = null, now = Date.n
     // cannot point at a date the new timing never has.
     settled: sameTiming ? existing.settled || 0 : 0,
     log: existing?.log ? existing.log.slice(0, LIMITS.maxLog) : [],
+    totals: kind === "buy" ? cleanTotals(existing?.totals) : undefined,
     createdAt: existing?.createdAt || now,
   };
+  if (kind !== "buy") delete schedule.totals;
   return { ok: true, schedule, reason: "" };
 }
 
@@ -287,6 +318,9 @@ export function cleanSchedules(list) {
               ? { hash: item.hash.toLowerCase() }
               : {}),
             at: Number.isSafeInteger(item.at) ? item.at : 0,
+            ...(isAmount(item.spent) ? { spent: item.spent } : {}),
+            ...(isAmount(item.received) ? { received: item.received } : {}),
+            ...(item.estimated ? { estimated: true } : {}),
           }))
           .slice(0, LIMITS.maxLog)
       : [];
@@ -332,7 +366,12 @@ export const scheduleFor = (schedules, id) =>
  * Only the payment that is actually next can be answered, so a payment cannot
  * be marked twice by a second tap or a stale screen.
  */
-export function settle(schedules, id, date, { status, hash = "", now = Date.now() }) {
+export function settle(
+  schedules,
+  id,
+  date,
+  { status, hash = "", spent = "", received = "", estimated = false, now = Date.now() },
+) {
   const current = cleanSchedules(schedules);
   const schedule = current.find((entry) => entry.id === id);
   if (!schedule)
@@ -349,6 +388,17 @@ export function settle(schedules, id, date, { status, hash = "", now = Date.now(
     settled: next.index + 1,
     log: [entry, ...schedule.log].slice(0, LIMITS.maxLog),
   };
+  // A completed buy adds to the running totals, which outlive the capped log.
+  if (schedule.kind === "buy" && status === "paid" && isAmount(spent) && isAmount(received)) {
+    entry.spent = spent;
+    entry.received = received;
+    if (estimated) entry.estimated = true;
+    updated.totals = {
+      buys: schedule.totals.buys + 1,
+      spent: addDecimal(schedule.totals.spent, spent),
+      received: addDecimal(schedule.totals.received, received),
+    };
+  }
   return {
     ok: true,
     schedules: current.map((item) => (item.id === id ? updated : item)),
@@ -377,6 +427,86 @@ export function sortedSchedules(schedules) {
   return keyed;
 }
 
+const isAmount = (value) => typeof value === "string" && AMOUNT.test(value);
+
+/**
+ * Exact decimal addition on strings, so totals of token amounts never pick up
+ * floating-point error however many buys are added.
+ */
+export function addDecimal(a, b) {
+  const [ai, af = ""] = String(a).split(".");
+  const [bi, bf = ""] = String(b).split(".");
+  const places = Math.max(af.length, bf.length);
+  const sum = BigInt(ai + af.padEnd(places, "0")) + BigInt(bi + bf.padEnd(places, "0"));
+  return fromScaled(sum, places);
+}
+
+/** `a - b` for decimal strings, never below zero. */
+function subtractDecimal(a, b) {
+  const [ai, af = ""] = String(a).split(".");
+  const [bi, bf = ""] = String(b).split(".");
+  const places = Math.max(af.length, bf.length);
+  const diff = BigInt(ai + af.padEnd(places, "0")) - BigInt(bi + bf.padEnd(places, "0"));
+  return fromScaled(diff < 0n ? 0n : diff, places);
+}
+
+function fromScaled(value, places) {
+  if (!places) return value.toString();
+  const text = value.toString().padStart(places + 1, "0");
+  const whole = text.slice(0, -places);
+  const fraction = text.slice(-places).replace(/0+$/, "");
+  return fraction ? `${whole}.${fraction}` : whole;
+}
+
+function cleanTotals(totals) {
+  return {
+    buys: Number.isSafeInteger(totals?.buys) && totals.buys >= 0 ? totals.buys : 0,
+    spent: isAmount(totals?.spent) ? totals.spent : "0",
+    received: isAmount(totals?.received) ? totals.received : "0",
+  };
+}
+
+/**
+ * Replace a buy's quoted amount with what its transaction actually delivered,
+ * read from the receipt. Only an entry still marked as an estimate changes, so
+ * reading the same receipt twice changes nothing the second time.
+ */
+export function recordFill(schedules, id, hash, received) {
+  const current = cleanSchedules(schedules);
+  const schedule = current.find((entry) => entry.id === id);
+  const target = String(hash).toLowerCase();
+  const index = schedule?.log.findIndex((item) => item.hash === target) ?? -1;
+  if (!schedule || index < 0 || !isAmount(received)) return current;
+  const entry = schedule.log[index];
+  if (!entry.estimated || !isAmount(entry.received)) return current;
+  const log = [...schedule.log];
+  log[index] = { ...entry, received, estimated: undefined };
+  delete log[index].estimated;
+  const totals = {
+    ...schedule.totals,
+    received: addDecimal(subtractDecimal(schedule.totals.received, entry.received), received),
+  };
+  return current.map((item) => (item.id === id ? { ...schedule, log, totals } : item));
+}
+
+/**
+ * How a recurring buy is going: number of buys, totals, and the average price
+ * paid per unit of the asset, in the asset it was paid with. `average` is null
+ * before anything has been received. `estimated` says whether any buy in the
+ * recent log still carries a quoted rather than a delivered amount.
+ */
+export function buyProgress(schedule) {
+  const totals = cleanTotals(schedule?.totals);
+  const received = Number(totals.received);
+  return {
+    buys: totals.buys,
+    spent: totals.spent,
+    received: totals.received,
+    average: received > 0 ? Number(totals.spent) / received : null,
+    estimated: (schedule?.log || []).some((item) => item.estimated),
+  };
+}
+
 /** One line for a reminder: "Rent: 500 USDG to @landlord is due today." */
 export function reminderText(due, on, recipientName = "") {
   const { schedule, date, count } = due;
@@ -386,6 +516,8 @@ export function reminderText(due, on, recipientName = "") {
     days === 0 ? "is due today" : days === -1 ? "was due yesterday" : `was due on ${date}`;
   const more =
     count > 1 ? ` ${count - 1} more after it ${count === 2 ? "is" : "are"} also due.` : "";
+  if (schedule.kind === "buy")
+    return `${schedule.label}: buy ${schedule.asset} with ${schedule.amount} ${schedule.payAsset} ${when}.${more}`;
   return `${schedule.label}: ${schedule.amount} ${schedule.asset} to ${who} ${when}.${more}`;
 }
 
