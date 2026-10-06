@@ -2,6 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   FREQUENCIES,
+  addDecimal,
+  buyProgress,
+  recordFill,
   LIMITS,
   addDays,
   cleanSchedules,
@@ -262,4 +265,122 @@ test("reminders name the payee and when it fell due", () => {
   assert.match(reminderText(plain, "2026-10-05"), /to 0xaaaa…aaaa is due today/);
   assert.match(reminderText(plain, "2026-10-05", "Mum"), /to Mum is due today/);
   assert.ok(Object.keys(FREQUENCIES).length === 3);
+});
+
+test("a recurring buy needs no recipient and pays with the right asset", () => {
+  const buy = parseSchedule(
+    {
+      kind: "buy",
+      label: "Weekly TERA",
+      asset: "TERA",
+      amount: "0.01",
+      frequency: "weekly",
+      start: "2026-10-05",
+    },
+    { owner, now: NOW },
+  );
+  assert.ok(buy.ok, buy.reason);
+  assert.equal(buy.schedule.kind, "buy");
+  assert.equal(buy.schedule.recipient, "");
+  assert.equal(buy.schedule.payAsset, "ETH");
+  assert.deepEqual(buy.schedule.totals, { buys: 0, spent: "0", received: "0" });
+  const stock = parseSchedule(
+    {
+      kind: "buy",
+      label: "SPCX",
+      asset: "SPCX",
+      amount: "50",
+      frequency: "monthly",
+      start: "2026-10-05",
+    },
+    { owner, now: NOW },
+  ).schedule;
+  assert.equal(stock.payAsset, "USDG");
+  const usdg = parseSchedule(
+    {
+      kind: "buy",
+      label: "No",
+      asset: "USDG",
+      amount: "50",
+      frequency: "monthly",
+      start: "2026-10-05",
+    },
+    { owner, now: NOW },
+  );
+  assert.equal(usdg.ok, false);
+  assert.match(usdg.reason, /other than USDG/);
+  // A payment written before buys existed is still a payment.
+  assert.equal(make().kind, "payment");
+  assert.equal(make().totals, undefined);
+});
+
+test("buys add up exactly, and a receipt replaces the quoted amount once", () => {
+  let list = [
+    parseSchedule(
+      {
+        kind: "buy",
+        label: "DCA",
+        asset: "SPCX",
+        amount: "50",
+        frequency: "weekly",
+        start: "2026-10-05",
+      },
+      { owner, now: NOW },
+    ).schedule,
+  ];
+  const id = list[0].id;
+  const [due] = duePayments(list, "2026-10-05");
+  assert.equal(reminderText(due, "2026-10-05"), "DCA: buy SPCX with 50 USDG is due today.");
+
+  list = settle(list, id, "2026-10-05", {
+    status: "paid",
+    hash,
+    spent: "50",
+    received: "0.1",
+    estimated: true,
+    now: NOW,
+  }).schedules;
+  const second = `0x${"c".repeat(64)}`;
+  list = settle(list, id, "2026-10-12", {
+    status: "paid",
+    hash: second,
+    spent: "50",
+    received: "0.2",
+    estimated: true,
+    now: NOW,
+  }).schedules;
+  let progress = buyProgress(list[0]);
+  // 0.1 + 0.2 is exactly 0.3 here, not 0.30000000000000004.
+  assert.deepEqual(
+    { buys: progress.buys, spent: progress.spent, received: progress.received },
+    { buys: 2, spent: "100", received: "0.3" },
+  );
+  assert.equal(progress.estimated, true);
+
+  // The first buy actually delivered 0.098.
+  list = recordFill(list, id, hash, "0.098");
+  list = recordFill(list, id, hash, "0.5"); // a second read changes nothing
+  progress = buyProgress(list[0]);
+  assert.equal(progress.received, "0.298");
+  assert.equal(list[0].log.find((e) => e.hash === hash).estimated, undefined);
+  list = recordFill(list, id, second, "0.2");
+  progress = buyProgress(list[0]);
+  assert.equal(progress.estimated, false);
+  assert.ok(Math.abs(progress.average - 100 / 0.298) < 1e-9);
+
+  // A skipped buy spends nothing and receives nothing.
+  list = settle(list, id, "2026-10-19", { status: "skipped", now: NOW }).schedules;
+  assert.equal(buyProgress(list[0]).buys, 2);
+  // Totals survive a round trip through stored data.
+  assert.deepEqual(cleanSchedules(JSON.parse(JSON.stringify(list)))[0].totals, list[0].totals);
+});
+
+test("decimal addition is exact", () => {
+  assert.equal(addDecimal("0.1", "0.2"), "0.3");
+  assert.equal(addDecimal("999.999", "0.001"), "1000");
+  assert.equal(addDecimal("0", "1.000000000000000001"), "1.000000000000000001");
+  assert.equal(
+    buyProgress({ totals: { buys: 0, spent: "0", received: "0" }, log: [] }).average,
+    null,
+  );
 });
