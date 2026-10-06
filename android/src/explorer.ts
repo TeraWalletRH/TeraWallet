@@ -124,3 +124,101 @@ export async function fetchChainHistory(
   }
   return [...entries.values()].sort((a, b) => b.timestamp - a.timestamp);
 }
+
+/** One asset moving in or out of the wallet in one transaction. See core/pnl.js. */
+export type TransferLeg = {
+  hash: string;
+  timestamp: number;
+  symbol: string;
+  amount: string;
+  direction: "in" | "out";
+};
+
+const LEG_PAGES = 10;
+
+/** Every page of an explorer list, up to a cap. `complete` is false when the cap cut it short. */
+async function allPages(path: string) {
+  const items: any[] = [];
+  let params = "";
+  for (let page = 0; page < LEG_PAGES; page += 1) {
+    const separator = path.includes("?") ? "&" : "?";
+    const result = await explorerGet(`${path}${params ? `${separator}${params}` : ""}`);
+    items.push(...(result.items || []));
+    if (!result.next_page_params) return { items, complete: true };
+    params = new URLSearchParams(
+      Object.entries(result.next_page_params).map(([key, value]) => [key, String(value)]),
+    ).toString();
+  }
+  return { items, complete: false };
+}
+
+/**
+ * Every leg of every transfer this wallet made or received, for profit and loss
+ * and the portfolio chart.
+ *
+ * Unlike fetchChainHistory, which keeps one line per transaction for the
+ * activity list, this keeps both sides of a swap. Tokens are named by contract
+ * through `known` (lowercase address → symbol); anything else is skipped, as it
+ * is nothing the wallet values. Native ETH comes from the wallet's own
+ * transactions (what it sent) and internal transactions (what contracts sent
+ * it, such as a swap paying out ETH). Failed transactions move nothing.
+ *
+ * `complete` is false when the history is longer than this reads; the screen
+ * says so rather than presenting a partial history as the whole.
+ */
+export async function fetchTransferLegs(
+  address: Address,
+  known: Record<string, string>,
+): Promise<{ legs: TransferLeg[]; complete: boolean }> {
+  const lower = address.toLowerCase();
+  const [tokens, transactions, internal] = await Promise.all([
+    allPages(`/addresses/${address}/token-transfers?type=ERC-20`),
+    allPages(`/addresses/${address}/transactions`),
+    allPages(`/addresses/${address}/internal-transactions`),
+  ]);
+  const legs: TransferLeg[] = [];
+  for (const item of tokens.items) {
+    const symbol = known[String(item.token?.address_hash || item.token?.address || "").toLowerCase()];
+    const from = String(item.from?.hash || "").toLowerCase();
+    const to = String(item.to?.hash || "").toLowerCase();
+    if (!symbol || !item.transaction_hash || (from !== lower && to !== lower) || from === to) continue;
+    legs.push({
+      hash: item.transaction_hash,
+      timestamp: new Date(item.timestamp).getTime(),
+      symbol,
+      amount: formatUnits(BigInt(item.total?.value ?? "0"), Number(item.total?.decimals ?? item.token?.decimals ?? 18)),
+      direction: to === lower ? "in" : "out",
+    });
+  }
+  for (const item of transactions.items) {
+    if (!item.hash || !item.value || item.value === "0" || item.status !== "ok") continue;
+    const from = String(item.from?.hash || "").toLowerCase();
+    const to = String(item.to?.hash || "").toLowerCase();
+    if (from === to) continue;
+    legs.push({
+      hash: item.hash,
+      timestamp: new Date(item.timestamp).getTime(),
+      symbol: "ETH",
+      amount: formatUnits(BigInt(item.value), 18),
+      direction: from === lower ? "out" : "in",
+    });
+  }
+  for (const item of internal.items) {
+    if (!item.transaction_hash || !item.value || item.value === "0" || item.success === false) continue;
+    const from = String(item.from?.hash || "").toLowerCase();
+    const to = String(item.to?.hash || "").toLowerCase();
+    // The wallet's own top-level sends are already counted above.
+    if (to !== lower || from === lower) continue;
+    legs.push({
+      hash: item.transaction_hash,
+      timestamp: new Date(item.timestamp).getTime(),
+      symbol: "ETH",
+      amount: formatUnits(BigInt(item.value), 18),
+      direction: "in",
+    });
+  }
+  return {
+    legs,
+    complete: tokens.complete && transactions.complete && internal.complete,
+  };
+}

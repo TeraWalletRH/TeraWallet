@@ -86,6 +86,11 @@ export type LocalData = {
    * `core/limit-orders.js` cleans them on every read.
    */
   limitOrders?: any[];
+  /**
+   * Average costs the owner entered by symbol, in dollars, for coins bought
+   * where this wallet cannot see. Used by core/pnl.js in place of the computed one.
+   */
+  pnlOverrides?: Record<string, string>;
   /** Whether the spotlight walkthrough has run on this device already. */
   tourSeen: boolean;
   /**

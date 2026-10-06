@@ -25,6 +25,8 @@ export * as watched from "../../public/tera/core/watched.js";
 // Limit orders: a watch on the price plus a swap written out in advance, with
 // the limit enforced on chain through the swap's minimum output.
 export * as limitOrders from "../../public/tera/core/limit-orders.js";
+// Average-cost profit and loss, and the portfolio's real value over time.
+export * as pnl from "../../public/tera/core/pnl.js";
 
 // What holdings are worth. Shared because the honest part of a valuation is arithmetic,
 // not presentation: an unpriced holding must be left out of the total and named, on both

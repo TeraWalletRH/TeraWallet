@@ -42,7 +42,7 @@ import * as notify from "./src/notify";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
 import { balances, client, confirmation, execute, probeNetwork, transactionStatus } from "./src/network";
-import { fetchChainHistory, type ChainHistoryEntry } from "./src/explorer";
+import { fetchChainHistory, fetchTransferLegs, type ChainHistoryEntry, type TransferLeg } from "./src/explorer";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
@@ -60,6 +60,7 @@ import {
   schedules as schedulesCore,
   watched as watchedCore,
   limitOrders as limitCore,
+  pnl as pnlCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -678,6 +679,12 @@ function Wallet() {
     [limitForm, setLimitForm] = useState<Record<string, string>>({}),
     [limitEditId, setLimitEditId] = useState(""),
     [orderError, setOrderError] = useState(""),
+    // Profit and loss and the portfolio chart: the wallet's transfer legs read from
+    // the chain, price history by range and symbol, and the chosen chart range.
+    [pnlLegs, setPnlLegs] = useState<null | { owner: string; at: number; legs: TransferLeg[]; complete: boolean }>(null),
+    [pnlHistory, setPnlHistory] = useState<Record<string, Record<string, { t: number; p: number }[]>>>({}),
+    [portfolioRange, setPortfolioRange] = useState<"1D" | "1W" | "1M" | "1Y">("1D"),
+    [costEdit, setCostEdit] = useState<{ symbol: string; value: string } | null>(null),
     [pinnedAssets, setPinnedAssetsState] = useState<string[]>(() => getPinnedAssets()),
     [csvModalOpen, setCsvModalOpen] = useState(false),
     [stakingPosition, setStakingPosition] = useState<any>(null),
@@ -2294,6 +2301,89 @@ function Wallet() {
   );
   const [showHidden, setShowHidden] = useState(false);
   const held = showHidden ? allHeld : smallHidden.shown;
+  // ---- Profit and loss, and the real portfolio chart (core/pnl.js) ----
+  const pnlFresh = !!pnlLegs && pnlLegs.owner === owner;
+  const pnlEvents = React.useMemo(
+    () => (pnlFresh ? pnlCore.groupEvents(pnlLegs!.legs) : []),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pnlLegs, owner],
+  );
+  const pnlHoldings: Record<string, number> = Object.fromEntries(
+    allHeld.map(({ asset, amount }) => [asset.symbol, Number(amount)]),
+  );
+  const pnlPriceAt = (symbol: string, t: number) => {
+    for (const range of ["1D", "1W", "1M", "1Y"] as const) {
+      const price = pnlCore.priceNear(pnlHistory[range]?.[symbol], t, pnlCore.RANGES[range].gap);
+      if (price !== null) return price;
+    }
+    return null;
+  };
+  const pnlSummary = pnlFresh
+    ? pnlCore.summarise({
+        book: pnlCore.positions(pnlEvents, pnlPriceAt),
+        holdings: pnlHoldings,
+        prices,
+        overrides: data.pnlOverrides || {},
+      })
+    : null;
+  const portfolioChart = pnlFresh
+    ? pnlCore.portfolioSeries({
+        holdings: pnlHoldings,
+        events: pnlEvents,
+        series: pnlHistory[portfolioRange] || {},
+        range: portfolioRange,
+      })
+    : null;
+  async function loadPnlHistory(range: string, symbols: string[]) {
+    const missing = symbols.filter((symbol) => symbol !== "USDG" && !pnlHistory[range]?.[symbol]);
+    if (!missing.length) return;
+    const rows = await Promise.all(
+      missing.map(async (symbol) => {
+        try {
+          const result = await api(`/api/assets/prices/history?symbol=${symbol}&range=${range}`);
+          return [symbol, (result.points || []) as { t: number; p: number }[]] as const;
+        } catch {
+          return [symbol, [] as { t: number; p: number }[]] as const;
+        }
+      }),
+    );
+    setPnlHistory((current) => ({
+      ...current,
+      [range]: { ...(current[range] || {}), ...Object.fromEntries(rows) },
+    }));
+  }
+  useEffect(() => {
+    if (!owner || !["home", "pnl", "token-detail"].includes(page)) return;
+    if (pnlLegs && pnlLegs.owner === owner && Date.now() - pnlLegs.at < 5 * 60_000) return;
+    let live = true;
+    const known = Object.fromEntries(
+      assets.filter((a) => a.address && a.address !== zeroAddress).map((a) => [a.address.toLowerCase(), a.symbol]),
+    );
+    void fetchTransferLegs(owner as Address, known)
+      .then((result) => live && setPnlLegs({ owner, at: Date.now(), ...result }))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, owner, assets.length]);
+  // Prices for every symbol the history touches: a year of daily prices for costs,
+  // and the chart's own range for the line.
+  const pnlSymbolsKey = pnlFresh
+    ? [...new Set([...Object.keys(pnlHoldings), ...pnlLegs!.legs.map((leg) => leg.symbol)])].sort().join(",")
+    : "";
+  useEffect(() => {
+    if (!pnlSymbolsKey) return;
+    const symbols = pnlSymbolsKey.split(",");
+    void loadPnlHistory("1Y", symbols);
+    void loadPnlHistory(portfolioRange, symbols);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pnlSymbolsKey, portfolioRange]);
+  /** "+$42.10" / "−$3.00", in the display currency. */
+  const signedFiat = (value: number) =>
+    `${pnlCore.sign(value)}${formatFiat(Math.abs(value), data.fiatCurrency || "USD")}`;
+  const signedPct = (value: number | null) =>
+    value === null ? "" : `${pnlCore.sign(value)}${Math.abs(value).toFixed(1)}%`;
   /** A figure as the owner has asked to see it. Never used where they sign. */
   const shownValue = (text: string, context = "") =>
     discretion.conceal(text, { on: privacyOn, context });
@@ -5721,6 +5811,26 @@ function Wallet() {
                           : t("No prices could be read.", "无法读取价格。")}
                       </Text>
                     ) : null}
+                    {pnlSummary && pnlSummary.total.costBasis > 0 ? (
+                      <Pressable accessibilityRole="button" onPress={() => setPage("pnl")} hitSlop={8}>
+                        <Text
+                          style={[
+                            s.small,
+                            {
+                              color: pnlSummary.total.unrealized >= 0 ? colors.green : colors.danger,
+                              fontWeight: "700",
+                              textAlign: "center",
+                            },
+                          ]}
+                        >
+                          {shownValue(
+                            `${signedFiat(pnlSummary.total.unrealized)} (${signedPct(pnlSummary.total.percent)})`,
+                          )}{" "}
+                          {t("unrealized", "未实现")}
+                          {pnlSummary.total.estimated ? t(" · est.", " · 估算") : ""} ›
+                        </Text>
+                      </Pressable>
+                    ) : null}
                   </View>
                 </LinearGradient>
               </View>
@@ -5744,6 +5854,69 @@ function Wallet() {
                   </Pressable>
                 ))}
               </View>
+              {balance && allHeld.length ? (
+                <View style={[s.panel, { gap: 10 }]}>
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
+                    <Text style={[s.text, { fontWeight: "700" }]}>{t("Portfolio", "投资组合")}</Text>
+                    {portfolioChart && portfolioChart.points.length > 1 ? (
+                      (() => {
+                        const first = portfolioChart.points[0].p;
+                        const last = portfolioChart.points[portfolioChart.points.length - 1].p;
+                        const change = last - first;
+                        return (
+                          <Text style={[s.small, { fontWeight: "700", color: change >= 0 ? colors.green : colors.danger }]}>
+                            {shownValue(`${signedFiat(change)} (${signedPct(first > 0 ? (change / first) * 100 : null)})`)}
+                          </Text>
+                        );
+                      })()
+                    ) : null}
+                  </View>
+                  {portfolioChart ? (
+                    <TokenChart
+                      points={portfolioChart.points}
+                      up={
+                        portfolioChart.points.length < 2 ||
+                        portfolioChart.points[portfolioChart.points.length - 1].p >= portfolioChart.points[0].p
+                      }
+                    />
+                  ) : (
+                    <View style={{ height: 120, alignItems: "center", justifyContent: "center" }}>
+                      <TeraSpinner size={22} />
+                    </View>
+                  )}
+                  <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+                    {(["1D", "1W", "1M", "1Y"] as const).map((range) => (
+                      <Pressable
+                        key={range}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: range === portfolioRange }}
+                        onPress={() => setPortfolioRange(range)}
+                        style={({ pressed }) => ({
+                          flex: 1,
+                          marginHorizontal: 3,
+                          paddingVertical: 7,
+                          borderRadius: 10,
+                          alignItems: "center",
+                          backgroundColor: range === portfolioRange ? colors.tint : "transparent",
+                          opacity: pressed ? 0.7 : 1,
+                        })}
+                      >
+                        <Text style={[s.small, { fontWeight: "700", color: range === portfolioRange ? colors.green : colors.muted }]}>
+                          {range}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                  {portfolioChart && portfolioChart.excluded.length ? (
+                    <Text style={s.small}>
+                      {t(
+                        `Without ${portfolioChart.excluded.join(", ")}: no price history for this range.`,
+                        `未包含 ${portfolioChart.excluded.join("、")}：此时间段无价格历史。`,
+                      )}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
               {readyOrders.length ? (
                 <Pressable
                   accessibilityRole="button"
@@ -7496,6 +7669,33 @@ function Wallet() {
                   {valueCore.format(valueCore.valueOf(heldEntry.amount, price))}
                 </Text>
               </View>
+              {(() => {
+                const row = pnlSummary?.rows.find((entry: any) => entry.symbol === tokenDetailSymbol);
+                if (!row) return null;
+                return (
+                  <>
+                    <Row
+                      label={t("Average cost", "平均成本")}
+                      value={
+                        row.average === null
+                          ? t("Unknown", "未知")
+                          : `${formatFiat(row.average, data.fiatCurrency || "USD")}${row.source === "estimated" ? t(" (est.)", "（估算）") : row.source === "manual" ? t(" (yours)", "（自填）") : ""}`
+                      }
+                    />
+                    {row.unrealized !== null ? (
+                      <Row
+                        label={t("Unrealized P&L", "未实现盈亏")}
+                        value={shownValue(`${signedFiat(row.unrealized)} (${signedPct(row.percent)})`)}
+                      />
+                    ) : null}
+                    <Pressable accessibilityRole="button" onPress={() => setPage("pnl")}>
+                      <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                        {t("Profit & loss details ›", "盈亏详情 ›")}
+                      </Text>
+                    </Pressable>
+                  </>
+                );
+              })()}
             </View>
           ) : null}
           {!noMarket && (
@@ -8488,6 +8688,153 @@ function Wallet() {
             ) : null}
           </View>
           <Button onPress={() => void probeNow()}>{t("Check now", "立即检测")}</Button>
+        </>
+      );
+    }
+    if (page === "pnl") {
+      const total = pnlSummary?.total;
+      const sourceLabel = (source: string) =>
+        source === "exact"
+          ? t("from your swaps", "来自你的兑换")
+          : source === "estimated"
+            ? t("est. from market prices", "按市场价估算")
+            : source === "manual"
+              ? t("your figure", "你填写的")
+              : t("unknown", "未知");
+      const saveCost = async (symbol: string, value: string) => {
+        const next = { ...(dataRef.current.pnlOverrides || {}) };
+        const clean = value.trim().replace(/^\$/, "");
+        if (clean) {
+          check(/^\d+(\.\d+)?$/.test(clean) && Number(clean) > 0, t("Enter a price above zero.", "请输入大于零的价格。"));
+          next[symbol] = clean;
+        } else delete next[symbol];
+        await store({ ...dataRef.current, pnlOverrides: next });
+        setCostEdit(null);
+      };
+      return (
+        <>
+          <Header title={t("Profit & loss", "盈亏")} onBack={() => setPage("home")} backLabel={t("Home", "首页")} />
+          {!pnlSummary ? (
+            <View style={[s.panel, { alignItems: "center", paddingVertical: 28, gap: 10 }]}>
+              <TeraSpinner size={22} />
+              <Text style={s.small}>{t("Reading your history from the chain…", "正在从链上读取你的记录…")}</Text>
+            </View>
+          ) : (
+            <>
+              <View style={[s.panel, { gap: 6 }]}>
+                <Text style={s.eyebrow}>{t("UNREALIZED", "未实现盈亏")}</Text>
+                <Text
+                  style={{
+                    fontSize: 30,
+                    fontWeight: "700",
+                    color: total!.unrealized >= 0 ? colors.green : colors.danger,
+                  }}
+                >
+                  {shownValue(`${signedFiat(total!.unrealized)}`)}
+                  <Text style={{ fontSize: 16 }}> {signedPct(total!.percent)}</Text>
+                </Text>
+                <Row label={t("Cost basis", "成本")} value={shownValue(formatFiat(total!.costBasis, data.fiatCurrency || "USD"))} />
+                <Row label={t("Value now", "当前价值")} value={shownValue(formatFiat(total!.value, data.fiatCurrency || "USD"))} />
+                <Row label={t("Realized (sold)", "已实现（卖出）")} value={shownValue(signedFiat(total!.realized))} />
+                {total!.estimated ? (
+                  <Text style={s.small}>
+                    {t(
+                      "Includes estimates: costs of tokens received, or bought with something other than USDG, use the market price that day.",
+                      "包含估算：收到的代币或非 USDG 买入的代币，按当日市场价计算成本。",
+                    )}
+                  </Text>
+                ) : null}
+                {total!.unknown.length ? (
+                  <Text style={s.small}>
+                    {t(
+                      `Left out — cost unknown: ${total!.unknown.join(", ")}. Set your own average cost below to include them.`,
+                      `未计入（成本未知）：${total!.unknown.join("、")}。可在下方填写你的平均成本以计入。`,
+                    )}
+                  </Text>
+                ) : null}
+                {pnlLegs && !pnlLegs.complete ? (
+                  <Text style={s.small}>
+                    {t(
+                      "Your history is longer than Tera reads, so the oldest transfers are not included.",
+                      "你的记录超过 Tera 读取的范围，最早的转账未包含在内。",
+                    )}
+                  </Text>
+                ) : null}
+              </View>
+              {pnlSummary.rows.map((row: any) => (
+                <View key={row.symbol} style={[s.panel, { gap: 6 }]}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                    <TokenIcon symbol={row.symbol} size={32} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.text, { fontWeight: "700" }]}>{row.symbol}</Text>
+                      <Text style={s.small}>{shownValue(shortAmount(String(row.qty)))}</Text>
+                    </View>
+                    {row.unrealized !== null ? (
+                      <Text style={[s.text, { fontWeight: "700", color: row.unrealized >= 0 ? colors.green : colors.danger }]}>
+                        {shownValue(signedFiat(row.unrealized))} {signedPct(row.percent)}
+                      </Text>
+                    ) : (
+                      <Text style={s.small}>{row.qty > 0 ? t("Cost unknown", "成本未知") : ""}</Text>
+                    )}
+                  </View>
+                  {row.qty > 0 ? (
+                    <>
+                      <Row
+                        label={t("Average cost", "平均成本")}
+                        value={
+                          row.average === null
+                            ? t("Unknown", "未知")
+                            : `${formatFiat(row.average, data.fiatCurrency || "USD")} · ${sourceLabel(row.source)}`
+                        }
+                      />
+                      <Row label={t("Value now", "当前价值")} value={row.value === null ? "—" : shownValue(formatFiat(row.value, data.fiatCurrency || "USD"))} />
+                    </>
+                  ) : null}
+                  {row.realized !== null && row.realized !== 0 ? (
+                    <Row
+                      label={t("Realized", "已实现")}
+                      value={`${shownValue(signedFiat(row.realized))}${row.realizedEstimated ? t(" (est.)", "（估算）") : ""}`}
+                    />
+                  ) : null}
+                  {costEdit?.symbol === row.symbol ? (
+                    <>
+                      <Field
+                        label={t(`Your average cost per ${row.symbol} ($)`, `你的每个 ${row.symbol} 平均成本（美元）`)}
+                        value={costEdit?.value || ""}
+                        onChangeText={(value) => setCostEdit({ symbol: row.symbol, value })}
+                        keyboardType="decimal-pad"
+                        placeholder="0.00"
+                        hint={t("Leave empty to go back to the computed cost.", "留空即恢复为计算出的成本。")}
+                      />
+                      <View style={s.wrap}>
+                        <Button primary onPress={() => void run(async () => saveCost(row.symbol, costEdit?.value || ""))}>
+                          {t("Save", "保存")}
+                        </Button>
+                        <Button onPress={() => setCostEdit(null)}>{t("Cancel", "取消")}</Button>
+                      </View>
+                    </>
+                  ) : row.qty > 0 ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() =>
+                        setCostEdit({ symbol: row.symbol, value: data.pnlOverrides?.[row.symbol] || "" })
+                      }
+                    >
+                      <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                        {row.source === "manual" ? t("Change your cost", "修改你的成本") : t("Set your own cost", "填写你的成本")}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ))}
+              <Text style={[s.small, { textAlign: "center" }]}>
+                {t(
+                  "Average cost, worked out on this device from your transfers on chain and Tera's price history. Network fees aren't included. Nothing about your positions is sent anywhere.",
+                  "平均成本法，在此设备上根据你的链上转账和 Tera 的价格历史计算。不含网络费。你的持仓信息不会发送到任何地方。",
+                )}
+              </Text>
+            </>
+          )}
         </>
       );
     }
@@ -11984,6 +12331,12 @@ function Wallet() {
             icon: "target",
             label: t("Limit orders", "限价单"),
             onPress: () => setPage("limit-orders"),
+          },
+          {
+            key: "pnl",
+            icon: "chart-line",
+            label: t("Profit & loss", "盈亏"),
+            onPress: () => setPage("pnl"),
           },
           {
             key: "bridge",
