@@ -20,6 +20,8 @@ export * as slippage from "../../public/tera/core/slippage.js";
 // Recurring payments: reminders with the send already written out, never paid
 // on a timer. Kept in the sealed data file and never sent to Tera.
 export * as schedules from "../../public/tera/core/schedules.js";
+// Wallets the owner follows without holding their key. Read-only by design.
+export * as watched from "../../public/tera/core/watched.js";
 
 // What holdings are worth. Shared because the honest part of a valuation is arithmetic,
 // not presentation: an unpriced holding must be left out of the total and named, on both

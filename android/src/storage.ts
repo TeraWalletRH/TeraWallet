@@ -76,6 +76,11 @@ export type LocalData = {
    * trimmed by the retention window — a schedule is a plan, not a record.
    */
   schedules?: any[];
+  /**
+   * Wallets the owner watches without a key. Sealed with the rest of this
+   * file and never sent anywhere; `core/watched.js` cleans them on every read.
+   */
+  watched?: { address: string; name: string; tag: string; addedAt: number }[];
   /** Whether the spotlight walkthrough has run on this device already. */
   tourSeen: boolean;
   /**
