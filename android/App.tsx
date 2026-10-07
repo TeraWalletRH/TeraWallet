@@ -29,6 +29,7 @@ import Svg, {
 import { BlurTargetView, BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
+import * as Crypto from "expo-crypto";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "./src/speech";
@@ -698,6 +699,9 @@ function Wallet() {
     [pinnedAssets, setPinnedAssetsState] = useState<string[]>(() => getPinnedAssets()),
     [csvModalOpen, setCsvModalOpen] = useState(false),
     [stakingPosition, setStakingPosition] = useState<any>(null),
+    // The staking screen's positions, fixed locks and recent payouts; null while reading.
+    [stakeData, setStakeData] = useState<null | { positions: any[]; locks: any[]; payouts: any[] }>(null),
+    [stakeError, setStakeError] = useState(""),
     [stakingLockTier, setStakingLockTier] = useState<"flexible" | "30d" | "90d">("flexible"),
     [stakeAmount, setStakeAmount] = useState("");
   const { setting: themeSetting, effectiveTheme, updateSetting: updateThemeSetting } = useAppTheme();
@@ -1605,6 +1609,30 @@ function Wallet() {
       tone: "success",
     });
   }
+  /** Read this wallet's staking positions, fixed locks and recent payouts. */
+  async function loadStaking() {
+    if (!owner) return;
+    setStakeError("");
+    try {
+      const [positions, locks, payouts] = await Promise.all([
+        api(`/api/staking/position/${owner}`),
+        api(`/api/staking/locks/${owner}`).catch(() => ({ locks: [] })),
+        api(`/api/staking/payouts/${owner}`).catch(() => ({ payouts: [] })),
+      ]);
+      setStakeData({ positions: positions.positions || [], locks: locks.locks || [], payouts: payouts.payouts || [] });
+    } catch (error) {
+      setStakeData(null);
+      setStakeError(error instanceof Error ? error.message : t("Staking is unavailable right now.", "质押服务暂不可用。"));
+    }
+  }
+  useEffect(() => {
+    if (page !== "staking" || !owner) return;
+    void loadStaking();
+    // Payouts move from requested to paid within a minute or two; keep the screen current.
+    const timer = setInterval(() => void loadStaking(), 20_000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, owner]);
   /** Protect a holding with a stop-loss and/or take-profit, suggested from the average cost when known. */
   function openProtect(symbol: string) {
     const heldNow = allHeld.find(({ asset }) => asset.symbol === symbol);
@@ -6164,9 +6192,9 @@ function Wallet() {
                   <Icon name="trending-up" color={colors.green} size={22} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={[s.text, { fontWeight: "700" }]}>{t("USDG Staking", "USDG 质押")}</Text>
+                  <Text style={[s.text, { fontWeight: "700" }]}>{t("TERA Staking", "TERA 质押")}</Text>
                   <Text style={s.small}>
-                    {t("Tiered lockups: earn up to 1.6x APY", "阶梯锁定：赚取高达 1.6 倍 APY")}
+                    {t("Your positions, rewards and claims", "你的仓位、奖励与领取")}
                   </Text>
                 </View>
                 <Icon name="chevron-right" size={18} color={colors.muted} />
@@ -6815,217 +6843,205 @@ function Wallet() {
       );
     }
     if (page === "staking") {
-      const activeStake = stakingPosition?.active_stake ? (BigInt(stakingPosition.active_stake) / 1000000n).toString() : "0";
-      const accruedRewards = stakingPosition?.accrued_rewards ? (Number(stakingPosition.accrued_rewards) / 1e18).toFixed(4) : "0.0000";
-      const currentTier = stakingPosition?.lock_tier || stakingLockTier;
-      const isLocked = stakingPosition?.lock_until ? Number(stakingPosition.lock_until) > Math.floor(Date.now() / 1000) : false;
-      const lockSecondsLeft = isLocked ? Number(stakingPosition.lock_until) - Math.floor(Date.now() / 1000) : 0;
-      const lockDaysLeft = Math.ceil(lockSecondsLeft / 86400);
-
-      const TIERS = [
-        { id: "flexible" as const, label: t("Flexible", "活期质押"), days: "0 days", multiplier: "1.0x", badge: t("Instant unstake", "随存随取"), apy: "4.8% APY" },
-        { id: "30d" as const, label: t("30-Day Lock", "30天锁定"), days: "30 days", multiplier: "1.25x", badge: t("1.25x Multiplier", "1.25倍收益"), apy: "6.0% APY" },
-        { id: "90d" as const, label: t("90-Day Lock", "90天锁定"), days: "90 days", multiplier: "1.60x", badge: t("1.60x Multiplier", "1.60倍收益"), apy: "7.7% APY" },
-      ];
-
+      // TERA staking, read from the same ledger the staking site uses. Claims and
+      // unstakes are signed requests: the wallet signs the exact request text the
+      // service returns, and the treasury executor sends the TERA. Deposits need an
+      // on-chain transfer that the service verifies, which this screen does not
+      // make yet, so it sends people to the staking site for that.
+      const tera = (units: string | number | bigint | null | undefined) =>
+        shortAmount(formatUnits(BigInt(String(units ?? "0").split(".")[0] || "0"), 18));
+      const signedPayout = async (kind: "claim" | "unstake", position: any) => {
+        const request = {
+          kind,
+          walletAddress: owner,
+          epochId: position.epoch_id,
+          amount: kind === "unstake" ? String(position.active_stake) : "0",
+          idempotencyKey: Crypto.randomUUID(),
+        };
+        const auth = await api("/api/staking/payout-authorization", request);
+        const signature = await vault.currentAccount().signMessage({ message: auth.message });
+        await api("/api/staking/payouts", { ...request, signature });
+      };
+      const unlockLock = async (lock: any) => {
+        const request = { walletAddress: owner, lockId: lock.id, idempotencyKey: Crypto.randomUUID() };
+        const auth = await api("/api/staking/locks/unlock-authorization", request);
+        const signature = await vault.currentAccount().signMessage({ message: auth.message });
+        await api("/api/staking/locks/unlock", { ...request, signature });
+      };
+      const statusLabel: Record<string, [string, string]> = {
+        requested: ["Requested", "已提交"],
+        signed: ["Sending", "发送中"],
+        broadcast: ["Sending", "发送中"],
+        confirmed: ["Paid", "已到账"],
+        failed: ["Failed", "失败"],
+      };
+      const positions = (stakeData?.positions || []).filter(
+        (position: any) => BigInt(position.active_stake || "0") > 0n || BigInt(position.claimable_rewards || "0") > 0n,
+      );
       return (
         <>
-          <Header
-            title={t("USDG Staking", "USDG 质押")}
-            onBack={() => setPage("home")}
-            backLabel={t("Home", "首页")}
-          />
-          <ScrollView contentContainerStyle={{ gap: 16, paddingBottom: 32 }}>
-            <View style={[s.panel, { gap: 14, backgroundColor: colors.tint, borderColor: colors.green, borderWidth: 1 }]}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                <Text style={s.eyebrow}>{t("ACTIVE STAKING POSITION", "当前质押仓位")}</Text>
-                <View style={{ backgroundColor: colors.green + "20", paddingHorizontal: 8, paddingVertical: 3, borderRadius: 8 }}>
-                  <Text style={{ color: colors.green, fontWeight: "700", fontSize: 11 }}>Robinhood Chain</Text>
-                </View>
-              </View>
-
-              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
-                <View>
-                  <Text style={[s.small, { color: colors.muted }]}>{t("Total Staked", "质押总额")}</Text>
-                  <Text style={{ fontSize: 28, fontWeight: "800", color: colors.ink }}>
-                    ${activeStake} <Text style={{ fontSize: 16, fontWeight: "600", color: colors.muted }}>USDG</Text>
-                  </Text>
-                </View>
-                <View style={{ alignItems: "flex-end" }}>
-                  <Text style={[s.small, { color: colors.muted }]}>{t("Accrued Rewards", "待领收益")}</Text>
-                  <Text style={{ fontSize: 24, fontWeight: "800", color: colors.green }}>
-                    +{accruedRewards} <Text style={{ fontSize: 14, fontWeight: "600" }}>USDG</Text>
-                  </Text>
-                </View>
-              </View>
-
-              <View style={{ borderTopWidth: 1, borderColor: colors.line, paddingTop: 10, flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
-                  <Icon name="lock" size={14} color={isLocked ? colors.copper : colors.muted} />
-                  <Text style={[s.small, { fontWeight: "600" }]}>
-                    {isLocked ? t(`Locked (${lockDaysLeft} days remaining)`, `锁定中 (剩余 ${lockDaysLeft} 天)`) : t("Flexible (Instant Unstake)", "活期 (随时可取)")}
-                  </Text>
-                </View>
-                <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
-                  {currentTier === "90d" ? "1.60x APY" : currentTier === "30d" ? "1.25x APY" : "1.00x APY"}
-                </Text>
-              </View>
+          <Header title={t("TERA staking", "TERA 质押")} onBack={() => setPage("home")} backLabel={t("Home", "首页")} />
+          {stakeData === null ? (
+            <View style={[s.panel, { alignItems: "center", paddingVertical: 28, gap: 10 }]}>
+              {stakeError ? (
+                <Text style={[s.small, { color: colors.danger }]}>{stakeError}</Text>
+              ) : (
+                <>
+                  <TeraSpinner size={22} />
+                  <Text style={s.small}>{t("Reading your staking positions…", "正在读取你的质押仓位…")}</Text>
+                </>
+              )}
             </View>
-
-            <View style={{ gap: 10 }}>
-              <Text style={s.eyebrow}>{t("SELECT LOCKUP TIER", "选择锁定阶梯")}</Text>
-              <View style={{ gap: 8 }}>
-                {TIERS.map((tier) => {
-                  const selected = stakingLockTier === tier.id;
-                  return (
-                    <Pressable
-                      key={tier.id}
-                      accessibilityRole="button"
-                      onPress={() => setStakingLockTier(tier.id)}
-                      style={[
-                        s.panel,
-                        {
-                          padding: 14,
-                          borderColor: selected ? colors.green : colors.line,
-                          borderWidth: selected ? 2 : 1,
-                          backgroundColor: selected ? colors.tint : colors.wash,
-                          flexDirection: "row",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                        },
-                      ]}
-                    >
-                      <View style={{ gap: 2 }}>
-                        <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
-                          <Text style={[s.text, { fontWeight: "700" }]}>{tier.label}</Text>
-                          <View style={{ backgroundColor: selected ? colors.green + "25" : colors.line, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6 }}>
-                            <Text style={{ fontSize: 10, fontWeight: "700", color: selected ? colors.green : colors.ink }}>{tier.badge}</Text>
-                          </View>
-                        </View>
-                        <Text style={s.small}>{tier.days} · {t("Multiplier boosted returns", "收益乘数加速")}</Text>
-                      </View>
-                      <View style={{ alignItems: "flex-end" }}>
-                        <Text style={{ fontSize: 16, fontWeight: "800", color: colors.green }}>{tier.apy}</Text>
-                        <Text style={[s.small, { color: colors.muted }]}>{tier.multiplier}</Text>
-                      </View>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-
-            <View style={[s.panel, { gap: 12 }]}>
-              <Text style={s.eyebrow}>{t("STAKE AMOUNT", "质押金额")}</Text>
-              <Field
-                label={t("USDG Amount", "USDG 金额")}
-                value={stakeAmount}
-                onChangeText={setStakeAmount}
-                placeholder="0.00"
-                keyboardType="decimal-pad"
-              />
-              <View style={{ flexDirection: "row", gap: 8 }}>
-                {["25%", "50%", "Max"].map((preset) => (
-                  <Pressable
-                    key={preset}
-                    accessibilityRole="button"
-                    onPress={() => {
-                      const usdgBal = balance?.[spendCore.STABLE] ? (BigInt(balance[spendCore.STABLE]) / 1000000n).toString() : "0";
-                      if (preset === "Max") setStakeAmount(usdgBal);
-                      else if (preset === "50%") setStakeAmount((Math.floor(Number(usdgBal) * 0.5)).toString());
-                      else setStakeAmount((Math.floor(Number(usdgBal) * 0.25)).toString());
-                    }}
-                    style={{ flex: 1, paddingVertical: 8, borderRadius: 10, backgroundColor: colors.wash, alignItems: "center", borderWidth: 1, borderColor: colors.line }}
-                  >
-                    <Text style={[s.small, { fontWeight: "600" }]}>{preset}</Text>
-                  </Pressable>
-                ))}
-              </View>
-
-              <Button
-                primary
-                disabled={busy || !stakeAmount || Number(stakeAmount) <= 0}
-                onPress={() => {
-                  void run(async (guard) => {
-                    try {
-                      const units = (BigInt(Math.floor(Number(stakeAmount) * 1000000))).toString();
-                      await api("/api/staking/locks", {
-                        walletAddress: owner,
-                        amount: units,
-                        tier: stakingLockTier,
-                      });
-                      guard();
-                      setNotice({
-                        title: t("Staked successfully", "质押成功"),
-                        body: t(`Staked ${stakeAmount} USDG in ${stakingLockTier} lockup.`, `已成功在 ${stakingLockTier} 阶梯中质押 ${stakeAmount} USDG。`),
-                        tone: "success",
-                      });
-                      setStakeAmount("");
-                      try {
-                        const pos = await api(`/api/staking/position/${owner}`);
-                        if (pos.positions?.[0]) setStakingPosition(pos.positions[0]);
-                      } catch {}
-                    } catch (e: any) {
-                      setNotice({
-                        title: t("Staking failed", "质押失败"),
-                        body: e.message || String(e),
-                        tone: "error",
-                      });
+          ) : (
+            <>
+              {positions.length === 0 && !(stakeData.locks || []).length ? (
+                <View style={[s.panel, { gap: 8 }]}>
+                  <Text style={[s.text, { fontWeight: "700" }]}>{t("No staking positions yet", "暂无质押仓位")}</Text>
+                  <Text style={s.small}>
+                    {t("Positions you open on the staking site appear here, where you can claim and unstake.", "你在质押网站开立的仓位会显示在这里，可在此领取和解押。")}
+                  </Text>
+                </View>
+              ) : null}
+              {positions.map((position: any) => {
+                const claimable = BigInt(position.claimable_rewards || "0");
+                const staked = BigInt(position.active_stake || "0");
+                return (
+                  <View key={position.epoch_id} style={[s.panel, { gap: 8, borderColor: colors.green, borderWidth: 1 }]}>
+                    <Text style={s.eyebrow}>
+                      {position.lock_tier && position.lock_tier !== "flexible"
+                        ? t(`STAKED · ${position.lock_tier}`, `质押 · ${position.lock_tier}`)
+                        : t("FLEXIBLE STAKE", "活期质押")}
+                    </Text>
+                    <Row label={t("Staked", "质押数量")} value={`${tera(staked)} TERA`} />
+                    <Row label={t("Rewards to claim", "可领取奖励")} value={`${tera(claimable)} TERA`} />
+                    {position.is_locked ? (
+                      <Text style={s.small}>
+                        {t(
+                          `Locked for another ${Math.ceil(Number(position.remaining_lock_seconds || 0) / 86400)} days. Rewards can still be claimed.`,
+                          `仍锁定 ${Math.ceil(Number(position.remaining_lock_seconds || 0) / 86400)} 天，奖励仍可领取。`,
+                        )}
+                      </Text>
+                    ) : null}
+                    <View style={s.wrap}>
+                      <Button
+                        primary
+                        disabled={busy || claimable <= 0n}
+                        onPress={() =>
+                          void run(async (guard) => {
+                            await signedPayout("claim", position);
+                            guard();
+                            setNotice({
+                              title: t("Claim requested", "已提交领取"),
+                              body: t(
+                                `${tera(claimable)} TERA is being sent to your wallet by the staking treasury. It usually arrives within a minute.`,
+                                `质押金库正在将 ${tera(claimable)} TERA 发送到你的钱包，通常一分钟内到账。`,
+                              ),
+                              tone: "success",
+                            });
+                            await loadStaking();
+                          })
+                        }
+                      >
+                        {t("Claim rewards", "领取奖励")}
+                      </Button>
+                      <Button
+                        danger
+                        disabled={busy || staked <= 0n || Boolean(position.is_locked)}
+                        onPress={() =>
+                          confirm(
+                            t("Unstake everything?", "全部解押？"),
+                            t(
+                              `${tera(staked)} TERA and any unclaimed rewards will be sent back to your wallet.`,
+                              `${tera(staked)} TERA 及未领取奖励将发回你的钱包。`,
+                            ),
+                            () =>
+                              void run(async (guard) => {
+                                await signedPayout("unstake", position);
+                                guard();
+                                setNotice({
+                                  title: t("Unstake requested", "已提交解押"),
+                                  body: t("Your TERA is being sent back to your wallet by the staking treasury.", "质押金库正在将你的 TERA 发回钱包。"),
+                                  tone: "success",
+                                });
+                                await loadStaking();
+                              }),
+                          )
+                        }
+                      >
+                        {t("Unstake all", "全部解押")}
+                      </Button>
+                    </View>
+                  </View>
+                );
+              })}
+              {(stakeData.locks || []).map((lock: any) => (
+                <View key={lock.id} style={[s.panel, { gap: 8 }]}>
+                  <Text style={s.eyebrow}>{t(`${lock.term_days}-DAY LOCK`, `${lock.term_days} 天锁定`)}</Text>
+                  <Row label={t("Principal", "本金")} value={`${tera(lock.principal_amount)} TERA`} />
+                  <Row label={t("Reward at maturity", "到期奖励")} value={`${tera(lock.reward_amount)} TERA`} />
+                  <Row
+                    label={t("Status", "状态")}
+                    value={
+                      lock.effectiveStatus === "claimed"
+                        ? t("Claimed", "已领取")
+                        : lock.isMatured
+                          ? t("Matured — ready to claim", "已到期，可领取")
+                          : t(`Unlocks in ${Math.ceil(Number(lock.secondsRemaining || 0) / 86400)} days`, `${Math.ceil(Number(lock.secondsRemaining || 0) / 86400)} 天后解锁`)
                     }
-                  });
-                }}
-              >
-                {t(`Stake USDG (${TIERS.find((t) => t.id === stakingLockTier)?.multiplier} Multiplier)`, `质押 USDG (${TIERS.find((t) => t.id === stakingLockTier)?.multiplier} 收益乘数)`)}
-              </Button>
-
-              <View style={{ flexDirection: "row", gap: 8, marginTop: 4 }}>
-                <View style={{ flex: 1 }}>
-                  <Button
-                    disabled={busy || Number(accruedRewards) <= 0}
-                    onPress={() => {
-                      void run(async (guard) => {
-                        try {
-                          await api("/api/staking/payouts", { walletAddress: owner });
+                  />
+                  {lock.isMatured ? (
+                    <Button
+                      primary
+                      disabled={busy}
+                      onPress={() =>
+                        void run(async (guard) => {
+                          await unlockLock(lock);
                           guard();
-                          setNotice({ title: t("Rewards claimed", "已领取奖励"), body: t("Rewards transferred to your wallet.", "质押奖励已发放至你的钱包。"), tone: "success" });
-                          const pos = await api(`/api/staking/position/${owner}`);
-                          if (pos.positions?.[0]) setStakingPosition(pos.positions[0]);
-                        } catch (e: any) {
-                          setNotice({ title: t("Claim failed", "领取失败"), body: e.message || String(e), tone: "error" });
-                        }
-                      });
-                    }}
-                  >
-                    {t("Claim Rewards", "领取收益")}
-                  </Button>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Button
-                    danger
-                    disabled={busy || isLocked || Number(activeStake) <= 0}
-                    onPress={() => {
-                      if (isLocked) {
-                        setNotice({ title: t("Locked", "已锁定"), body: t(`Position is locked for another ${lockDaysLeft} days.`, `仓位仍需锁定 ${lockDaysLeft} 天。`), tone: "error" });
-                        return;
+                          setNotice({
+                            title: t("Unlock requested", "已提交解锁"),
+                            body: t("Your principal and reward are being sent to your wallet by the staking treasury.", "质押金库正在将本金和奖励发送到你的钱包。"),
+                            tone: "success",
+                          });
+                          await loadStaking();
+                        })
                       }
-                      void run(async (guard) => {
-                        try {
-                          await api("/api/staking/locks/unlock", { walletAddress: owner });
-                          guard();
-                          setNotice({ title: t("Unstaked", "已解除质押"), body: t("Unstaked and settled successfully.", "已成功解除质押并结算。"), tone: "success" });
-                          const pos = await api(`/api/staking/position/${owner}`);
-                          if (pos.positions?.[0]) setStakingPosition(pos.positions[0]);
-                        } catch (e: any) {
-                          setNotice({ title: t("Unstake failed", "解押失败"), body: e.message || String(e), tone: "error" });
-                        }
-                      });
-                    }}
-                  >
-                    {isLocked ? t(`Locked (${lockDaysLeft}d)`, `锁定中 (${lockDaysLeft}天)`) : t("Unstake All", "全部解押")}
-                  </Button>
+                    >
+                      {t("Unlock & claim", "解锁并领取")}
+                    </Button>
+                  ) : null}
                 </View>
-              </View>
-            </View>
-          </ScrollView>
+              ))}
+              {(stakeData.payouts || []).length ? (
+                <View style={[s.panel, { gap: 6 }]}>
+                  <Text style={s.eyebrow}>{t("RECENT PAYOUTS", "近期发放")}</Text>
+                  {(stakeData.payouts || []).slice(0, 6).map((payout: any) => (
+                    <Row
+                      key={payout.id}
+                      label={`${payout.kind === "claim" ? t("Claim", "领取") : t("Unstake", "解押")} · ${new Date(payout.created_at).toLocaleDateString()}`}
+                      value={`${tera(BigInt(payout.principal_amount || "0") + BigInt(payout.reward_amount || "0"))} TERA · ${t(...(statusLabel[payout.status] || ["—", "—"]))}`}
+                    />
+                  ))}
+                </View>
+              ) : null}
+            </>
+          )}
+          <View style={[s.panel, { gap: 8 }]}>
+            <Text style={[s.text, { fontWeight: "700" }]}>{t("Stake more TERA", "质押更多 TERA")}</Text>
+            <Text style={s.small}>
+              {t(
+                "New stakes are made on the staking site for now: it sends your TERA to the staking pool and the service verifies the transfer before crediting it.",
+                "目前请在质押网站发起新的质押：网站会将你的 TERA 转入质押池，服务方验证转账后再记入。",
+              )}
+            </Text>
+            <Button
+              onPress={() => {
+                if (typeof window !== "undefined") window.open("https://terawallet.app/dashboard/staking/", "_blank");
+                else void Linking.openURL("https://terawallet.app/dashboard/staking/");
+              }}
+            >
+              {t("Open the staking site", "打开质押网站")}
+            </Button>
+          </View>
         </>
       );
     }

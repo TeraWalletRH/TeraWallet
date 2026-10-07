@@ -1,4 +1,4 @@
-import { decodeEventLog, encodeFunctionData, erc20Abi, getAddress, http, createPublicClient, keccak256, parseAbiItem, type Address, type Hex } from "viem";
+import { decodeEventLog, encodeFunctionData, erc20Abi, getAddress, http, createPublicClient, keccak256, parseAbiItem, parseTransaction, TransactionNotFoundError, TransactionReceiptNotFoundError, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import type { PoolClient } from "pg";
 import pool from "./db";
@@ -22,6 +22,37 @@ function isAlreadyKnown(error: unknown) {
   return /already known|known transaction|already imported|nonce too low/i.test(error instanceof Error ? error.message : String(error));
 }
 
+/**
+ * The nonce for a new payout: past both the node's pending count and every payout
+ * already signed or sent but not yet mined.
+ *
+ * Reading only the node's pending count let two payouts signed moments apart take
+ * the same nonce when the node had not yet seen the first. Only one of them can be
+ * mined; the other was then stuck as "broadcast" forever.
+ */
+export function nextNonce(pendingCount: number, outstanding: number[]) {
+  return outstanding.reduce((next, nonce) => Math.max(next, nonce + 1), pendingCount);
+}
+
+/**
+ * What to do about a sent payout whose transaction has no receipt.
+ *
+ *   wait        the node still knows the transaction; it may yet be mined.
+ *   rebroadcast the node has dropped it and its nonce is still free: send the same
+ *               bytes again. Nothing is signed twice.
+ *   resign      its nonce has been used by another transaction, so these bytes can
+ *               never be mined and nothing was paid. Sign it again with a fresh nonce.
+ */
+export function recoveryFor({ txKnown, latestNonce, txNonce }: { txKnown: boolean; latestNonce: number; txNonce: number }) {
+  if (txKnown) return "wait" as const;
+  return latestNonce > txNonce ? ("resign" as const) : ("rebroadcast" as const);
+}
+
+const nonceOf = (raw: Hex) => {
+  const nonce = parseTransaction(raw).nonce;
+  return typeof nonce === "number" ? nonce : null;
+};
+
 /** Persist signed transaction bytes before sending them. Safe to call repeatedly. */
 export async function signPayout(payoutId: string): Promise<Payout> {
   if (!pool || !ready()) throw new Error("Staking payout executor is unavailable.");
@@ -37,7 +68,15 @@ export async function signPayout(payoutId: string): Promise<Payout> {
     const signer = account();
     const total = BigInt(payout.principal_amount) + BigInt(payout.reward_amount);
     const data = encodeFunctionData({ abi: erc20Abi, functionName: "transfer", args: [getAddress(payout.wallet_address), total] });
-    const [nonce, gasPrice] = await Promise.all([client.getTransactionCount({ address: signer.address, blockTag: "pending" }), client.getGasPrice()]);
+    const [pending, gasPrice, outstanding] = await Promise.all([
+      client.getTransactionCount({ address: signer.address, blockTag: "pending" }),
+      client.getGasPrice(),
+      db.query("SELECT serialized_tx FROM staking_payouts WHERE status IN ('signed','broadcast') AND serialized_tx IS NOT NULL AND id<>$1", [payout.id]),
+    ]);
+    const nonce = nextNonce(
+      pending,
+      outstanding.rows.map((row) => nonceOf(row.serialized_tx as Hex)).filter((n): n is number => n !== null),
+    );
     const raw = await signer.signTransaction({ to: getAddress(env.teraTokenAddress), data, nonce, gas: 100000n, gasPrice, chainId: env.rhcChainId });
     const updated = await db.query("UPDATE staking_payouts SET status='signed',serialized_tx=$2,tx_hash=$3,updated_at=NOW(),failure_reason=NULL WHERE id=$1 RETURNING id,wallet_address,principal_amount,reward_amount,status,serialized_tx,tx_hash", [payout.id, raw, keccak256(raw)]);
     await db.query("COMMIT");
@@ -69,7 +108,10 @@ export async function confirmPayout(payoutId: string): Promise<Payout | null> {
   if (payout.status !== "broadcast" || !payout.tx_hash) return null;
   let receipt;
   try { receipt = await client.getTransactionReceipt({ hash: payout.tx_hash }); }
-  catch { return null; }
+  catch (error) {
+    if (error instanceof TransactionReceiptNotFoundError) await recoverUnmined(payout);
+    return null;
+  }
   if (receipt.status !== "success") {
     await pool.query("UPDATE staking_payouts SET status='failed',failure_reason='Payout transaction reverted on chain.',updated_at=NOW() WHERE id=$1 AND status='broadcast'", [payout.id]);
     return null;
@@ -86,6 +128,36 @@ export async function confirmPayout(payoutId: string): Promise<Payout | null> {
   const result = await pool.query("UPDATE staking_payouts SET status='confirmed',confirmed_at=NOW(),updated_at=NOW() WHERE id=$1 AND status='broadcast' RETURNING id,wallet_address,principal_amount,reward_amount,status,serialized_tx,tx_hash", [payout.id]);
   if (result.rowCount) await pool.query("INSERT INTO staking_events (epoch_id,lock_id,wallet_address,kind,amount,metadata) SELECT epoch_id,lock_id,wallet_address,'payout_confirmed',principal_amount+reward_amount,jsonb_build_object('payoutId',id,'txHash',tx_hash) FROM staking_payouts WHERE id=$1", [payout.id]);
   return (result.rows[0] ?? payout) as Payout;
+}
+
+/**
+ * A sent payout with no receipt: keep waiting, send the same bytes again, or — when
+ * another transaction has taken its nonce, so it can never be mined and nothing was
+ * paid — mark it failed and sign it again with a fresh nonce.
+ */
+async function recoverUnmined(payout: Payout) {
+  if (!pool || !payout.serialized_tx || !payout.tx_hash) return;
+  const txNonce = nonceOf(payout.serialized_tx);
+  if (txNonce === null) return;
+  let txKnown = true;
+  try { await client.getTransaction({ hash: payout.tx_hash }); }
+  catch (error) { txKnown = !(error instanceof TransactionNotFoundError); }
+  const latestNonce = await client.getTransactionCount({ address: account().address, blockTag: "latest" });
+  const action = recoveryFor({ txKnown, latestNonce, txNonce });
+  if (action === "rebroadcast") {
+    await client.sendRawTransaction({ serializedTransaction: payout.serialized_tx }).catch(() => {});
+    return;
+  }
+  if (action !== "resign") return;
+  // Re-signing pays again, so it waits out any node lag: the payout must have gone
+  // unmined for ten minutes, and a last receipt check must still find nothing.
+  const receipt = await client.getTransactionReceipt({ hash: payout.tx_hash }).catch(() => null);
+  if (receipt) return;
+  const marked = await pool.query(
+    "UPDATE staking_payouts SET status='failed',failure_reason='Its nonce was used by another transaction before it was mined; nothing was paid. Re-sent with a new nonce.',updated_at=NOW() WHERE id=$1 AND status='broadcast' AND tx_hash=$2 AND updated_at < NOW() - INTERVAL '10 minutes'",
+    [payout.id, payout.tx_hash],
+  );
+  if (marked.rowCount) await broadcastPayout(payout.id);
 }
 
 /** Processes one payout at a time under a database-wide advisory lock. */
