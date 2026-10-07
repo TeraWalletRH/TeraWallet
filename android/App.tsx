@@ -61,6 +61,7 @@ import {
   watched as watchedCore,
   limitOrders as limitCore,
   pnl as pnlCore,
+  priceImpact as impactCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -118,6 +119,8 @@ type Review = {
   afterSubmitted?: (hash: string) => Promise<void>;
   /** Where to land once it is sent. Activity when unset. */
   returnTo?: string;
+  /** A swap's price impact (core/price-impact.js); "confirm" needs the owner's tick to sign. */
+  impact?: { level: string; pct: number | null; costUsd: number | null };
   /**
    * A payment's value in dollars (USDG base units), checked against the
    * spending limits again at signing; null when it has no price. Unset for
@@ -681,6 +684,8 @@ function Wallet() {
     // The protect form: a stop-loss and/or take-profit on one holding.
     [protectForm, setProtectForm] = useState<Record<string, string>>({}),
     [protectError, setProtectError] = useState(""),
+    // Whether the owner has accepted a high price impact on the open review.
+    [impactAccepted, setImpactAccepted] = useState(false),
     [limitForm, setLimitForm] = useState<Record<string, string>>({}),
     [limitEditId, setLimitEditId] = useState(""),
     [orderError, setOrderError] = useState(""),
@@ -2964,12 +2969,21 @@ function Wallet() {
     }
     const swapSlippage = i.slippageBps ?? slippageCore.DEFAULT_SLIPPAGE_BPS;
     const swapMinimumOut = q ? formatUnits(slippageCore.swapMinimum(q, swapSlippage), q.decimalsOut) : "";
+    const impact = q
+      ? impactCore.assess(
+          q.priceImpactPct,
+          valueCore.valueOf(formatUnits(BigInt(i.amount), input.decimals), prices[input.symbol]),
+        )
+      : undefined;
+    // A pool too thin for this amount is refused before the review opens.
+    if (impact) check(impact.level !== "blocked", impactCore.message(impact));
     if (q) {
       rows.push([
         t("Expected output", "预计收到"),
         `${formatUnits(BigInt(q.amountOutWei), q.decimalsOut)} ${i.actionType === "BUY" ? asset.symbol : teraTrade ? "ETH" : "USDG"}`,
       ]);
       rows.push([t("Slippage limit", "滑点上限"), slippageCore.slippageLabel(swapSlippage)]);
+      if (impact) rows.push([t("Price impact", "价格影响"), impactCore.rowText(impact)]);
       rows.push([t("Minimum output", "最低收到"), swapMinimumOut]);
     }
     // What the five checks actually reported, rather than a sentence written
@@ -3007,6 +3021,7 @@ function Wallet() {
       verify: () => {
         verifyProposal(p, owner);
       },
+      ...(impact ? { impact } : {}),
       recipient: i.recipient || owner,
       payee,
       actionHash: p.preparedTransaction.actionHash,
@@ -3494,6 +3509,7 @@ function Wallet() {
   }
   async function presentReview(next: Review) {
     setReviewDetailsOpen(false);
+    setImpactAccepted(false);
     holdProgress.setValue(0);
     const shownRecipient = next.rows.find(([label]) =>
       label === t("Recipient", "收款地址") || label === t("Recipient", "收款方"))?.[1];
@@ -3584,6 +3600,11 @@ function Wallet() {
       });
       return;
     }
+    // A high price impact is signed only after the owner has accepted it.
+    check(
+      r.impact?.level !== "confirm" || impactAccepted,
+      t("Accept the price impact before signing.", "签名前请先确认价格影响。"),
+    );
     // Consume the review before broadcasting so a timeout cannot lead to a
     // second tap resending a bridge or transfer.
     r.verify();
@@ -13430,6 +13451,45 @@ function Wallet() {
                   </Button>
                 </View>
               )}
+              {!review?.historical && review?.impact && impactCore.message(review.impact) ? (
+                <View
+                  style={[
+                    s.panel,
+                    {
+                      gap: 8,
+                      borderWidth: 1,
+                      borderColor: review.impact.level === "warn" ? "#d97706" : colors.danger,
+                      backgroundColor: review.impact.level === "warn" ? "#d977061a" : colors.danger + "1a",
+                    },
+                  ]}
+                >
+                  <View style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+                    <Icon
+                      name="alert-outline"
+                      size={18}
+                      color={review.impact.level === "warn" ? "#d97706" : colors.danger}
+                    />
+                    <Text style={[s.small, { flex: 1, color: colors.ink }]}>{impactCore.message(review.impact)}</Text>
+                  </View>
+                  {review.impact.level === "confirm" ? (
+                    <Pressable
+                      accessibilityRole="checkbox"
+                      accessibilityState={{ checked: impactAccepted }}
+                      onPress={() => setImpactAccepted((value) => !value)}
+                      style={{ flexDirection: "row", gap: 8, alignItems: "center" }}
+                    >
+                      <Icon
+                        name={impactAccepted ? "checkbox-marked" : "checkbox-blank-outline"}
+                        size={22}
+                        color={impactAccepted ? colors.danger : colors.muted}
+                      />
+                      <Text style={[s.small, { flex: 1, color: colors.ink, fontWeight: "700" }]}>
+                        {impactCore.consentText(review.impact)}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : null}
               {!review?.historical && <Text style={s.small}>
                 {t(
                   "Network fees are additional, capped at 0.001 ETH per transaction step. This authorizes only the reviewed steps.",
@@ -13447,7 +13507,13 @@ function Wallet() {
                   "\u6301\u7eed\u6309\u4f4f\u4ee5\u6279\u51c6\u5df2\u5ba1\u6838\u7684\u4ea4\u6613\u3002",
                 )}
                 delayLongPress={HOLD_TO_SIGN_MS}
-                disabled={busy || signing || review?.simulation === "checking" || !review}
+                disabled={
+                  busy ||
+                  signing ||
+                  review?.simulation === "checking" ||
+                  !review ||
+                  (review.impact?.level === "confirm" && !impactAccepted)
+                }
                 onLongPress={() => {
                   const current = review;
                   if (current) {
