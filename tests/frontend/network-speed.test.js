@@ -14,7 +14,10 @@ import {
 } from "../../public/tera/core/network-speed.js";
 
 test("block time is averaged over the blocks between two readings", () => {
-  assert.equal(blockTime({ number: 1100, timestamp: 1025 }, { number: 1000, timestamp: 1000 }), 250);
+  assert.equal(
+    blockTime({ number: 1100, timestamp: 1025 }, { number: 1000, timestamp: 1000 }),
+    250,
+  );
   assert.equal(blockTime({ number: 5, timestamp: 10 }, { number: 5, timestamp: 10 }), null);
   assert.equal(blockTime(null, null), null);
 });
@@ -70,4 +73,15 @@ test("durations, latency and gas read plainly", () => {
   assert.equal(formatGwei(0n), "0");
   assert.equal(transferFeeWei(10n), 650_000n);
   assert.equal(transferFeeWei(null), null);
+});
+
+test("a review's fee is stated in ETH, with dollars only when ETH is priced", async () => {
+  const { describeFee } = await import("../../public/tera/core/network-speed.js");
+  // 65,000 gas at 0.0205 gwei.
+  assert.equal(describeFee(65_000n * 20_500_000n, 2569.6), "≈ 0.0000013 ETH (< $0.01)");
+  assert.equal(describeFee(2_000_000_000_000_000n, 2500), "≈ 0.002 ETH (≈ $5.00)");
+  assert.equal(describeFee("21000000000000", null), "≈ 0.000021 ETH");
+  assert.equal(describeFee(0n, 2500), "≈ 0 ETH (< $0.01)");
+  assert.equal(describeFee(null, 2500), "");
+  assert.equal(describeFee(123_456_789_000_000_000n, 2000), "≈ 0.12 ETH (≈ $246.91)");
 });

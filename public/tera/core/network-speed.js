@@ -62,7 +62,8 @@ export function estimateConfirmMs({ latencyMs, blockTimeMs } = {}) {
  */
 export function reading({ newest, older, latencyMs, gasPriceWei = null, now = Date.now() }) {
   const blockTimeMs = blockTime(newest, older);
-  const blockAgeMs = newest?.timestamp != null ? Math.max(0, now - Number(newest.timestamp) * 1000) : null;
+  const blockAgeMs =
+    newest?.timestamp != null ? Math.max(0, now - Number(newest.timestamp) * 1000) : null;
   const measured = { latencyMs, blockTimeMs, blockAgeMs };
   return {
     ...measured,
@@ -130,3 +131,28 @@ export const TRANSFER_GAS = 65_000n;
 /** What a token transfer costs in wei at this gas price. */
 export const transferFeeWei = (gasPriceWei) =>
   gasPriceWei == null ? null : BigInt(gasPriceWei) * TRANSFER_GAS;
+
+/**
+ * A transaction fee for the review: "≈ 0.0000021 ETH (< $0.01)".
+ *
+ * Shown before signing, as wallets do, so the owner sees what the network will
+ * take on top of the amount. Two significant figures of ETH, and the dollar value
+ * when ETH has a price — never a dollar figure invented without one.
+ *
+ * @param {bigint | string | number | null | undefined} feeWei
+ * @param {number | null | undefined} [ethUsd]
+ */
+export function describeFee(feeWei, ethUsd = null) {
+  if (feeWei == null) return "";
+  const eth = Number(BigInt(feeWei)) / 1e18;
+  let ethText = "0";
+  if (eth > 0) {
+    const digits = Math.min(18, Math.max(0, 1 - Math.floor(Math.log10(eth))));
+    ethText = eth.toFixed(digits);
+    if (ethText.includes(".")) ethText = ethText.replace(/0+$/, "").replace(/\.$/, "");
+  }
+  if (!(typeof ethUsd === "number" && Number.isFinite(ethUsd) && ethUsd > 0))
+    return `≈ ${ethText} ETH`;
+  const usd = eth * ethUsd;
+  return `≈ ${ethText} ETH (${usd < 0.01 ? "< $0.01" : `≈ $${usd.toFixed(2)}`})`;
+}
