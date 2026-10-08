@@ -29,6 +29,9 @@ export * as limitOrders from "../../public/tera/core/limit-orders.js";
 export * as pnl from "../../public/tera/core/pnl.js";
 // How much a swap moves the price by its own size, and when to warn, ask or refuse.
 export * as priceImpact from "../../public/tera/core/price-impact.js";
+// Staking deposits from the wallet: fixed-lock rewards, the flexible rate, the
+// on-device deposit check, and pending deposits awaiting credit.
+export * as stakingCore from "../../public/tera/core/staking.js";
 
 // What holdings are worth. Shared because the honest part of a valuation is arithmetic,
 // not presentation: an unpriced holding must be left out of the total and named, on both
