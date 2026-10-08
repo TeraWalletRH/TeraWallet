@@ -120,6 +120,8 @@ type Review = {
   afterSubmitted?: (hash: string) => Promise<void>;
   /** Where to land once it is sent. Activity when unset. */
   returnTo?: string;
+  /** The estimated network fee in wei for every step, once simulation has read it. */
+  feeWei?: string;
   /** A swap's price impact (core/price-impact.js); "confirm" needs the owner's tick to sign. */
   impact?: { level: string; pct: number | null; costUsd: number | null };
   /**
@@ -3588,9 +3590,10 @@ function Wallet() {
           Promise.all(next.steps.map((tx) => client.estimateGas({ account: owner as Address, to: tx.to, data: tx.data, value: BigInt(tx.value) }))),
         ]),
       ]);
-      const estimatedFeeEth = gasResult.status === "fulfilled"
-        ? (Number(gasResult.value[0] * gasResult.value[1].reduce((sum, gas) => sum + gas, 0n)) / 1e18).toFixed(6)
+      const feeWei = gasResult.status === "fulfilled"
+        ? gasResult.value[0] * gasResult.value[1].reduce((sum, gas) => sum + gas, 0n)
         : undefined;
+      const estimatedFeeEth = feeWei !== undefined ? (Number(feeWei) / 1e18).toFixed(6) : undefined;
       const recipientHasCode = codeResult.status === "fulfilled" && !!codeResult.value && codeResult.value !== "0x";
       const updatedDelta = calculateNetBalanceDelta({
         tx: tx0,
@@ -3600,6 +3603,7 @@ function Wallet() {
       });
       setReview({
         ...next,
+        ...(feeWei !== undefined ? { feeWei: feeWei.toString() } : {}),
         netBalanceDelta: updatedDelta,
         simulation: "passed",
         intelligence: reviewIntelligence({
@@ -13505,6 +13509,12 @@ function Wallet() {
                     </Pressable>
                   ) : null}
                 </View>
+              ) : null}
+              {!review?.historical && review?.feeWei ? (
+                <Row
+                  label={t("Network fee", "网络手续费")}
+                  value={networkSpeed.describeFee(review.feeWei, prices.ETH)}
+                />
               ) : null}
               {!review?.historical && <Text style={s.small}>
                 {t(
