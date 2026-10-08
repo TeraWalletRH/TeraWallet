@@ -48,7 +48,15 @@ jobs:
       # EXPO_TOKEN authenticates the CLI to the terawallet Expo/EAS account;
       # code signing is handled by EAS-managed credentials tied to the
       # organization Apple Developer account.
+      # Cloud builds come from a monthly EAS quota, and a build started by every
+      # push to android/ used it all up, failing every iOS run for the rest of
+      # the month. Pushes run the checks and tests above; an App Store build is
+      # started on purpose, from Actions → iOS wallet → Run workflow.
+      - name: Note that pushes do not start a cloud build
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        run: echo "::notice::Checks and tests passed. iOS cloud builds run only when started manually (Actions → iOS wallet → Run workflow)."
       - name: Build with EAS
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
         run: |
