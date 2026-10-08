@@ -91,6 +91,11 @@ export type LocalData = {
    * where this wallet cannot see. Used by core/pnl.js in place of the computed one.
    */
   pnlOverrides?: Record<string, string>;
+  /**
+   * Staking deposits signed but not yet credited by the staking service, retried
+   * until they are (core/staking.js). Kept so closing the app loses nothing.
+   */
+  stakingPending?: any[];
   /** Whether the spotlight walkthrough has run on this device already. */
   tourSeen: boolean;
   /**

@@ -63,6 +63,7 @@ import {
   limitOrders as limitCore,
   pnl as pnlCore,
   priceImpact as impactCore,
+  stakingCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -702,7 +703,13 @@ function Wallet() {
     [csvModalOpen, setCsvModalOpen] = useState(false),
     [stakingPosition, setStakingPosition] = useState<any>(null),
     // The staking screen's positions, fixed locks and recent payouts; null while reading.
-    [stakeData, setStakeData] = useState<null | { positions: any[]; locks: any[]; payouts: any[] }>(null),
+    [stakeData, setStakeData] = useState<
+      null | { positions: any[]; locks: any[]; payouts: any[]; epochs: any[]; config: any }
+    >(null),
+    // Which stake the form makes: flexible, or a fixed lock of 30, 45 or 90 days.
+    [stakeTerm, setStakeTerm] = useState<"flexible" | "30" | "45" | "90">("flexible"),
+    // The latest crediting state of each pending deposit, by transaction hash.
+    [creditState, setCreditState] = useState<Record<string, string>>({}),
     [stakeError, setStakeError] = useState(""),
     [stakingLockTier, setStakingLockTier] = useState<"flexible" | "30d" | "90d">("flexible"),
     [stakeAmount, setStakeAmount] = useState("");
@@ -1616,17 +1623,143 @@ function Wallet() {
     if (!owner) return;
     setStakeError("");
     try {
-      const [positions, locks, payouts] = await Promise.all([
+      const [positions, locks, payouts, epochs, config] = await Promise.all([
         api(`/api/staking/position/${owner}`),
         api(`/api/staking/locks/${owner}`).catch(() => ({ locks: [] })),
         api(`/api/staking/payouts/${owner}`).catch(() => ({ payouts: [] })),
+        api("/api/staking/epochs").catch(() => ({ epochs: [] })),
+        api("/api/staking/config").catch(() => null),
       ]);
-      setStakeData({ positions: positions.positions || [], locks: locks.locks || [], payouts: payouts.payouts || [] });
+      setStakeData({
+        positions: positions.positions || [],
+        locks: locks.locks || [],
+        payouts: payouts.payouts || [],
+        epochs: epochs.epochs || [],
+        config,
+      });
     } catch (error) {
       setStakeData(null);
       setStakeError(error instanceof Error ? error.message : t("Staking is unavailable right now.", "质押服务暂不可用。"));
     }
   }
+  /**
+   * Ask the staking service to credit a signed deposit, retrying while it waits
+   * for confirmations. Each hash is worked on once at a time; a deposit that is
+   * still not credited stays pending and is tried again next time.
+   */
+  const crediting = useRef(new Set<string>());
+  async function creditPending(entry: any) {
+    const key = entry.txHash.toLowerCase();
+    if (crediting.current.has(key)) return;
+    crediting.current.add(key);
+    try {
+      const request = stakingCore.creditRequest(entry);
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        let outcome = "error";
+        let reason = "";
+        try {
+          outcome = stakingCore.creditOutcome(await api(request.path, request.body));
+        } catch (error) {
+          reason = error instanceof Error ? error.message : String(error);
+        }
+        if (outcome === "credited") {
+          await store({
+            ...dataRef.current,
+            stakingPending: stakingCore.resolvePending(dataRef.current.stakingPending, entry.txHash),
+          });
+          setCreditState((current) => ({ ...current, [key]: "credited" }));
+          setNotice({
+            title: t("Stake credited", "质押已记入"),
+            body:
+              entry.kind === "fixed"
+                ? t(`Your ${entry.termDays}-day lock is active.`, `你的 ${entry.termDays} 天锁定已生效。`)
+                : t("Your flexible stake is earning rewards.", "你的活期质押已开始赚取奖励。"),
+            tone: "success",
+          });
+          void loadStaking();
+          return;
+        }
+        setCreditState((current) => ({ ...current, [key]: outcome === "waiting" ? "waiting" : reason || "error" }));
+        await new Promise((resolve) => setTimeout(resolve, 12_000));
+      }
+    } finally {
+      crediting.current.delete(key);
+    }
+  }
+  useEffect(() => {
+    if (page !== "staking" || !owner) return;
+    for (const entry of stakingCore.pendingFor(dataRef.current.stakingPending, owner)) void creditPending(entry);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, owner]);
+  /** Stake TERA: prepare the transfer, check it on the device, review and sign it, then credit it. */
+  async function stakeNow(guard: () => void) {
+    const config = stakeData?.config;
+    check(config?.poolAddress && config?.tokenAddress, t("Staking is unavailable right now.", "质押服务暂不可用。"));
+    const amount = BigInt(units(stakeAmount, 18));
+    check(amount > 0n, t("Enter an amount of TERA to stake.", "请输入要质押的 TERA 数量。"));
+    const held = BigInt(balance?.TERA || "0");
+    check(amount <= held, t(`You have ${tera(held)} TERA.`, `你有 ${tera(held)} TERA。`));
+    const fixed = stakeTerm !== "flexible";
+    const epoch = stakingCore.activeEpoch(stakeData?.epochs);
+    check(fixed || epoch, t("There is no active staking epoch to join right now.", "目前没有可加入的质押周期。"));
+    const prepared = await api("/api/staking/prepare-deposit", {
+      amount: amount.toString(),
+      ...(fixed ? { termDays: Number(stakeTerm) } : {}),
+    });
+    guard();
+    const tx = prepared.preparedTransaction;
+    const want = { token: config.tokenAddress, pool: config.poolAddress, amount, chainId: chain.id };
+    const issue = stakingCore.depositIssue(tx, want);
+    check(!issue, issue);
+    check(same(prepared.poolAddress, config.poolAddress), t("The staking pool changed. Try again.", "质押池已变更，请重试。"));
+    const reward = fixed ? stakingCore.fixedReward(amount, Number(stakeTerm)) : 0n;
+    const apr = fixed ? null : stakingCore.flexibleApr(epoch, amount);
+    void presentReview({
+      title: t("Review stake", "审核质押"),
+      rows: [
+        [t("Amount", "金额"), `${tera(amount)} TERA`],
+        [
+          t("Type", "类型"),
+          fixed
+            ? t(`Fixed ${stakeTerm}-day lock`, `固定 ${stakeTerm} 天锁定`)
+            : t("Flexible — unstake any time", "活期——随时解押"),
+        ],
+        fixed
+          ? [t("Guaranteed reward", "保证奖励"), `${tera(reward)} TERA`]
+          : [t("Current rate (variable)", "当前利率（浮动）"), apr === null ? "—" : `≈ ${apr.toFixed(2)}% / yr`],
+        ...(fixed
+          ? [[t("Unlocks", "解锁时间"), new Date(Date.now() + Number(stakeTerm) * 86_400_000).toLocaleDateString()] as [string, string]]
+          : []),
+        [t("Sent to", "发送至"), config.poolAddress],
+      ],
+      steps: [tx],
+      verify: () => {
+        const again = stakingCore.depositIssue(tx, want);
+        if (again) throw new Error(again);
+      },
+      recipient: config.poolAddress,
+      activityType: "send",
+      returnTo: "staking",
+      afterSubmitted: async (hash: string) => {
+        const entry = {
+          kind: fixed ? "fixed" : "flexible",
+          termDays: fixed ? Number(stakeTerm) : undefined,
+          epochId: fixed ? undefined : epoch.id,
+          txHash: hash,
+          owner,
+          amount: amount.toString(),
+        };
+        await store({
+          ...dataRef.current,
+          stakingPending: stakingCore.addPending(dataRef.current.stakingPending, entry),
+        });
+        setStakeAmount("");
+        void creditPending(entry);
+      },
+    });
+  }
+  const tera = (value: string | number | bigint | null | undefined) =>
+    shortAmount(formatUnits(BigInt(String(value ?? "0").split(".")[0] || "0"), 18));
   useEffect(() => {
     if (page !== "staking" || !owner) return;
     void loadStaking();
@@ -6852,8 +6985,6 @@ function Wallet() {
       // service returns, and the treasury executor sends the TERA. Deposits need an
       // on-chain transfer that the service verifies, which this screen does not
       // make yet, so it sends people to the staking site for that.
-      const tera = (units: string | number | bigint | null | undefined) =>
-        shortAmount(formatUnits(BigInt(String(units ?? "0").split(".")[0] || "0"), 18));
       const signedPayout = async (kind: "claim" | "unstake", position: any) => {
         const request = {
           kind,
@@ -7029,22 +7160,128 @@ function Wallet() {
               ) : null}
             </>
           )}
-          <View style={[s.panel, { gap: 8 }]}>
-            <Text style={[s.text, { fontWeight: "700" }]}>{t("Stake more TERA", "质押更多 TERA")}</Text>
-            <Text style={s.small}>
-              {t(
-                "New stakes are made on the staking site for now: it sends your TERA to the staking pool and the service verifies the transfer before crediting it.",
-                "目前请在质押网站发起新的质押：网站会将你的 TERA 转入质押池，服务方验证转账后再记入。",
-              )}
-            </Text>
-            <Button
-              onPress={() => {
-                if (typeof window !== "undefined") window.open("https://terawallet.app/dashboard/staking/", "_blank");
-                else void Linking.openURL("https://terawallet.app/dashboard/staking/");
-              }}
-            >
-              {t("Open the staking site", "打开质押网站")}
-            </Button>
+          {(() => {
+            const pending = stakingCore.pendingFor(data.stakingPending, owner);
+            if (!pending.length) return null;
+            return (
+              <View style={[s.panel, { gap: 6, borderColor: colors.lime, borderWidth: 1 }]}>
+                <Text style={s.eyebrow}>{t("BEING CREDITED", "正在记入")}</Text>
+                {pending.map((entry: any) => {
+                  const state = creditState[entry.txHash.toLowerCase()];
+                  const old = Date.now() - (entry.at || 0) > stakingCore.PENDING_HELP_MS;
+                  return (
+                    <View key={entry.txHash} style={{ gap: 4 }}>
+                      <Row
+                        label={entry.kind === "fixed" ? t(`${entry.termDays}-day lock`, `${entry.termDays} 天锁定`) : t("Flexible", "活期")}
+                        value={`${tera(entry.amount)} TERA`}
+                      />
+                      <Text style={s.small}>
+                        {state === "waiting" || state === undefined
+                          ? t("Waiting for the network to confirm the deposit…", "等待网络确认存入…")
+                          : t(`Not credited yet: ${state}`, `尚未记入：${state}`)}
+                        {old
+                          ? t(
+                              ` It has been a while — contact support with transaction ${entry.txHash.slice(0, 10)}….`,
+                              ` 已等待较久——请联系支持并提供交易 ${entry.txHash.slice(0, 10)}…。`,
+                            )
+                          : ""}
+                      </Text>
+                      <Pressable accessibilityRole="button" onPress={() => void creditPending(entry)}>
+                        <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>{t("Check again", "再次检查")}</Text>
+                      </Pressable>
+                    </View>
+                  );
+                })}
+              </View>
+            );
+          })()}
+          <View style={[s.panel, { gap: 10 }]}>
+            <Text style={[s.text, { fontWeight: "700" }]}>{t("Stake TERA", "质押 TERA")}</Text>
+            {(() => {
+              const epoch = stakingCore.activeEpoch(stakeData?.epochs);
+              const held = BigInt(balance?.TERA || "0");
+              let entered = 0n;
+              try {
+                entered = stakeAmount ? BigInt(units(stakeAmount, 18)) : 0n;
+              } catch {
+                entered = 0n;
+              }
+              const apr = stakingCore.flexibleApr(epoch, entered);
+              const terms: { key: "flexible" | "30" | "45" | "90"; label: string; rate: string }[] = [
+                {
+                  key: "flexible",
+                  label: t("Flexible", "活期"),
+                  rate: apr === null ? t("not open", "未开放") : t(`≈ ${apr.toFixed(1)}% variable`, `≈ ${apr.toFixed(1)}% 浮动`),
+                },
+                ...(["30", "45", "90"] as const).map((days) => ({
+                  key: days,
+                  label: t(`${days} days`, `${days} 天`),
+                  rate: t(
+                    `${(stakingCore.FIXED_TERMS[days].apyBps / 100).toFixed(0)}% fixed`,
+                    `${(stakingCore.FIXED_TERMS[days].apyBps / 100).toFixed(0)}% 固定`,
+                  ),
+                })),
+              ];
+              const reward = stakeTerm === "flexible" ? null : stakingCore.fixedReward(entered, Number(stakeTerm));
+              return (
+                <>
+                  <View style={[s.wrap, { gap: 8 }]}>
+                    {terms.map((term) => {
+                      const active = stakeTerm === term.key;
+                      return (
+                        <Pressable
+                          key={term.key}
+                          accessibilityRole="button"
+                          accessibilityState={{ selected: active }}
+                          onPress={() => setStakeTerm(term.key)}
+                          style={{
+                            paddingVertical: 8,
+                            paddingHorizontal: 12,
+                            borderRadius: 14,
+                            borderWidth: 1,
+                            borderColor: active ? colors.green : colors.line,
+                            backgroundColor: active ? colors.tint : colors.wash,
+                            alignItems: "center",
+                          }}
+                        >
+                          <Text style={{ fontSize: 13, fontWeight: "700", color: active ? colors.green : colors.ink }}>{term.label}</Text>
+                          <Text style={{ fontSize: 11, color: active ? colors.green : colors.muted }}>{term.rate}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <Field
+                    label={t("Amount (TERA)", "数量（TERA）")}
+                    value={stakeAmount}
+                    onChangeText={setStakeAmount}
+                    keyboardType="decimal-pad"
+                    placeholder="0"
+                    hint={t(`Available: ${tera(held)} TERA`, `可用：${tera(held)} TERA`)}
+                  />
+                  <Pressable accessibilityRole="button" onPress={() => setStakeAmount(formatUnits(held, 18))}>
+                    <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>{t("Use all", "全部使用")}</Text>
+                  </Pressable>
+                  <Text style={s.small}>
+                    {stakeTerm === "flexible"
+                      ? t(
+                          "Earns this epoch's rewards, shared with everyone staked, so the rate changes as others stake. Unstake any time.",
+                          "赚取本周期奖励，与所有质押者共享，利率随质押量变化。可随时解押。",
+                        )
+                      : t(
+                          `Guaranteed ${tera(reward ?? 0n)} TERA reward. Locked for ${stakeTerm} days with no early unlock; principal and reward are claimable on ${new Date(Date.now() + Number(stakeTerm) * 86_400_000).toLocaleDateString()}.`,
+                          `保证奖励 ${tera(reward ?? 0n)} TERA。锁定 ${stakeTerm} 天，不可提前解锁；本金与奖励于 ${new Date(Date.now() + Number(stakeTerm) * 86_400_000).toLocaleDateString()} 可领取。`,
+                        )}
+                  </Text>
+                  {action("Review stake", "审核质押", stakeNow)}
+                  <Text style={s.small}>
+                    {t(
+                      "You sign a TERA transfer to the staking pool. The staking service credits it once the network confirms it — usually under a minute.",
+                      "你签名一笔转入质押池的 TERA 转账。网络确认后（通常不到一分钟），质押服务即会记入。",
+                    )}
+                  </Text>
+                </>
+              );
+            })()}
           </View>
         </>
       );
