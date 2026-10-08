@@ -97,7 +97,16 @@ jobs:
           echo "::error::Could not install NDK $ndk."
           exit 1
       - run: bun run check && bun test tests
-      - run: bunx expo install --check
+      # Expo publishes patch releases often, and this check fails the moment the
+      # lockfile is one patch behind — which stopped every Android build from
+      # 2026-10-06 although nothing was wrong with the app. The lockfile pins
+      # what is built and the export and Gradle steps below catch real
+      # incompatibilities, so drift is reported, not fatal.
+      - name: Check Expo package versions
+        run: |
+          if ! bunx expo install --check; then
+            echo "::warning::Expo has newer compatible package versions. Run 'bunx expo install --fix' in android/ to update."
+          fi
       - run: bun run export
       - run: bun run prebuild
       # GRADLE_OPTS alone didn't fix the Metaspace OOM: under --no-daemon
