@@ -109,6 +109,11 @@ export type LocalData = {
   hideSmallThreshold?: number;
   privacy?: boolean;
   /**
+   * Cover the app while it is in the background or the browser tab is hidden,
+   * so balances don't show in the app switcher. Absent means on.
+   */
+  coverAway?: boolean;
+  /**
    * Tokens the owner added by contract address — the app checks a balance
    * for these on every refresh alongside the built-in and registry-known
    * assets, the same way MetaMask's "import tokens" does for anything it
