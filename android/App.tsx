@@ -47,6 +47,7 @@ import { balances, client, confirmation, execute, probeNetwork, transactionStatu
 import { fetchChainHistory, fetchTransferLegs, type ChainHistoryEntry, type TransferLeg } from "./src/explorer";
 import { KNOWN_SPENDERS, scanApprovals, type Grant } from "./src/approvals";
 import { captureNote, SecretCover, useBlockScreenCapture } from "./src/secretGuard";
+import { AwayCover } from "./src/awayCover";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
@@ -12160,6 +12161,25 @@ function Wallet() {
               right={<Toggle on={!!data.privacy} />}
             />
             <ListRow
+              icon="eye-off"
+              label={t("Hide when away", "离开时隐藏")}
+              detail={
+                Platform.OS === "web"
+                  ? t(
+                      "Cover Tera when you switch tabs or another window is in front, so tab previews and shared screens show no balances.",
+                      "切换标签页或其他窗口在前时遮盖 Tera，标签预览和共享屏幕不会显示余额。",
+                    )
+                  : t(
+                      "Cover Tera when you leave the app, so the app switcher shows no balances.",
+                      "离开应用时遮盖 Tera，应用切换器中不会显示余额。",
+                    )
+              }
+              onPress={() =>
+                void run(() => store({ ...dataRef.current, coverAway: dataRef.current.coverAway === false }))
+              }
+              right={<Toggle on={data.coverAway !== false} />}
+            />
+            <ListRow
               icon="filter"
               label={t("Hide small balances", "隐藏小额余额")}
               detail={t(
@@ -14461,6 +14481,7 @@ function Wallet() {
           </SafeAreaView>
         </SafeAreaProvider>
       </Modal>
+      <AwayCover enabled={!!owner && data.coverAway !== false} colors={colors} t={t} />
       {txAlert ? (
         <Pressable
           accessibilityRole="alert"
