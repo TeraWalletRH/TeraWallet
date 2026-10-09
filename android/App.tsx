@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import {
+  ActivityIndicator,
   Alert,
   Animated,
   AppState,
@@ -44,6 +45,7 @@ const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
 import { balances, client, confirmation, execute, probeNetwork, transactionStatus } from "./src/network";
 import { fetchChainHistory, fetchTransferLegs, type ChainHistoryEntry, type TransferLeg } from "./src/explorer";
+import { KNOWN_SPENDERS, scanApprovals, type Grant } from "./src/approvals";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
@@ -64,6 +66,7 @@ import {
   pnl as pnlCore,
   priceImpact as impactCore,
   stakingCore,
+  approvals as approvalRules,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -139,7 +142,7 @@ type Review = {
   intelligence?: ReviewIntelligence;
   historical?: boolean;
   historyNote?: string;
-  activityType?: "send" | "swap" | "bridge";
+  activityType?: "send" | "swap" | "bridge" | "revoke";
   /** The owner's private note, saved under the transaction's hash once it is signed. */
   note?: string;
   netBalanceDelta?: NetBalanceDelta;
@@ -758,7 +761,13 @@ function Wallet() {
       | "appearance"
       | "autolock"
       | "currency"
+      | "approvals"
     >("root"),
+    // Open token approvals, read from the chain when the screen opens. Null
+    // until the first scan finishes; never stored.
+    [grants, setGrants] = useState<Grant[] | null>(null),
+    [grantsBusy, setGrantsBusy] = useState(false),
+    [grantsError, setGrantsError] = useState(""),
     // The transaction banner at the top of the screen, and the browser's
     // permission for system notifications as last read.
     [txAlert, setTxAlert] = useState<null | { title: string; body: string; hash: string }>(null),
@@ -3670,6 +3679,56 @@ function Wallet() {
       Alert.alert(t("Cannot send NFT", "无法发送 NFT"), String((e as Error)?.message || e));
     }
   }
+  async function loadApprovals() {
+    if (!owner) return;
+    setGrantsBusy(true);
+    setGrantsError("");
+    try {
+      setGrants(await scanApprovals(owner as Address, assets));
+    } catch {
+      setGrantsError(t("Could not read approvals from the network. Try again.", "无法从网络读取授权，请重试。"));
+    } finally {
+      setGrantsBusy(false);
+    }
+  }
+  function spenderLabel(spender: string) {
+    const name = approvalRules.spenderName(spender, KNOWN_SPENDERS);
+    return name ? t(name[0], name[1]) : `${spender.slice(0, 6)}…${spender.slice(-4)}`;
+  }
+  function grantAmount(grant: Grant) {
+    if (grant.kind === "collection") return t("Every item in the collection", "该合集的全部藏品");
+    if (approvalRules.isUnlimited(grant.amount ?? 0n)) return t(`Unlimited ${grant.symbol}`, `无限 ${grant.symbol}`);
+    return `${formatUnits(grant.amount ?? 0n, grant.decimals)} ${grant.symbol}`;
+  }
+  function revokeApproval(grant: Grant) {
+    try {
+      const step = { ...approvalRules.revokeCall(grant), chainId: chain.id } as Tx;
+      approvalRules.checkRevoke(step, grant);
+      void presentReview({
+        title: t("Revoke approval", "撤销授权"),
+        rows: [
+          [grant.kind === "collection" ? t("Collection", "合集") : t("Token", "代币"), grant.symbol],
+          [t("Spender", "被授权方"), spenderLabel(grant.spender)],
+          [t("Spender address", "被授权方地址"), grant.spender],
+          [t("Can spend now", "当前可花费"), grantAmount(grant)],
+          [t("After revoking", "撤销后"), t("Nothing", "无")],
+        ],
+        steps: [step],
+        activityType: "revoke",
+        returnTo: "settings",
+        // No tokens move: only the network fee is paid.
+        intent: { actionType: "REVOKE" },
+        verify: () => approvalRules.checkRevoke(step, grant),
+        afterSubmitted: async () => {
+          setGrants((current) =>
+            current?.filter((g) => !(g.kind === grant.kind && g.token === grant.token && g.spender === grant.spender)) ?? current,
+          );
+        },
+      } as Review);
+    } catch (e) {
+      Alert.alert(t("Cannot revoke", "无法撤销"), String((e as Error)?.message || e));
+    }
+  }
   async function presentReview(next: Review) {
     setReviewDetailsOpen(false);
     setImpactAccepted(false);
@@ -3790,7 +3849,9 @@ function Wallet() {
       const amountLabel = r.rows.find(([label]) =>
         label === t("Send", "发送") || label === t("Amount", "金额"))?.[1]
         ?? r.rows.find(([label]) => label === t("NFT", "NFT"))?.[1];
-      const activityTitle = activityType === "swap"
+      const activityTitle = activityType === "revoke"
+        ? t("Revoked approval", "已撤销授权")
+        : activityType === "swap"
         ? t(`Swapped${amountLabel ? ` ${amountLabel}` : ""}`, `已兑换${amountLabel ? ` ${amountLabel}` : ""}`)
         : activityType === "bridge"
           ? t(`Bridged${amountLabel ? ` ${amountLabel}` : ""}`, `已跨链转移${amountLabel ? ` ${amountLabel}` : ""}`)
@@ -11969,6 +12030,18 @@ function Wallet() {
               disabled={busy}
               onPress={() => requestPrivateKey(vault.selectedIndex())}
             />
+            {/* Web only for now; the phone apps get it in a later release. */}
+            {Platform.OS === "web" && (
+              <ListRow
+                icon="shield-key-outline"
+                label={t("Token approvals", "代币授权")}
+                detail={t("Contracts allowed to spend your tokens", "可花费你代币的合约")}
+                onPress={() => {
+                  setSettingsSection("approvals");
+                  void loadApprovals();
+                }}
+              />
+            )}
             <ListRow icon="lock-outline" label={t("Lock now", "立即锁定")} onPress={forget} />
             {vault.biometricsSupported && (
               <ListRow
@@ -11985,6 +12058,76 @@ function Wallet() {
           </Group>
         </>
       );
+    if (settingsSection === "approvals" && Platform.OS === "web") {
+      const open = grants ?? [];
+      const risky = open.filter((g) => g.kind === "collection" || approvalRules.isUnlimited(g.amount ?? 0n)).length;
+      return (
+        <>
+          <Header
+            title={t("Token approvals", "代币授权")}
+            onBack={() => setSettingsSection("security")}
+            backLabel={t("Security", "安全")}
+          />
+          <View style={[s.panel, { gap: 6 }]}>
+            <Text style={s.small}>
+              {t(
+                "When you swap or bridge, the app you use asks to spend your tokens. That permission stays after the trade. Anyone in control of a contract listed here can move what it allows, without asking you again. Revoke anything you no longer use.",
+                "兑换或跨链时，所用应用会请求花费你的代币。该权限在交易后仍然有效。控制下列合约的任何人都可以在授权范围内转走你的代币，无需再次询问。请撤销不再使用的授权。",
+              )}
+            </Text>
+          </View>
+          {grantsBusy && grants === null ? (
+            <View style={[s.panel, { alignItems: "center", paddingVertical: 24 }]}>
+              <ActivityIndicator color={colors.green} />
+              <Text style={[s.small, { marginTop: 8 }]}>{t("Reading approvals from the chain…", "正在从链上读取授权…")}</Text>
+            </View>
+          ) : grantsError ? (
+            <Text style={[s.small, { color: colors.danger }]}>{grantsError}</Text>
+          ) : grants && open.length === 0 ? (
+            <View style={[s.panel, { alignItems: "center", gap: 6, paddingVertical: 24 }]}>
+              <Icon name="shield-check-outline" size={32} color={colors.green} />
+              <Text style={s.label}>{t("No open approvals", "没有未撤销的授权")}</Text>
+              <Text style={[s.small, { textAlign: "center" }]}>
+                {t("No contract can spend this wallet's tokens.", "没有合约可以花费此钱包的代币。")}
+              </Text>
+            </View>
+          ) : grants ? (
+            <Group
+              title={
+                risky
+                  ? t(`${open.length} open · ${risky} unlimited`, `${open.length} 项未撤销 · ${risky} 项无限额`)
+                  : t(`${open.length} open`, `${open.length} 项未撤销`)
+              }
+            >
+              {open.map((grant) => {
+                const unlimited = grant.kind === "collection" || approvalRules.isUnlimited(grant.amount ?? 0n);
+                return (
+                  <ListRow
+                    key={`${grant.kind}:${grant.token}:${grant.spender}`}
+                    icon={unlimited ? "alert-outline" : "shield-key-outline"}
+                    danger={unlimited}
+                    label={`${grant.symbol} → ${spenderLabel(grant.spender)}`}
+                    detail={grantAmount(grant)}
+                    disabled={signing}
+                    onPress={() => revokeApproval(grant)}
+                    right={<Text style={[s.small, { color: colors.danger, fontWeight: "700" }]}>{t("Revoke", "撤销")}</Text>}
+                  />
+                );
+              })}
+            </Group>
+          ) : null}
+          <Button disabled={grantsBusy} onPress={() => void loadApprovals()}>
+            {grantsBusy ? t("Checking…", "检查中…") : t("Check again", "重新检查")}
+          </Button>
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Read from Robinhood Chain through its block explorer, which sees this wallet's address. Revoking is an ordinary transaction with a small network fee.",
+              "通过 Robinhood Chain 区块浏览器读取，浏览器会看到此钱包地址。撤销是一笔普通交易，需支付少量网络费用。",
+            )}
+          </Text>
+        </>
+      );
+    }
     if (settingsSection === "privacy") {
       const days = (d: number) => t(`${d} days`, `${d} 天`);
       return (
