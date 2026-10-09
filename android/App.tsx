@@ -46,6 +46,7 @@ import * as upd from "./src/update";
 import { balances, client, confirmation, execute, probeNetwork, transactionStatus } from "./src/network";
 import { fetchChainHistory, fetchTransferLegs, type ChainHistoryEntry, type TransferLeg } from "./src/explorer";
 import { KNOWN_SPENDERS, scanApprovals, type Grant } from "./src/approvals";
+import { captureNote, SecretCover, useBlockScreenCapture } from "./src/secretGuard";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
@@ -903,6 +904,11 @@ function Wallet() {
     privateKey: string;
   } | null>(null);
   const [keyCopied, setKeyCopied] = useState(false);
+  // Recovery phrase, backup check and private key: kept out of screenshots,
+  // recordings and the app switcher while any of them is on screen.
+  useBlockScreenCapture(
+    (!owner && (setup === "phrase" || setup === "backup")) || (!!owner && (!!revealed || !!revealedKey)),
+  );
   // The backup check picks words rather than typing them: each slot holds the
   // index into `mnemonic`'s own words that was tapped for it (not the bank's
   // shuffled position), so a picked chip can be found and hidden regardless
@@ -4426,6 +4432,7 @@ function Wallet() {
           )}
           {setup === "phrase" ? (
             <>
+              <SecretCover colors={colors} t={t}>
               <View style={[s.panel, s.wrap, { justifyContent: "space-between", rowGap: 10 }]}>
                 {mnemonic.split(" ").map((w, i) => (
                   <View
@@ -4446,6 +4453,8 @@ function Wallet() {
                   </View>
                 ))}
               </View>
+              </SecretCover>
+              <Text style={[s.small, { color: colors.muted }]}>{captureNote(t)}</Text>
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={t("Copy recovery phrase", "复制助记词")}
@@ -14358,7 +14367,10 @@ function Wallet() {
                   "请私下记好，切勿发送给任何人。",
                 )}
               </Text>
-              <Text style={[s.mono, { fontSize: 20, lineHeight: 36 }]}>{revealed}</Text>
+              <SecretCover colors={colors} t={t}>
+                <Text style={[s.mono, { fontSize: 20, lineHeight: 36 }]}>{revealed}</Text>
+              </SecretCover>
+              <Text style={[s.small, { color: colors.muted }]}>{captureNote(t)}</Text>
               <Pressable
                 accessibilityRole="button"
                 onPress={() =>
@@ -14416,12 +14428,15 @@ function Wallet() {
                   {revealedKey?.address}
                 </Text>
               </View>
-              <View style={s.panel}>
-                <Text style={s.eyebrow}>{t("Private key", "私钥")}</Text>
-                <Text style={[s.mono, { fontSize: 17, lineHeight: 27 }]} selectable>
-                  {revealedKey?.privateKey}
-                </Text>
-              </View>
+              <SecretCover colors={colors} t={t}>
+                <View style={s.panel}>
+                  <Text style={s.eyebrow}>{t("Private key", "私钥")}</Text>
+                  <Text style={[s.mono, { fontSize: 17, lineHeight: 27 }]} selectable>
+                    {revealedKey?.privateKey}
+                  </Text>
+                </View>
+              </SecretCover>
+              <Text style={[s.small, { color: colors.muted }]}>{captureNote(t)}</Text>
               <Button
                 primary
                 onPress={() => {
