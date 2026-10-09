@@ -32,6 +32,8 @@ export * as priceImpact from "../../public/tera/core/price-impact.js";
 // Staking deposits from the wallet: fixed-lock rewards, the flexible rate, the
 // on-device deposit check, and pending deposits awaiting credit.
 export * as stakingCore from "../../public/tera/core/staking.js";
+// Token approvals the wallet has granted, and the exact revoke for each.
+export * as approvals from "../../public/tera/core/approvals.js";
 
 // What holdings are worth. Shared because the honest part of a valuation is arithmetic,
 // not presentation: an unpriced holding must be left out of the total and named, on both

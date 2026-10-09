@@ -51,7 +51,35 @@ async function explorerGet(path: string) {
   return response.json();
 }
 
-const short = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
+/**
+ * Logs matching topic0 and topic1 across every contract, newest-last, from
+ * the explorer's Etherscan-style API. The node only searches 30,000 blocks at
+ * a time without a contract address, so "every approval this wallet ever
+ * gave" is one request here and hundreds there. Pages of 1,000 are followed
+ * from the last block seen; a log repeated at a page edge is harmless to
+ * callers that keep the newest per key.
+ */
+export async function explorerLogs(topic0: string, topic1: string): Promise<any[]> {
+  const logs: any[] = [];
+  let fromBlock = 0;
+  for (let page = 0; page < 20; page++) {
+    const query = `module=logs&action=getLogs&fromBlock=${fromBlock}&toBlock=latest&topic0=${topic0}&topic1=${topic1}&topic0_1_opr=and`;
+    const response = await fetch(`${EXPLORER_API.replace(/\/v2$/, "")}?${query}`, {
+      headers: EXPLORER_HEADERS,
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) throw new Error(`Explorer request failed (${response.status}).`);
+    const body = await response.json();
+    // "No records found" is status 0 with an empty result, not a failure.
+    if (!Array.isArray(body?.result)) throw new Error("Explorer returned no logs.");
+    logs.push(...body.result);
+    if (body.result.length < 1000) return logs;
+    fromBlock = Number(BigInt(body.result[body.result.length - 1].blockNumber));
+  }
+  throw new Error("Too many approvals to list.");
+}
+
+const short =(address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
 
 export async function fetchChainHistory(
   address: Address,
