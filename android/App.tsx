@@ -13060,6 +13060,21 @@ function Wallet() {
               setPage("settings");
             },
           },
+          // Web only for now, like the Settings > Security entry.
+          ...(Platform.OS === "web"
+            ? [
+                {
+                  key: "approvals",
+                  icon: "shield-key-outline",
+                  label: t("Approvals", "授权"),
+                  onPress: () => {
+                    setSettingsSection("approvals");
+                    setPage("settings");
+                    void loadApprovals();
+                  },
+                },
+              ]
+            : []),
           {
             key: "support",
             icon: "help-circle-outline",
