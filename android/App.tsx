@@ -69,6 +69,7 @@ import {
   priceImpact as impactCore,
   stakingCore,
   approvals as approvalRules,
+  poisoning,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -827,6 +828,7 @@ function Wallet() {
     // second device (or a reinstall) of this same wallet has no local
     // record of. null until the first fetch resolves.
     [chainHistory, setChainHistory] = useState<ChainHistoryEntry[] | null>(null),
+    [showPoisoned, setShowPoisoned] = useState(false),
     [notice, setNotice] = useState<null | {
       title: string;
       body: string;
@@ -2629,7 +2631,7 @@ function Wallet() {
   // whatever confirmed on-chain activity isn't already in it. That gap is
   // exactly what's missing on a second device or a fresh install of this
   // same wallet.
-  const combinedHistory = [
+  const allHistory = [
     ...data.history.filter((h) => !h.totalSteps || h.step === h.totalSteps),
     ...(chainHistory || [])
       .filter((c) => !data.history.some((h) => h.hash === c.hash))
@@ -2648,6 +2650,20 @@ function Wallet() {
         createdAt: c.timestamp,
       })),
   ].sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
+  // Planted transfers — zero amounts, and lookalikes of addresses the owner
+  // really uses — are kept out of the list so a poisoner's address is never
+  // there to copy. core/poisoning.js has the rules.
+  const poisonSplit = poisoning.splitPoisoned(allHistory as any[], [
+    owner,
+    ...accounts.map((entry) => entry.address),
+    ...book.map((contact) => contact.address),
+  ]);
+  const poisonedHashes = new Set(poisonSplit.hidden.map((row: any) => row.hash));
+  const combinedHistory: typeof allHistory = showPoisoned
+    ? allHistory.map((row) =>
+        poisonedHashes.has(row.hash) ? { ...row, title: `${t("Suspicious", "可疑")} · ${row.title}` } : row,
+      )
+    : (poisonSplit.shown as typeof allHistory);
   // Notes on transactions. In Business they are the Reports notes, so either
   // screen shows what the other wrote; in the wallet they sit in its own data.
   const sharedNotes = business && biz.sharesNotesWithReports;
@@ -10586,6 +10602,30 @@ function Wallet() {
                   )}
                 </Text>
               ) : null}
+            </View>
+          ) : null}
+          {poisonSplit.hidden.length ? (
+            <View style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}>
+              <Icon name="shield-alert-outline" size={20} color={colors.muted} />
+              <View style={{ flex: 1, gap: 3 }}>
+                <Text style={[s.text, { fontWeight: "700" }]}>
+                  {t(
+                    `${poisonSplit.hidden.length} suspicious transfer${poisonSplit.hidden.length === 1 ? "" : "s"} ${showPoisoned ? "shown" : "hidden"}`,
+                    `${showPoisoned ? "已显示" : "已隐藏"} ${poisonSplit.hidden.length} 笔可疑转账`,
+                  )}
+                </Text>
+                <Text style={s.small}>
+                  {t(
+                    "Zero-value transfers, or from addresses made to look like ones you use. Never copy an address from them.",
+                    "零金额转账，或来自仿冒你常用地址的地址。切勿从中复制地址。",
+                  )}
+                </Text>
+              </View>
+              <Pressable accessibilityRole="button" hitSlop={8} onPress={() => setShowPoisoned((v) => !v)}>
+                <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                  {showPoisoned ? t("Hide", "隐藏") : t("Show", "显示")}
+                </Text>
+              </Pressable>
             </View>
           ) : null}
           {searching ? (
