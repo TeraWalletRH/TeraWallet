@@ -44,7 +44,7 @@ import * as notify from "./src/notify";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
 import { balances, client, confirmation, execute, probeNetwork, transactionStatus } from "./src/network";
-import { fetchChainHistory, fetchTransferLegs, type ChainHistoryEntry, type TransferLeg } from "./src/explorer";
+import { fetchChainHistory, fetchTokenBalances, fetchTransferLegs, type ChainHistoryEntry, type FoundToken, type TransferLeg } from "./src/explorer";
 import { KNOWN_SPENDERS, scanApprovals, type Grant } from "./src/approvals";
 import { captureNote, SecretCover, useBlockScreenCapture } from "./src/secretGuard";
 import { AwayCover } from "./src/awayCover";
@@ -70,6 +70,7 @@ import {
   stakingCore,
   approvals as approvalRules,
   poisoning,
+  spam as spamRules,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -765,6 +766,7 @@ function Wallet() {
       | "autolock"
       | "currency"
       | "approvals"
+      | "tokens"
     >("root"),
     // Open token approvals, read from the chain when the screen opens. Null
     // until the first scan finishes; never stored.
@@ -829,6 +831,8 @@ function Wallet() {
     // record of. null until the first fetch resolves.
     [chainHistory, setChainHistory] = useState<ChainHistoryEntry[] | null>(null),
     [showPoisoned, setShowPoisoned] = useState(false),
+    // Tokens the explorer found that core/spam.js kept off the home list.
+    [spamTokens, setSpamTokens] = useState<Array<FoundToken & { reason: string }>>([]),
     [notice, setNotice] = useState<null | {
       title: string;
       body: string;
@@ -1013,6 +1017,7 @@ function Wallet() {
   // transfer to or from this wallet lands, and a once-a-minute read of the
   // explorer that catches plain ETH moves and whatever arrived while the app
   // was closed. `alertSeen` keeps one payment from being announced twice.
+  const foundTokens = useRef<{ owner: string; items: FoundToken[] }>({ owner: "", items: [] });
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
   const alertSeen = useRef(new Set<string>());
@@ -2375,6 +2380,18 @@ function Wallet() {
     const tagPromise = tagsAvailable()
       ? tags.tagOf(address).catch(() => undefined)
       : Promise.resolve(undefined);
+    // Whatever else the wallet holds, from the explorer. Not awaited: the last
+    // answer for this wallet is used now, and a different answer refreshes again.
+    if (foundTokens.current.owner !== address.toLowerCase()) foundTokens.current = { owner: address.toLowerCase(), items: [] };
+    void fetchTokenBalances(address)
+      .then((items) => {
+        if (version !== vault.sessionVersion() || foundTokens.current.owner !== address.toLowerCase()) return;
+        const key = (list: FoundToken[]) => list.map((t) => `${t.address}:${t.value}`).sort().join();
+        if (key(items) === key(foundTokens.current.items)) return;
+        foundTokens.current = { owner: address.toLowerCase(), items };
+        void refresh(address);
+      })
+      .catch(() => {});
     const registryResult = await registryPromise;
     const registry: Asset[] = registryResult.assets || [];
     const teraAsset: Asset = {
@@ -2384,6 +2401,14 @@ function Wallet() {
       name: "Tera",
     };
     const known = [...sources, teraAsset, ...registry];
+    // Tokens found in the wallet: priced, honest ones join the list; airdropped
+    // spam is kept off it and listed under Hidden tokens (core/spam.js).
+    const found = spamRules.sortFound(
+      foundTokens.current.items,
+      [...known, ...dataRef.current.customTokens],
+      dataRef.current.allowedTokens || [],
+    );
+    setSpamTokens(found.spam);
     const supported = [
       ...sources,
       teraAsset,
@@ -2394,6 +2419,12 @@ function Wallet() {
       ...dataRef.current.customTokens.filter(
         (a) => !known.some((k) => k.address.toLowerCase() === a.address.toLowerCase()),
       ),
+      ...found.show.map((token: FoundToken) => ({
+        symbol: token.symbol,
+        address: token.address,
+        decimals: token.decimals,
+        name: token.name,
+      })),
     ].sort((a, b) => {
       const priority = ["TERA", "ETH", "USDG", "WETH", "BTC", "SOL"];
       const ai = priority.indexOf(a.symbol.toUpperCase());
@@ -2423,7 +2454,14 @@ function Wallet() {
         t("Could not refresh balances. Pull again when connected.", "无法刷新余额，请联网后重试。"),
       );
     if (pricesResult.status === "fulfilled") {
-      setPrices(pricesResult.value.prices || { USDG: 1 });
+      // A found token is priced by the explorer for that exact contract, not
+      // by a symbol another token may share.
+      const explorerPrices = Object.fromEntries(
+        found.show
+          .map((token: FoundToken) => [token.symbol, Number(token.exchangeRate)] as [string, number])
+          .filter(([, rate]) => rate > 0),
+      );
+      setPrices({ ...(pricesResult.value.prices || { USDG: 1 }), ...explorerPrices });
       setPriceChanges(pricesResult.value.change24h || {});
     }
     if (sparklinesResult.status === "fulfilled") {
@@ -2530,8 +2568,11 @@ function Wallet() {
   // holding nobody could price is never treated as small — core/discretion.js
   // has the reasoning.
   const privacyOn = !!data.privacy;
+  // Tokens the owner hid themselves come off the list first; like small
+  // balances, they are still owned and still counted in the total.
+  const ownHidden = spamRules.applyHidden(allHeld, data.hiddenTokens || [], (row: any) => row.asset.address);
   const smallHidden = discretion.partitionSmall(
-    allHeld.map((row) => ({
+    ownHidden.shown.map((row: any) => ({
       ...row,
       symbol: row.asset.symbol,
       value: valueCore.valueOf(row.amount, prices[row.asset.symbol]),
@@ -2539,7 +2580,7 @@ function Wallet() {
     { on: !!data.hideSmall, threshold: data.hideSmallThreshold },
   );
   const [showHidden, setShowHidden] = useState(false);
-  const held = showHidden ? allHeld : smallHidden.shown;
+  const held = showHidden ? ownHidden.shown : smallHidden.shown;
   // ---- Profit and loss, and the real portfolio chart (core/pnl.js) ----
   const pnlFresh = !!pnlLegs && pnlLegs.owner === owner;
   const pnlEvents = React.useMemo(
@@ -5514,6 +5555,40 @@ function Wallet() {
    * what they come to, and the row is the control that shows them again.
    * Renders nothing when nothing is hidden.
    */
+  /** "3 tokens hidden · Manage": spam kept off the list and tokens the owner hid. */
+  function hiddenTokensRow() {
+    const count = spamTokens.length + ownHidden.hidden.length;
+    if (!count) return null;
+    return (
+      <Pressable
+        key="hidden-tokens"
+        accessibilityRole="button"
+        accessibilityLabel={t("Manage hidden tokens", "管理隐藏的代币")}
+        onPress={() => {
+          setSettingsSection("tokens");
+          setPage("settings");
+        }}
+        style={({ pressed }) => ({
+          flexDirection: "row",
+          alignItems: "center",
+          gap: 8,
+          paddingVertical: 12,
+          borderTopWidth: StyleSheet.hairlineWidth,
+          borderColor: colors.line + "4d",
+          opacity: pressed ? 0.7 : 1,
+        })}
+      >
+        <Text style={[s.small, { flex: 1 }]}>
+          {count === 1 ? t("1 token hidden", "已隐藏 1 个代币") : t(`${count} tokens hidden`, `已隐藏 ${count} 个代币`)}
+        </Text>
+        <Text style={[s.small, { color: colors.green }]}>{t("Manage", "管理")}</Text>
+      </Pressable>
+    );
+  }
+  async function setTokenListed(list: "hiddenTokens" | "allowedTokens", address: string, on: boolean) {
+    await store({ ...dataRef.current, [list]: spamRules.toggle(dataRef.current[list] || [], address, on) });
+    if (list === "allowedTokens") void refresh();
+  }
   function hiddenBalancesRow() {
     if (!smallHidden.hidden.length) return null;
     const worth = shownValue(formatFiat(smallHidden.hiddenValue, data.fiatCurrency || "USD"));
@@ -5758,6 +5833,7 @@ function Wallet() {
                   assetRow(asset, amount, i === 0),
                 )}
                 {hiddenBalancesRow()}
+                {hiddenTokensRow()}
               </View>
             ) : (
               <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
@@ -6444,6 +6520,7 @@ function Wallet() {
                   <View style={[s.panel, { paddingVertical: 4, gap: 0 }]}>
                     {sortWithPinned(held, pinnedAssets).map(({ asset, amount }, i) => assetRow(asset, amount, i === 0))}
                     {hiddenBalancesRow()}
+                    {hiddenTokensRow()}
                   </View>
                 ) : (
                   <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
@@ -12178,6 +12255,93 @@ function Wallet() {
         </>
       );
     }
+    if (settingsSection === "tokens") {
+      const reasonText = (reason: string) =>
+        reason === "scam" ? t("Flagged by the block explorer", "被区块浏览器标记")
+        : reason === "bait" ? t("Its name is an advert or a link", "名称是广告或链接")
+        : reason === "impostor" ? t("Copies the name of a token Tera lists", "冒用 Tera 所列代币的名称")
+        : t("No price and no market", "没有价格，也没有市场");
+      // A spam token's name can be the phishing link itself, so names are cut short.
+      const label = (text: string) => (text.length > 24 ? `${text.slice(0, 23)}…` : text);
+      return (
+        <>
+          <Header title={t("Hidden tokens", "隐藏的代币")} onBack={() => setSettingsSection("privacy")} backLabel={t("Privacy & data", "隐私与数据")} />
+          <View style={[s.panel, { gap: 6 }]}>
+            <Text style={s.small}>
+              {t(
+                "Anyone can send any token to any wallet. Tokens nobody can price, tokens named like adverts and copies of real tokens are kept off your home screen, because airdropped spam is how phishing links reach a wallet. Never visit a site a token's name tells you to.",
+                "任何人都可以向任何钱包发送任何代币。无法定价的代币、名称像广告的代币以及仿冒真实代币的代币不会显示在首页，因为空投垃圾代币是钓鱼链接进入钱包的方式。切勿访问代币名称引导你前往的网站。",
+              )}
+            </Text>
+          </View>
+          {spamTokens.length ? (
+            <Group title={t(`Hidden automatically · ${spamTokens.length}`, `自动隐藏 · ${spamTokens.length}`)}>
+              {spamTokens.map((token) => (
+                <ListRow
+                  key={token.address}
+                  icon="shield-alert-outline"
+                  label={`${label(token.symbol || "?")} · ${formatUnits(BigInt(token.value), token.decimals)}`}
+                  detail={`${reasonText(token.reason)} · ${token.address.slice(0, 6)}…${token.address.slice(-4)}`}
+                  onPress={() =>
+                    confirm(
+                      t("Show this token?", "显示此代币？"),
+                      t(
+                        "It will appear on your home screen. Don't trust its name, and never visit a link it mentions.",
+                        "它将显示在首页。不要相信它的名称，也切勿访问它提到的链接。",
+                      ),
+                      () => void run(() => setTokenListed("allowedTokens", token.address, true)),
+                    )
+                  }
+                  right={<Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>{t("Show", "显示")}</Text>}
+                />
+              ))}
+            </Group>
+          ) : null}
+          {ownHidden.hidden.length ? (
+            <Group title={t("Hidden by you", "你隐藏的")}>
+              {ownHidden.hidden.map(({ asset, amount }: any) => (
+                <ListRow
+                  key={asset.address}
+                  icon="eye-off"
+                  label={`${asset.symbol} · ${shownValue(amount)}`}
+                  detail={t("Still counted in your total.", "仍计入总额。")}
+                  onPress={() => void run(() => setTokenListed("hiddenTokens", asset.address, false))}
+                  right={<Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>{t("Show", "显示")}</Text>}
+                />
+              ))}
+            </Group>
+          ) : null}
+          {ownHidden.shown.length ? (
+            <Group title={t("On your home screen", "首页显示")}>
+              {ownHidden.shown.map(({ asset, amount }: any) => (
+                <ListRow
+                  key={asset.address}
+                  icon="eye"
+                  label={`${asset.symbol} · ${shownValue(amount)}`}
+                  onPress={() => void run(() => setTokenListed("hiddenTokens", asset.address, true))}
+                  right={<Text style={[s.small, { color: colors.muted, fontWeight: "700" }]}>{t("Hide", "隐藏")}</Text>}
+                />
+              ))}
+            </Group>
+          ) : null}
+          {!spamTokens.length && !ownHidden.hidden.length ? (
+            <View style={[s.panel, { alignItems: "center", gap: 6, paddingVertical: 24 }]}>
+              <Icon name="shield-check-outline" size={32} color={colors.green} />
+              <Text style={s.label}>{t("No spam found", "未发现垃圾代币")}</Text>
+              <Text style={[s.small, { textAlign: "center" }]}>
+                {t("Nothing in this wallet is being hidden.", "此钱包没有被隐藏的内容。")}
+              </Text>
+            </View>
+          ) : null}
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Found through Robinhood Chain's block explorer, which sees this wallet's address. Hiding a token takes it off the list; it is still in your wallet.",
+              "通过 Robinhood Chain 区块浏览器查找，浏览器会看到此钱包地址。隐藏代币只是不在列表中显示，它仍在你的钱包里。",
+            )}
+          </Text>
+        </>
+      );
+    }
     if (settingsSection === "privacy") {
       const days = (d: number) => t(`${d} days`, `${d} 天`);
       return (
@@ -12218,6 +12382,16 @@ function Wallet() {
                 void run(() => store({ ...dataRef.current, coverAway: dataRef.current.coverAway === false }))
               }
               right={<Toggle on={data.coverAway !== false} />}
+            />
+            <ListRow
+              icon="shield-alert-outline"
+              label={t("Hidden tokens", "隐藏的代币")}
+              detail={
+                spamTokens.length + ownHidden.hidden.length
+                  ? t(`${spamTokens.length + ownHidden.hidden.length} hidden. Spam is kept off your home screen.`, `已隐藏 ${spamTokens.length + ownHidden.hidden.length} 个。垃圾代币不会显示在首页。`)
+                  : t("Spam is kept off your home screen. Hide any token yourself.", "垃圾代币不会显示在首页。你也可以自行隐藏任何代币。")
+              }
+              onPress={() => setSettingsSection("tokens")}
             />
             <ListRow
               icon="filter"

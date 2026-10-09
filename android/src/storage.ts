@@ -120,6 +120,10 @@ export type LocalData = {
    * doesn't already track.
    */
   customTokens: Asset[];
+  /** Token contracts the owner hid from the home list (lower case). */
+  hiddenTokens?: string[];
+  /** Tokens core/spam.js would hide that the owner chose to show (lower case). */
+  allowedTokens?: string[];
   /**
    * Spending limits, in USDG base units (dollars), or null for no cap. Checked
    * by core/limits.js before a payment is reviewed and again before it is
