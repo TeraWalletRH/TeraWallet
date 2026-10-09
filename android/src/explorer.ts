@@ -79,6 +79,39 @@ export async function explorerLogs(topic0: string, topic1: string): Promise<any[
   throw new Error("Too many approvals to list.");
 }
 
+/** One ERC-20 the wallet holds, as the explorer describes it. See core/spam.js. */
+export type FoundToken = {
+  address: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  exchangeRate: string | null;
+  reputation: string | null;
+  holders: number;
+  value: string;
+};
+
+/**
+ * Every ERC-20 this address holds, known to Tera or not — including whatever
+ * was airdropped to it unasked. core/spam.js decides which of these to list.
+ */
+export async function fetchTokenBalances(address: string): Promise<FoundToken[]> {
+  const items = await explorerGet(`/addresses/${address}/token-balances`);
+  if (!Array.isArray(items)) throw new Error("Explorer returned no balances.");
+  return items
+    .filter((item: any) => item?.token?.type === "ERC-20" && item.token.address_hash)
+    .map((item: any) => ({
+      address: String(item.token.address_hash).toLowerCase(),
+      symbol: String(item.token.symbol || "").trim(),
+      name: String(item.token.name || "").trim(),
+      decimals: Number(item.token.decimals ?? 18),
+      exchangeRate: item.token.exchange_rate ?? null,
+      reputation: item.token.reputation ?? null,
+      holders: Number(item.token.holders_count ?? 0),
+      value: String(item.value ?? "0"),
+    }));
+}
+
 const short =(address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
 
 export async function fetchChainHistory(
