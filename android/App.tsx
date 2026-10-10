@@ -1228,6 +1228,10 @@ function Wallet() {
   }, [page, owner]);
   useEffect(() => {
     if (page !== "token-detail" || !tokenDetailSymbol) return;
+    if (data.noMarketData) {
+      setChartPoints([]);
+      return;
+    }
     let live = true;
     setChartLoading(true);
     void api(`/api/assets/prices/history?symbol=${tokenDetailSymbol}&range=${chartRange}`)
@@ -1237,7 +1241,7 @@ function Wallet() {
     return () => {
       live = false;
     };
-  }, [page, tokenDetailSymbol, chartRange]);
+  }, [page, tokenDetailSymbol, chartRange, data.noMarketData]);
   // A wallet-menu action that itself opens a Modal can't run right away —
   // the menu is still a Modal mid-close at that point. It's queued here and
   // fired from the menu's onClosed, once its Modal has actually unmounted.
@@ -2378,11 +2382,17 @@ function Wallet() {
     // on anything here, but used to be awaited before/after it anyway,
     // turning three independent requests into three sequential round-trips.
     const registryPromise = api("/api/assets").catch(() => ({ assets: [] }));
-    const pricesPromise = api("/api/assets/prices");
-    const sparklinesPromise = api("/api/assets/prices/sparklines").catch(() => ({
-      sparklines: {},
-      ranks: {},
-    }));
+    // No market data: not one price request leaves the device.
+    const marketOffNow = !!dataRef.current.noMarketData;
+    const pricesPromise = marketOffNow
+      ? Promise.resolve({ prices: {}, change24h: {} })
+      : api("/api/assets/prices");
+    const sparklinesPromise = marketOffNow
+      ? Promise.resolve({ sparklines: {}, ranks: {} })
+      : api("/api/assets/prices/sparklines").catch(() => ({
+          sparklines: {},
+          ranks: {},
+        }));
     const tagPromise = tagsAvailable()
       ? tags.tagOf(address).catch(() => undefined)
       : Promise.resolve(undefined);
@@ -2467,7 +2477,7 @@ function Wallet() {
           .map((token: FoundToken) => [token.symbol, Number(token.exchangeRate)] as [string, number])
           .filter(([, rate]) => rate > 0),
       );
-      setPrices({ ...(pricesResult.value.prices || { USDG: 1 }), ...explorerPrices });
+      setPrices(marketOffNow ? {} : { ...(pricesResult.value.prices || { USDG: 1 }), ...explorerPrices });
       setPriceChanges(pricesResult.value.change24h || {});
     }
     if (sparklinesResult.status === "fulfilled") {
@@ -2574,6 +2584,8 @@ function Wallet() {
   // holding nobody could price is never treated as small — core/discretion.js
   // has the reasoning.
   const privacyOn = !!data.privacy;
+  // Settings → Privacy & data → No market data: tokens only, no price requests.
+  const marketOff = !!data.noMarketData;
   // Tokens the owner hid themselves come off the list first; like small
   // balances, they are still owned and still counted in the total.
   const ownHidden = spamRules.applyHidden(allHeld, data.hiddenTokens || [], (row: any) => row.asset.address);
@@ -2621,6 +2633,7 @@ function Wallet() {
       })
     : null;
   async function loadPnlHistory(range: string, symbols: string[]) {
+    if (dataRef.current.noMarketData) return;
     const missing = symbols.filter((symbol) => symbol !== "USDG" && !pnlHistory[range]?.[symbol]);
     if (!missing.length) return;
     const rows = await Promise.all(
@@ -2639,7 +2652,7 @@ function Wallet() {
     }));
   }
   useEffect(() => {
-    if (!owner || !["home", "pnl", "token-detail"].includes(page)) return;
+    if (!owner || !["home", "pnl", "token-detail"].includes(page) || dataRef.current.noMarketData) return;
     if (pnlLegs && pnlLegs.owner === owner && Date.now() - pnlLegs.at < 5 * 60_000) return;
     let live = true;
     const known = Object.fromEntries(
@@ -5546,9 +5559,11 @@ function Wallet() {
         </View>
         <View style={{ alignItems: "flex-end", gap: 2 }}>
           <Text style={s.label}>
-            {shownValue(formatFiat(valueCore.valueOf(amount, prices[asset.symbol]), data.fiatCurrency || "USD"))}
+            {marketOff
+              ? shownValue(`${shortAmount(amount)} ${asset.symbol}`)
+              : shownValue(formatFiat(valueCore.valueOf(amount, prices[asset.symbol]), data.fiatCurrency || "USD"))}
           </Text>
-          {trendTag(asset.symbol)}
+          {marketOff ? null : trendTag(asset.symbol)}
         </View>
       </Pressable>
     );
@@ -6204,10 +6219,16 @@ function Wallet() {
                           letterSpacing: -1,
                         }}
                       >
-                        {shownValue(formatFiat(valuation.total, data.fiatCurrency || "USD"))}
+                        {marketOff
+                          ? t(`${held.length} token${held.length === 1 ? "" : "s"}`, `${held.length} 种代币`)
+                          : shownValue(formatFiat(valuation.total, data.fiatCurrency || "USD"))}
                       </Text>
                     )}
-                    {valuation.coverage !== valueCore.COMPLETE ? (
+                    {marketOff ? (
+                      <Text style={[s.small, { color: colors.ink, opacity: 0.75, textAlign: "center" }]}>
+                        {t("Market data is off — no prices are fetched", "市场数据已关闭 — 不获取任何价格")}
+                      </Text>
+                    ) : valuation.coverage !== valueCore.COMPLETE ? (
                       <Text
                         style={[s.small, { color: colors.ink, opacity: 0.75, textAlign: "center" }]}
                       >
@@ -12529,6 +12550,27 @@ function Wallet() {
                 void run(() => store({ ...dataRef.current, coverAway: dataRef.current.coverAway === false }))
               }
               right={<Toggle on={data.coverAway !== false} />}
+            />
+            <ListRow
+              icon="chart-line"
+              label={t("No market data", "不获取市场数据")}
+              detail={t(
+                "Fetch no prices, charts or price history, and show balances in tokens only. Price alerts and profit and loss pause while it's on.",
+                "不获取价格、图表或价格历史，余额仅以代币显示。开启期间价格提醒和盈亏暂停。",
+              )}
+              onPress={() =>
+                void run(async () => {
+                  await store({ ...dataRef.current, noMarketData: !dataRef.current.noMarketData });
+                  if (dataRef.current.noMarketData) {
+                    setPrices({});
+                    setSparklines({});
+                    setPriceChanges({});
+                    setPnlLegs(null);
+                  }
+                  void refresh();
+                })
+              }
+              right={<Toggle on={!!data.noMarketData} />}
             />
             <ListRow
               icon="shield-alert-outline"
