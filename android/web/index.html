@@ -20,6 +20,33 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-title" content="Tera" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <script>
+      // An app script that fails to load means this page is older than the
+      // files on the server. Reloading once fetches the current page; the flag
+      // stops a real outage from reloading forever.
+      addEventListener(
+        "error",
+        function (event) {
+          var el = event.target;
+          if (!el || el.tagName !== "SCRIPT" || String(el.src).indexOf("/app/_expo/") < 0) return;
+          try {
+            if (sessionStorage.getItem("tera-reloaded")) return;
+            sessionStorage.setItem("tera-reloaded", "1");
+          } catch (e) {
+            return;
+          }
+          location.reload();
+        },
+        true,
+      );
+      addEventListener("load", function () {
+        setTimeout(function () {
+          try {
+            sessionStorage.removeItem("tera-reloaded");
+          } catch (e) {}
+        }, 15000);
+      });
+    </script>
     <style>
       /* Tokens from android/src/ui.tsx, so the page around the app is the app's own. */
       :root {
@@ -58,6 +85,42 @@
       [aria-modal="true"] [tabindex="0"]:not([role]):focus {
         outline: none;
       }
+      /*
+        Shown until the app's script has downloaded and React replaces it. The
+        script is ~650 KB compressed, so on a slow connection this is what the
+        page shows for a while, rather than an empty screen that reads as broken.
+      */
+      #boot {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 16px;
+        color: #a9a28f;
+        font: 15px/1.5 system-ui, sans-serif;
+        text-align: center;
+        padding: 24px;
+      }
+      #boot img {
+        width: 72px;
+        height: 72px;
+        border-radius: 18px;
+        animation: boot-pulse 1.6s ease-in-out infinite;
+      }
+      #boot .slow {
+        display: none;
+        font-size: 13px;
+        max-width: 280px;
+      }
+      #boot.slow .slow {
+        display: block;
+      }
+      @keyframes boot-pulse {
+        50% {
+          opacity: 0.45;
+        }
+      }
       noscript {
         color: #f5ecd7;
         font: 15px/1.5 system-ui, sans-serif;
@@ -67,7 +130,21 @@
   </head>
   <body>
     <noscript>Tera Wallet needs JavaScript to run.</noscript>
-    <div id="frame"><div id="root"></div></div>
+    <div id="frame">
+      <div id="root">
+        <div id="boot">
+          <img src="/app/icon-192.png" alt="" />
+          <div>Opening Tera…</div>
+          <div class="slow">Still loading. Your connection looks slow; Tera will open as soon as it has downloaded.</div>
+        </div>
+      </div>
+    </div>
+    <script>
+      setTimeout(function () {
+        var boot = document.getElementById("boot");
+        if (boot) boot.className = "slow";
+      }, 8000);
+    </script>
     <script>
       if ("serviceWorker" in navigator)
         addEventListener("load", function () {
