@@ -114,6 +114,11 @@ export type LocalData = {
    */
   coverAway?: boolean;
   /**
+   * No market data: fetch no prices, charts or price history at all, and show
+   * balances in tokens only. Absent means off.
+   */
+  noMarketData?: boolean;
+  /**
    * Tokens the owner added by contract address — the app checks a balance
    * for these on every refresh alongside the built-in and registry-known
    * assets, the same way MetaMask's "import tokens" does for anything it
