@@ -71,6 +71,7 @@ import {
   approvals as approvalRules,
   poisoning,
   spam as spamRules,
+  typedData,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -767,6 +768,7 @@ function Wallet() {
       | "currency"
       | "approvals"
       | "tokens"
+      | "signature"
     >("root"),
     // Open token approvals, read from the chain when the screen opens. Null
     // until the first scan finishes; never stored.
@@ -833,6 +835,10 @@ function Wallet() {
     [showPoisoned, setShowPoisoned] = useState(false),
     // Tokens the explorer found that core/spam.js kept off the home list.
     [spamTokens, setSpamTokens] = useState<Array<FoundToken & { reason: string }>>([]),
+    // Settings → Security → Check a signature request: what was pasted, and what it does.
+    [sigInput, setSigInput] = useState(""),
+    [sigResult, setSigResult] = useState<any>(null),
+    [sigError, setSigError] = useState(""),
     [notice, setNotice] = useState<null | {
       title: string;
       body: string;
@@ -12169,6 +12175,12 @@ function Wallet() {
                 }}
               />
             )}
+            <ListRow
+              icon="file-text"
+              label={t("Check a signature request", "检查签名请求")}
+              detail={t("Paste what a site asks you to sign and see what it does", "粘贴网站要求你签名的内容，看看它会做什么")}
+              onPress={() => setSettingsSection("signature")}
+            />
             <ListRow icon="lock-outline" label={t("Lock now", "立即锁定")} onPress={forget} />
             {vault.biometricsSupported && (
               <ListRow
@@ -12252,6 +12264,141 @@ function Wallet() {
               "通过 Robinhood Chain 区块浏览器读取，浏览器会看到此钱包地址。撤销是一笔普通交易，需支付少量网络费用。",
             )}
           </Text>
+        </>
+      );
+    }
+    if (settingsSection === "signature") {
+      const check = (text: string) => {
+        setSigError("");
+        setSigResult(null);
+        try {
+          const { typed } = typedData.parseRequest(text);
+          setSigResult(
+            typedData.explain(typed, {
+              chainId: chain.id,
+              owner,
+              tokens: Object.fromEntries(
+                assets
+                  .filter((a) => a.address && a.address !== zeroAddress)
+                  .map((a) => [a.address.toLowerCase(), { symbol: a.symbol, decimals: a.decimals }]),
+              ),
+              spenders: Object.fromEntries(
+                Object.entries(KNOWN_SPENDERS).map(([address, [en, zh]]) => [address, t(en, zh)]),
+              ),
+            }),
+          );
+        } catch (e) {
+          setSigError(e instanceof Error ? e.message : String(e));
+        }
+      };
+      const tone =
+        sigResult?.danger === "high"
+          ? { color: colors.danger, tint: colors.dangerTint, icon: "alert-outline", label: t("Gives away spending power", "授出花费权限") }
+          : sigResult?.danger === "unknown"
+            ? { color: colors.lime, tint: colors.warnTint, icon: "help-circle-outline", label: t("Unknown — don't sign unless you're sure", "未知 — 除非确定，否则不要签名") }
+            : { color: colors.green, tint: colors.raised, icon: "shield-check-outline", label: t("Gives nothing away", "不授出任何权限") };
+      return (
+        <>
+          <Header
+            title={t("Check a signature request", "检查签名请求")}
+            onBack={() => setSettingsSection("security")}
+            backLabel={t("Security", "安全")}
+          />
+          <View style={[s.panel, { gap: 6 }]}>
+            <Text style={s.small}>
+              {t(
+                "Signing a message costs nothing and sends no transaction, which is why drainers love it: one signature on a token permit lets someone move your tokens later without asking again. Paste the request a site or another wallet shows you, and Tera says what it does. Nothing is signed or sent.",
+                "签名消息不花费任何费用，也不发送交易，这正是盗币者喜欢它的原因：在代币授权许可上签一次名，别人之后就能不经询问转走你的代币。粘贴网站或其他钱包显示的请求，Tera 会告诉你它的作用。不会签名或发送任何内容。",
+              )}
+            </Text>
+          </View>
+          <TextInput
+            value={sigInput}
+            onChangeText={(text) => {
+              setSigInput(text);
+              setSigResult(null);
+              setSigError("");
+            }}
+            multiline
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder={t('{"domain": …, "primaryType": "Permit", "message": …}', '{"domain": …, "primaryType": "Permit", "message": …}')}
+            placeholderTextColor={colors.faint}
+            style={[
+              s.mono,
+              {
+                minHeight: 140,
+                maxHeight: 260,
+                borderWidth: 1,
+                borderColor: colors.line,
+                borderRadius: 14,
+                backgroundColor: colors.wash,
+                padding: 14,
+                color: colors.ink,
+                fontSize: 13,
+                textAlignVertical: "top",
+              },
+            ]}
+          />
+          <View style={{ flexDirection: "row", gap: 10 }}>
+            <View style={{ flex: 1 }}>
+              <Button
+                onPress={() =>
+                  void Clipboard.getStringAsync().then((text) => {
+                    setSigInput(text);
+                    check(text);
+                  })
+                }
+              >
+                {t("Paste", "粘贴")}
+              </Button>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Button primary disabled={!sigInput.trim()} onPress={() => check(sigInput)}>
+                {t("Check", "检查")}
+              </Button>
+            </View>
+          </View>
+          {sigError ? <Text style={[s.small, { color: colors.danger }]}>{sigError}</Text> : null}
+          {sigResult ? (
+            <>
+              <View style={[s.panel, { gap: 10, backgroundColor: tone.tint, borderColor: tone.color, borderWidth: 1 }]}>
+                <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                  <Icon name={tone.icon} size={18} color={tone.color} />
+                  <Text style={[s.small, { color: tone.color, fontWeight: "700", flex: 1 }]}>{tone.label}</Text>
+                </View>
+                <Text style={[s.text, { fontWeight: "700", fontSize: 17 }]}>{sigResult.title}</Text>
+              </View>
+              <View style={[s.panel, { gap: 10 }]}>
+                {sigResult.rows.map(([label, value]: [string, string], i: number) => (
+                  <View key={`${label}-${i}`} style={{ flexDirection: "row", gap: 12, justifyContent: "space-between" }}>
+                    <Text style={s.small}>{label}</Text>
+                    <Text style={[s.small, { color: colors.ink, fontWeight: "600", flexShrink: 1, textAlign: "right" }]} selectable>
+                      {value}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+              {sigResult.warnings.length ? (
+                <View style={[s.panel, { gap: 8 }]}>
+                  {sigResult.warnings.map((warning: string) => (
+                    <View key={warning} style={{ flexDirection: "row", gap: 8 }}>
+                      <Icon name="alert-outline" size={16} color={colors.danger} />
+                      <Text style={[s.small, { flex: 1 }]}>{warning}</Text>
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+              {sigResult.danger === "high" ? (
+                <Text style={[s.small, { textAlign: "center" }]}>
+                  {t(
+                    "If you didn't expect to give this permission, don't sign. A real swap or sale never needs more than the amount you chose.",
+                    "如果你没想过授出此权限，请不要签名。真正的兑换或出售所需的授权不会超过你选择的金额。",
+                  )}
+                </Text>
+              ) : null}
+            </>
+          ) : null}
         </>
       );
     }
