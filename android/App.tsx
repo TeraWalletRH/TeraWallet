@@ -43,7 +43,7 @@ import * as payLinks from "./src/paylinks";
 import * as notify from "./src/notify";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
-import { balances, client, confirmation, execute, probeNetwork, transactionStatus } from "./src/network";
+import { balances, client, confirmation, execute, probeNetwork, setRotation, transactionStatus } from "./src/network";
 import { fetchChainHistory, fetchTokenBalances, fetchTransferLegs, type ChainHistoryEntry, type FoundToken, type TransferLeg } from "./src/explorer";
 import { KNOWN_SPENDERS, scanApprovals, type Grant } from "./src/approvals";
 import { captureNote, SecretCover, useBlockScreenCapture } from "./src/secretGuard";
@@ -1023,6 +1023,8 @@ function Wallet() {
   // transfer to or from this wallet lands, and a once-a-minute read of the
   // explorer that catches plain ETH moves and whatever arrived while the app
   // was closed. `alertSeen` keeps one payment from being announced twice.
+  // Reads rotate across public nodes unless the owner turned it off.
+  useEffect(() => setRotation(data.rpcRotation !== false), [data.rpcRotation]);
   const foundTokens = useRef<{ owner: string; items: FoundToken[] }>({ owner: "", items: [] });
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
@@ -12550,6 +12552,18 @@ function Wallet() {
                 void run(() => store({ ...dataRef.current, coverAway: dataRef.current.coverAway === false }))
               }
               right={<Toggle on={data.coverAway !== false} />}
+            />
+            <ListRow
+              icon="earth"
+              label={t("Spread reads across nodes", "分散节点读取")}
+              detail={t(
+                "Balance and history checks take turns across four independent Robinhood Chain nodes, so no single operator sees your whole pattern. Sending always uses the network's own node.",
+                "余额和记录查询轮流使用四个独立的 Robinhood Chain 节点，任何一个运营方都看不到你的完整使用规律。发送交易始终使用网络官方节点。",
+              )}
+              onPress={() =>
+                void run(() => store({ ...dataRef.current, rpcRotation: dataRef.current.rpcRotation === false }))
+              }
+              right={<Toggle on={data.rpcRotation !== false} />}
             />
             <ListRow
               icon="chart-line"

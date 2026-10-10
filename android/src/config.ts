@@ -11,6 +11,17 @@ export const RPCS: string[] = String(process.env.EXPO_PUBLIC_RPC_URLS || RPC)
   .split(",")
   .map((url: string) => url.trim())
   .filter((url: string) => url.length > 0);
+// Independent public nodes for Robinhood Chain, each checked to answer for
+// chain 4663 and to allow browser requests. Reads rotate across these and the
+// network's own node (core/rpc-rotation.js); sending never leaves RPC above.
+// EXPO_PUBLIC_RPC_POOL replaces the list.
+export const PUBLIC_RPCS: string[] = String(
+  process.env.EXPO_PUBLIC_RPC_POOL ||
+    "https://robinhood-rpc.publicnode.com,https://robinhood.drpc.org,https://4663.rpc.thirdweb.com",
+)
+  .split(",")
+  .map((url: string) => url.trim())
+  .filter((url: string) => url.length > 0);
 export const POLICY_SIGNER =
   process.env.EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY || "0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05";
 export const chain = defineChain({

@@ -119,6 +119,11 @@ export type LocalData = {
    */
   noMarketData?: boolean;
   /**
+   * Spread balance and history reads across several public nodes rather than
+   * one (core/rpc-rotation.js). Absent means on.
+   */
+  rpcRotation?: boolean;
+  /**
    * Tokens the owner added by contract address — the app checks a balance
    * for these on every refresh alongside the built-in and registry-known
    * assets, the same way MetaMask's "import tokens" does for anything it

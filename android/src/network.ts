@@ -1,6 +1,7 @@
 import {
   createPublicClient,
   createWalletClient,
+  custom,
   erc20Abi,
   fallback,
   http,
@@ -8,19 +9,57 @@ import {
   type Address,
   type Hash,
 } from "viem";
-import { chain, RPC, RPCS, sources, type Tx } from "./config";
+import { chain, PUBLIC_RPCS, RPC, RPCS, sources, type Tx } from "./config";
 import { currentAccount, notePending, sessionVersion } from "./storage";
 import { txCheck } from "./validation";
-import { networkSpeed as speedCore } from "./core";
+import { networkSpeed as speedCore, rpcRotation } from "./core";
 // retryCount: 0 stays on the wallet transport used for sending a
 // transaction (below) — retrying a broadcast is a real idempotency risk.
 // Reading a balance has no such risk, and no retries here means a single
 // transient network blip fails the whole refresh outright, which reads to
 // an owner as "the transfer I received isn't showing up."
-export const client = createPublicClient({
+//
+// Two clients. `client` is for reading — balances, history, tokens, NFTs — and
+// spreads those reads across several independent nodes, so no single
+// operator sees the whole pattern of this wallet's use (core/rpc-rotation.js;
+// Settings → Privacy & data turns it off). `txClient` is for sending and
+// everything a send depends on: the nonce, the simulation, the fees, the
+// broadcast and its receipt all come from the network's own node, because a
+// lagging node's nonce or a missing receipt is how a transaction goes wrong.
+const txClient = createPublicClient({
   chain,
   transport: fallback(
     RPCS.map((url) => http(url, { timeout: 20000, retryCount: 2 })),
+  ),
+});
+let rotating = true;
+/** Turns read rotation on or off; off sends every read to the network's own node first. */
+export function setRotation(on: boolean) {
+  rotating = on;
+}
+const readNodes = rpcRotation
+  .nodeList(RPC, PUBLIC_RPCS)
+  .map((url: string) => http(url, { timeout: 15000, retryCount: 0 })({ chain, retryCount: 0 }));
+const rotation = rpcRotation.createRotation(readNodes.length);
+export const client = createPublicClient({
+  chain,
+  transport: custom(
+    {
+      async request({ method, params }: { method: string; params?: unknown }) {
+        let last: unknown;
+        for (const index of rotation.next(method, rotating)) {
+          try {
+            return await readNodes[index].request({ method, params } as never);
+          } catch (error) {
+            last = error;
+            // A node that answered — even "reverted" — has given the answer.
+            if (!rpcRotation.isNodeFault(error)) throw error;
+          }
+        }
+        throw last;
+      },
+    },
+    { retryCount: 1 },
   ),
 });
 export async function balances(
@@ -76,7 +115,7 @@ export async function execute(
   // wait for a receipt, because that wait is the only point where enough time
   // passes for the answer to have become stale.
   const checkChain = async () => {
-    if ((await client.getChainId()) !== chain.id) throw new Error("RPC network mismatch.");
+    if ((await txClient.getChainId()) !== chain.id) throw new Error("RPC network mismatch.");
   };
   // One wallet client for the whole run. Building one per step threw away the
   // chain id viem had already cached on it and paid for it again every step.
@@ -95,8 +134,8 @@ export async function execute(
       // in the original order, so a missing contract is still reported as a
       // missing contract rather than as whatever the simulation said about it.
       const [code, simulated] = await Promise.allSettled([
-        tx.data !== "0x" ? client.getCode({ address: tx.to }) : Promise.resolve(undefined),
-        client.call({
+        tx.data !== "0x" ? txClient.getCode({ address: tx.to }) : Promise.resolve(undefined),
+        txClient.call({
           account: owner,
           to: tx.to,
           data: tx.data,
@@ -122,14 +161,14 @@ export async function execute(
       // fees move while a step waits to confirm, and a fee carried over from
       // the step before is how a transaction gets stuck.
       const [nonce, gas, fees] = await Promise.all([
-        client.getTransactionCount({ address: owner, blockTag: "pending" }),
-        client.estimateGas({
+        txClient.getTransactionCount({ address: owner, blockTag: "pending" }),
+        txClient.estimateGas({
           account: owner,
           to: tx.to,
           data: tx.data,
           value: BigInt(tx.value),
         }),
-        client.estimateFeesPerGas(),
+        txClient.estimateFeesPerGas(),
       ]);
       const request = await wallet.prepareTransactionRequest({
         account: owner,
@@ -188,7 +227,7 @@ export async function execute(
         createdAt,
       }).catch(() => {});
       active();
-      await client.sendRawTransaction({ serializedTransaction: serialized });
+      await txClient.sendRawTransaction({ serializedTransaction: serialized });
       await record({
         hash,
         status: "pending",
@@ -197,7 +236,7 @@ export async function execute(
         createdAt,
       });
       if (index < steps.length - 1) {
-        const receipt = await client.waitForTransactionReceipt({ hash, timeout: 90000 });
+        const receipt = await txClient.waitForTransactionReceipt({ hash, timeout: 90000 });
         if (receipt.status !== "success") throw new Error("Approval reverted. / 授权交易失败。");
         active();
         // Minutes may have passed here, so the network is worth checking again
@@ -211,7 +250,7 @@ export async function execute(
 }
 export async function transactionStatus(hash: Hash) {
   try {
-    return (await client.getTransactionReceipt({ hash })).status === "success"
+    return (await txClient.getTransactionReceipt({ hash })).status === "success"
       ? "confirmed"
       : "reverted";
   } catch {
@@ -245,8 +284,8 @@ export async function probeNetwork() {
 /** Where and when a transaction landed, and what it paid, or null while it has not. */
 export async function confirmation(hash: Hash) {
   try {
-    const receipt = await client.getTransactionReceipt({ hash });
-    const block = await client.getBlock({ blockNumber: receipt.blockNumber });
+    const receipt = await txClient.getTransactionReceipt({ hash });
+    const block = await txClient.getBlock({ blockNumber: receipt.blockNumber });
     return {
       block: Number(receipt.blockNumber),
       timestamp: Number(block.timestamp),

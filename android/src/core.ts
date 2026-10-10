@@ -37,6 +37,7 @@ export * as approvals from "../../public/tera/core/approvals.js";
 export * as poisoning from "../../public/tera/core/poisoning.js";
 export * as spam from "../../public/tera/core/spam.js";
 export * as typedData from "../../public/tera/core/typed-data.js";
+export * as rpcRotation from "../../public/tera/core/rpc-rotation.js";
 
 // What holdings are worth. Shared because the honest part of a valuation is arithmetic,
 // not presentation: an unpriced holding must be left out of the total and named, on both
