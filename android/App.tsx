@@ -72,6 +72,7 @@ import {
   poisoning,
   spam as spamRules,
   typedData,
+  phraseCheck,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -769,6 +770,7 @@ function Wallet() {
       | "approvals"
       | "tokens"
       | "signature"
+      | "phrasecheck"
     >("root"),
     // Open token approvals, read from the chain when the screen opens. Null
     // until the first scan finishes; never stored.
@@ -839,6 +841,13 @@ function Wallet() {
     [sigInput, setSigInput] = useState(""),
     [sigResult, setSigResult] = useState<any>(null),
     [sigError, setSigError] = useState(""),
+    // The 90-day recovery phrase re-check (core/phrase-check.js). The record is
+    // undefined until read, so the reminder never flashes up before it loads.
+    [phraseRecord, setPhraseRecord] = useState<vault.PhraseCheck | null | undefined>(undefined),
+    [quizPositions, setQuizPositions] = useState<number[]>([]),
+    [quizAnswers, setQuizAnswers] = useState<string[]>([]),
+    [quizTries, setQuizTries] = useState(0),
+    [quizError, setQuizError] = useState(""),
     [notice, setNotice] = useState<null | {
       title: string;
       body: string;
@@ -1018,13 +1027,28 @@ function Wallet() {
       subscription.remove();
     };
   }, [owner]);
+  // Reads rotate across public nodes unless the owner turned it off.
+  useEffect(() => setRotation(data.rpcRotation !== false), [data.rpcRotation]);
+  // When the recovery phrase was last checked. Read on every unlock, which is
+  // also what resets the quiz's tries.
+  useEffect(() => {
+    setPhraseRecord(undefined);
+    setQuizTries(0);
+    if (!owner || !vault.hasPhrase()) return;
+    let live = true;
+    vault
+      .loadSealed<vault.PhraseCheck>("phrase-check")
+      .then((record) => live && setPhraseRecord(record))
+      .catch(() => live && setPhraseRecord(null));
+    return () => {
+      live = false;
+    };
+  }, [owner]);
   // Transaction notifications (core/notify.js). Two listeners feed one
   // announcer: a request held open with Tera, answered the moment a token
   // transfer to or from this wallet lands, and a once-a-minute read of the
   // explorer that catches plain ETH moves and whatever arrived while the app
   // was closed. `alertSeen` keeps one payment from being announced twice.
-  // Reads rotate across public nodes unless the owner turned it off.
-  useEffect(() => setRotation(data.rpcRotation !== false), [data.rpcRotation]);
   const foundTokens = useRef<{ owner: string; items: FoundToken[] }>({ owner: "", items: [] });
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
@@ -2114,6 +2138,18 @@ function Wallet() {
     await vault.saveData(next);
     dataRef.current = next;
     setData(next);
+  }
+  async function storePhraseRecord(next: vault.PhraseCheck) {
+    await vault.saveSealed("phrase-check", next);
+    setPhraseRecord(next);
+  }
+  function openPhraseCheck() {
+    const positions = phraseCheck.pickPositions(vault.phraseLength());
+    setQuizPositions(positions);
+    setQuizAnswers(positions.map(() => ""));
+    setQuizError("");
+    setSettingsSection("phrasecheck");
+    setPage("settings");
   }
   /**
    * A wallet's display name, and the fallback when it has none.
@@ -4856,6 +4892,9 @@ function Wallet() {
       try {
         check(pin === repeatPin, t("PINs must match.", "两次 PIN 必须一致。"));
         const address = await vault.createWallet(mnemonic, pin);
+        // Writing the phrase down and confirming it, or typing it in to
+        // import, is a check: the first reminder is 90 days from now.
+        if (vault.hasPhrase()) await vault.saveSealed("phrase-check", { at: Date.now() }).catch(() => {});
         g();
         await opened(address, g);
       } catch (e) {
@@ -6077,6 +6116,41 @@ function Wallet() {
                 </Text>
               )}
               {action("Update", "更新", runUpdate)}
+            </View>
+          )}
+          {vault.hasPhrase() && phraseRecord !== undefined && phraseCheck.isDue(phraseRecord) && (
+            <View style={[s.panel, { gap: 10 }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                <Icon name="key-variant" size={20} color={colors.green} />
+                <Text style={[s.text, { flex: 1, fontWeight: "700" }]}>
+                  {t("Still have your recovery phrase?", "你的助记词还在吗？")}
+                </Text>
+              </View>
+              <Text style={s.small}>
+                {phraseRecord?.at
+                  ? t(
+                      `It's been ${phraseCheck.daysSince(phraseRecord)} days since you last checked. Find your written copy and enter three of its words — it takes a minute, and it's the only way back in if you lose this device.`,
+                      `距离上次检查已过 ${phraseCheck.daysSince(phraseRecord)} 天。找到你写下的助记词，输入其中三个单词——只需一分钟，而这是你丢失此设备后找回钱包的唯一方式。`,
+                    )
+                  : t(
+                      "Find your written copy and enter three of its words. It takes a minute, and it's the only way back in if you lose this device.",
+                      "找到你写下的助记词，输入其中三个单词。只需一分钟，而这是你丢失此设备后找回钱包的唯一方式。",
+                    )}
+              </Text>
+              <View style={{ flexDirection: "row", gap: 10 }}>
+                <View style={{ flex: 1 }}>
+                  <Button
+                    onPress={() => void run(() => storePhraseRecord(phraseCheck.snoozed(phraseRecord || {})))}
+                  >
+                    {t("Later", "稍后")}
+                  </Button>
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Button primary onPress={openPhraseCheck}>
+                    {t("Check now", "立即检查")}
+                  </Button>
+                </View>
+              </View>
             </View>
           )}
           {tagsAvailable() && myTag === null && (
@@ -12198,6 +12272,34 @@ function Wallet() {
                 }}
               />
             )}
+            {vault.hasPhrase() && (
+              <ListRow
+                icon="clipboard-check-outline"
+                label={t("Check my recovery phrase", "检查我的助记词")}
+                detail={
+                  phraseRecord?.at
+                    ? phraseCheck.daysSince(phraseRecord) === 0
+                      ? t("Last checked today", "今天已检查")
+                      : t(`Last checked ${phraseCheck.daysSince(phraseRecord)} days ago`, `上次检查于 ${phraseCheck.daysSince(phraseRecord)} 天前`)
+                    : t("Never checked on this device", "此设备上从未检查")
+                }
+                disabled={quizTries >= phraseCheck.MAX_TRIES}
+                onPress={openPhraseCheck}
+              />
+            )}
+            {vault.hasPhrase() && (
+              <ListRow
+                icon="calendar"
+                label={t("Remind me every 90 days", "每 90 天提醒我")}
+                detail={t("Ask for three words of my recovery phrase", "让我输入助记词中的三个单词")}
+                onPress={() =>
+                  void run(() =>
+                    storePhraseRecord(phraseCheck.reminders(phraseRecord || {}, !!phraseRecord?.off)),
+                  )
+                }
+                right={<Toggle on={!phraseRecord?.off} />}
+              />
+            )}
             <ListRow
               icon="file-text"
               label={t("Check a signature request", "检查签名请求")}
@@ -12287,6 +12389,83 @@ function Wallet() {
               "通过 Robinhood Chain 区块浏览器读取，浏览器会看到此钱包地址。撤销是一笔普通交易，需支付少量网络费用。",
             )}
           </Text>
+        </>
+      );
+    }
+    if (settingsSection === "phrasecheck") {
+      const locked = quizTries >= phraseCheck.MAX_TRIES;
+      const submit = () => {
+        if (locked) return;
+        if (vault.checkPhraseWords(quizPositions, quizAnswers)) {
+          void run(async () => {
+            await storePhraseRecord(phraseCheck.passed(phraseRecord || {}));
+            setQuizAnswers([]);
+            setQuizTries(0);
+            setSettingsSection("security");
+            setNotice({
+              title: t("Your backup works", "你的备份有效"),
+              body: t(
+                "All three words match. Keep the copy somewhere safe — we'll ask again in 90 days.",
+                "三个单词全部匹配。请把它妥善保存——90 天后我们会再次询问。",
+              ),
+              tone: "success",
+            });
+          });
+          return;
+        }
+        const tries = quizTries + 1;
+        setQuizTries(tries);
+        setQuizError(
+          tries >= phraseCheck.MAX_TRIES
+            ? t(
+                "That doesn't match either. The check is closed until you next unlock Tera. If you can't find your copy, use Show recovery phrase under Security and write a new one now, while you still can.",
+                "仍然不匹配。在你下次解锁 Tera 之前无法再次检查。如果找不到备份，请在“安全”中使用“显示助记词”，趁现在还能查看时重新抄写一份。",
+              )
+            : t(
+                `Those words don't match your recovery phrase. ${phraseCheck.MAX_TRIES - tries} ${phraseCheck.MAX_TRIES - tries === 1 ? "try" : "tries"} left.`,
+                `这些单词与你的助记词不匹配。还剩 ${phraseCheck.MAX_TRIES - tries} 次机会。`,
+              ),
+        );
+      };
+      return (
+        <>
+          <Header
+            title={t("Check my recovery phrase", "检查我的助记词")}
+            onBack={() => setSettingsSection("security")}
+            backLabel={t("Security", "安全")}
+          />
+          <View style={[s.panel, { gap: 6 }]}>
+            <Text style={s.small}>
+              {t(
+                "Get the copy you wrote down and enter the words it asks for. Tera never shows your phrase here and only says whether all three match, so this proves the copy you'd actually recover from still works.",
+                "拿出你写下的助记词，输入要求的单词。Tera 不会在这里显示你的助记词，只会告诉你三个单词是否全部匹配，以此证明你真正用来恢复的那份备份仍然有效。",
+              )}
+            </Text>
+          </View>
+          {quizPositions.map((position, i) => (
+            <Field
+              key={position}
+              label={t(`Word ${position + 1}`, `第 ${position + 1} 个单词`)}
+              value={quizAnswers[i] || ""}
+              editable={!locked}
+              onChangeText={(text) => {
+                setQuizError("");
+                setQuizAnswers((a) => a.map((x, j) => (j === i ? text : x)));
+              }}
+              autoComplete="off"
+              spellCheck={false}
+              returnKeyType={i === quizPositions.length - 1 ? "done" : "next"}
+              onSubmitEditing={i === quizPositions.length - 1 ? submit : undefined}
+            />
+          ))}
+          {quizError ? <Text style={[s.small, { color: colors.danger }]}>{quizError}</Text> : null}
+          <Button
+            primary
+            disabled={locked || busy || quizAnswers.some((a) => !a.trim())}
+            onPress={submit}
+          >
+            {t("Check", "检查")}
+          </Button>
         </>
       );
     }

@@ -17,6 +17,7 @@ import {
   type Box,
 } from "./crypto";
 import type { Asset } from "./config";
+import { matches as phraseMatches } from "../../public/tera/core/phrase-check.js";
 const WALLET = "tera.wallet.v1";
 const BIOMETRIC = "tera.wallet.biometric.v1";
 export const biometricsSupported = store.biometricsSupported;
@@ -523,6 +524,17 @@ export const revealPhrase = () => {
     );
   return phrase!;
 };
+/**
+ * The recovery phrase re-check: whether the words at `positions` are the ones
+ * given, all or nothing. The phrase itself never leaves this module, so the
+ * quiz can't be used to read it back.
+ */
+export const checkPhraseWords = (positions: number[], answers: string[]) =>
+  hasPhrase() && phraseMatches(phrase!, positions, answers);
+/** How many words the recovery phrase has (0 for a key-imported wallet). */
+export const phraseLength = () => (hasPhrase() ? phrase!.trim().split(/\s+/).length : 0);
+/** When the recovery phrase was last checked, sealed and kept per wallet. */
+export type PhraseCheck = { at?: number; snoozedUntil?: number; off?: boolean };
 const dataFile = (address: string) => `tera-${address.toLowerCase()}.json`;
 export async function loadData(): Promise<LocalData> {
   const address = currentAccount().address;
