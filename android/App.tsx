@@ -73,6 +73,7 @@ import {
   spam as spamRules,
   typedData,
   phraseCheck,
+  checkup as checkupCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -771,6 +772,7 @@ function Wallet() {
       | "tokens"
       | "signature"
       | "phrasecheck"
+      | "checkup"
     >("root"),
     // Open token approvals, read from the chain when the screen opens. Null
     // until the first scan finishes; never stored.
@@ -2142,6 +2144,25 @@ function Wallet() {
   async function storePhraseRecord(next: vault.PhraseCheck) {
     await vault.saveSealed("phrase-check", next);
     setPhraseRecord(next);
+  }
+  /** Settings → Security → Security checkup (core/checkup.js), from what this device knows. */
+  function securityCheckup() {
+    const list = checkupCore.checks({
+      hasPhrase: vault.hasPhrase(),
+      phraseRecord,
+      autoLockMinutes: data.autoLockMinutes,
+      limits: data.limits,
+      trustedOnlyMode: data.trustedOnlyMode,
+      coverAway: data.coverAway,
+      grants,
+      approvalsAvailable: Platform.OS === "web",
+    });
+    const value = checkupCore.score(list);
+    return { list, value, grade: checkupCore.grade(value) };
+  }
+  function openCheckup() {
+    setSettingsSection("checkup");
+    if (Platform.OS === "web" && grants === null && !grantsBusy) void loadApprovals();
   }
   function openPhraseCheck() {
     const positions = phraseCheck.pickPositions(vault.phraseLength());
@@ -12237,6 +12258,25 @@ function Wallet() {
             backLabel={t("Settings", "设置")}
           />
           <Group>
+            {(() => {
+              const { value, grade } = securityCheckup();
+              return (
+                <ListRow
+                  icon="shield-check"
+                  label={t("Security checkup", "安全检查")}
+                  detail={
+                    value === null
+                      ? t("See what protects this wallet and what to fix", "查看保护此钱包的措施以及需要修复的地方")
+                      : grade === "strong"
+                        ? t(`${value}/100 · Strong`, `${value}/100 · 强`)
+                        : grade === "fair"
+                          ? t(`${value}/100 · Fair — a few things to fix`, `${value}/100 · 一般 — 有几项需要修复`)
+                          : t(`${value}/100 · Needs work`, `${value}/100 · 需要加强`)
+                  }
+                  onPress={openCheckup}
+                />
+              );
+            })()}
             {vault.hasPhrase() && (
               <ListRow
                 icon="key-variant"
@@ -12387,6 +12427,191 @@ function Wallet() {
             {t(
               "Read from Robinhood Chain through its block explorer, which sees this wallet's address. Revoking is an ordinary transaction with a small network fee.",
               "通过 Robinhood Chain 区块浏览器读取，浏览器会看到此钱包地址。撤销是一笔普通交易，需支付少量网络费用。",
+            )}
+          </Text>
+        </>
+      );
+    }
+    if (settingsSection === "checkup") {
+      const { list, value, grade } = securityCheckup();
+      const tone =
+        grade === "strong"
+          ? { color: colors.green, label: t("Strong", "强") }
+          : grade === "fair"
+            ? { color: colors.lime, label: t("Fair", "一般") }
+            : { color: colors.danger, label: t("Needs work", "需要加强") };
+      const passing = list.filter((c) => c.ok === true).length;
+      const known = list.filter((c) => c.ok !== null).length;
+      const lock = data.autoLockMinutes ?? 15;
+      const since = phraseCheck.daysSince(phraseRecord);
+      const copy: Record<string, { title: string; detail: string; fix?: [string, () => void] }> = {
+        backup:
+          list.find((c) => c.id === "backup")?.ok === null
+            ? {
+                title: t("Backup", "备份"),
+                detail: t(
+                  "This wallet came from a private key, so it has no recovery phrase. Keep a safe offline copy of the key — Tera has no way to check it.",
+                  "此钱包由私钥导入，没有助记词。请离线妥善保存私钥副本——Tera 无法检查它。",
+                ),
+              }
+            : {
+                title: t("Recovery phrase checked", "助记词已检查"),
+                detail:
+                  since === null
+                    ? t("Never checked on this device. Prove your written copy still works.", "此设备上从未检查。请确认你写下的备份仍然有效。")
+                    : since < phraseCheck.INTERVAL_DAYS
+                      ? t(`Last checked ${since === 0 ? "today" : `${since} days ago`}.`, `上次检查于${since === 0 ? "今天" : ` ${since} 天前`}。`)
+                      : t(`Last checked ${since} days ago — more than 90.`, `上次检查于 ${since} 天前——已超过 90 天。`),
+                fix:
+                  quizTries < phraseCheck.MAX_TRIES ? [t("Check now", "立即检查"), openPhraseCheck] : undefined,
+              },
+        autolock: {
+          title: t("Auto-lock", "自动锁定"),
+          detail:
+            lock === 0
+              ? t("Never locks by itself. Anyone who picks up this device gets in.", "从不自动锁定。任何拿到此设备的人都能进入。")
+              : lock > checkupCore.MAX_LOCK_MINUTES
+                ? t(`Locks after ${lock} minutes. 15 or less is safer.`, `${lock} 分钟后锁定。15 分钟或更短更安全。`)
+                : t(`Locks after ${lock} minute${lock === 1 ? "" : "s"} of inactivity.`, `无操作 ${lock} 分钟后锁定。`),
+          fix: [t("Change", "更改"), () => setSettingsSection("autolock")],
+        },
+        approvals: (() => {
+          const check = list.find((c) => c.id === "approvals")!;
+          const open = () => {
+            setSettingsSection("approvals");
+            if (grants === null) void loadApprovals();
+          };
+          if (Platform.OS !== "web")
+            return {
+              title: t("Token approvals", "代币授权"),
+              detail: t("Not checked in this app yet — review them in Tera on the web.", "此应用暂不检查——请在 Tera 网页版中查看。"),
+            };
+          if (check.ok === null)
+            return {
+              title: t("Token approvals", "代币授权"),
+              detail: grantsBusy
+                ? t("Reading your approvals from the network…", "正在从网络读取你的授权…")
+                : grantsError || t("Not scanned yet.", "尚未扫描。"),
+              fix: grantsBusy ? undefined : [t("Scan", "扫描"), () => void loadApprovals()],
+            };
+          return {
+            title: t("Token approvals", "代币授权"),
+            detail: check.ok
+              ? t("No unlimited or whole-collection approvals open.", "没有无限额或整个合集的授权。")
+              : t(
+                  `${check.count} approval${check.count === 1 ? "" : "s"} can take everything ${check.count === 1 ? "it covers" : "they cover"}, at any time. Revoke the ones you don't use.`,
+                  `有 ${check.count} 个授权可以随时转走其涵盖的全部资产。请撤销不再使用的授权。`,
+                ),
+            fix: [check.ok ? t("Review", "查看") : t("Revoke", "撤销"), open],
+          };
+        })(),
+        limits: {
+          title: t("Spending limit", "消费限额"),
+          detail: limitsCore.hasAny(data.limits)
+            ? t("A cap is set on what this wallet pays out.", "已为此钱包的付款设置上限。")
+            : t("No cap. One mistaken or tricked payment could empty the wallet.", "没有上限。一笔误操作或被骗的付款就可能清空钱包。"),
+          fix: [
+            limitsCore.hasAny(data.limits) ? t("Change", "更改") : t("Set one", "设置"),
+            () => {
+              setLimitFields(limitsCore.toDollars(data.limits) as Record<string, string>);
+              setLimitError("");
+              setSettingsSection("limits");
+            },
+          ],
+        },
+        trusted: {
+          title: t("Trusted only mode", "受信任模式"),
+          detail: data.trustedOnlyMode
+            ? t("Payments only go to saved contacts.", "仅向保存的联系人付款。")
+            : t("Payments can go to any address, including a pasted look-alike.", "可以向任何地址付款，包括粘贴进来的相似地址。"),
+          fix: data.trustedOnlyMode
+            ? undefined
+            : [t("Turn on", "开启"), () => void run(() => store({ ...dataRef.current, trustedOnlyMode: true }))],
+        },
+        cover: {
+          title: t("Hide when away", "离开时隐藏"),
+          detail:
+            data.coverAway !== false
+              ? t("Balances are covered in the app switcher.", "在应用切换器中遮盖余额。")
+              : t("Balances show in the app switcher and over shared screens.", "余额会显示在应用切换器和共享屏幕中。"),
+          fix:
+            data.coverAway !== false
+              ? undefined
+              : [t("Turn on", "开启"), () => void run(() => store({ ...dataRef.current, coverAway: true }))],
+        },
+      };
+      return (
+        <>
+          <Header
+            title={t("Security checkup", "安全检查")}
+            onBack={() => setSettingsSection("security")}
+            backLabel={t("Security", "安全")}
+          />
+          <View style={[s.panel, { gap: 10, alignItems: "center", paddingVertical: 22 }]}>
+            <View style={{ flexDirection: "row", alignItems: "flex-end", gap: 4 }}>
+              <Text style={{ color: tone.color, fontSize: 56, fontWeight: "800", lineHeight: 60 }}>
+                {value ?? "—"}
+              </Text>
+              <Text style={[s.small, { marginBottom: 10 }]}>/100</Text>
+            </View>
+            <Text style={[s.text, { color: tone.color, fontWeight: "700" }]}>{tone.label}</Text>
+            <View style={{ alignSelf: "stretch", height: 8, borderRadius: 4, backgroundColor: colors.raised, overflow: "hidden" }}>
+              <View style={{ width: `${value ?? 0}%`, height: 8, borderRadius: 4, backgroundColor: tone.color }} />
+            </View>
+            <Text style={s.small}>
+              {t(`${passing} of ${known} checks pass`, `${known} 项检查中通过 ${passing} 项`)}
+            </Text>
+          </View>
+          <View style={[s.panel, { gap: 0, paddingVertical: 4 }]}>
+            {checkupCore.ordered(list).map((check, i) => {
+              const c = copy[check.id];
+              const icon =
+                check.ok === true
+                  ? { name: "check", color: colors.green }
+                  : check.ok === false
+                    ? { name: "alert-outline", color: colors.danger }
+                    : { name: "help-circle-outline", color: colors.muted };
+              return (
+                <View
+                  key={check.id}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 12,
+                    paddingVertical: 14,
+                    borderTopWidth: i ? StyleSheet.hairlineWidth : 0,
+                    borderColor: colors.line + "4d",
+                  }}
+                >
+                  <Icon name={icon.name} size={20} color={icon.color} />
+                  <View style={{ flex: 1, gap: 2 }}>
+                    <Text style={[s.text, { fontWeight: "600" }]}>{c.title}</Text>
+                    <Text style={s.small}>{c.detail}</Text>
+                  </View>
+                  {c.fix && check.ok !== true ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={`${c.fix[0]} — ${c.title}`}
+                      onPress={c.fix[1]}
+                      style={({ pressed }) => ({
+                        paddingVertical: 8,
+                        paddingHorizontal: 14,
+                        borderRadius: 999,
+                        backgroundColor: colors.tint,
+                        opacity: pressed ? 0.6 : 1,
+                      })}
+                    >
+                      <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>{c.fix[0]}</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              );
+            })}
+          </View>
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Worked out on this device from your own settings. Nothing about it is sent anywhere.",
+              "根据你在此设备上的设置计算得出，不会发送到任何地方。",
             )}
           </Text>
         </>

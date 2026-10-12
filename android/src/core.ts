@@ -40,6 +40,8 @@ export * as typedData from "../../public/tera/core/typed-data.js";
 export * as rpcRotation from "../../public/tera/core/rpc-rotation.js";
 // The 90-day recovery phrase re-check: when it is due, and the all-or-nothing quiz.
 export * as phraseCheck from "../../public/tera/core/phrase-check.js";
+// The security checkup: a score out of 100 and what to fix.
+export * as checkup from "../../public/tera/core/checkup.js";
 
 // What holdings are worth. Shared because the honest part of a valuation is arithmetic,
 // not presentation: an unpriced holding must be left out of the total and named, on both
