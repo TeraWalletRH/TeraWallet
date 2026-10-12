@@ -42,6 +42,8 @@ export * as rpcRotation from "../../public/tera/core/rpc-rotation.js";
 export * as phraseCheck from "../../public/tera/core/phrase-check.js";
 // The security checkup: a score out of 100 and what to fix.
 export * as checkup from "../../public/tera/core/checkup.js";
+// Every message the wallet signs, kept on the device.
+export * as signatureLog from "../../public/tera/core/signature-log.js";
 
 // What holdings are worth. Shared because the honest part of a valuation is arithmetic,
 // not presentation: an unpriced holding must be left out of the total and named, on both

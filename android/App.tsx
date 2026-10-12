@@ -74,6 +74,7 @@ import {
   typedData,
   phraseCheck,
   checkup as checkupCore,
+  signatureLog as signatureLogCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -773,6 +774,7 @@ function Wallet() {
       | "signature"
       | "phrasecheck"
       | "checkup"
+      | "siglog"
     >("root"),
     // Open token approvals, read from the chain when the screen opens. Null
     // until the first scan finishes; never stored.
@@ -850,6 +852,10 @@ function Wallet() {
     [quizAnswers, setQuizAnswers] = useState<string[]>([]),
     [quizTries, setQuizTries] = useState(0),
     [quizError, setQuizError] = useState(""),
+    // Settings → Security → Signature log: read when the screen opens.
+    [sigLog, setSigLog] = useState<{ off?: boolean; items?: any[] } | null>(null),
+    [sigLogQuery, setSigLogQuery] = useState(""),
+    [sigLogOpen, setSigLogOpen] = useState<number | null>(null),
     [notice, setNotice] = useState<null | {
       title: string;
       body: string;
@@ -2159,6 +2165,13 @@ function Wallet() {
     });
     const value = checkupCore.score(list);
     return { list, value, grade: checkupCore.grade(value) };
+  }
+  function openSignatureLog() {
+    setSigLog(null);
+    setSigLogQuery("");
+    setSigLogOpen(null);
+    setSettingsSection("siglog");
+    void vault.signatureLog().then(setSigLog, () => setSigLog({}));
   }
   function openCheckup() {
     setSettingsSection("checkup");
@@ -12346,6 +12359,12 @@ function Wallet() {
               detail={t("Paste what a site asks you to sign and see what it does", "粘贴网站要求你签名的内容，看看它会做什么")}
               onPress={() => setSettingsSection("signature")}
             />
+            <ListRow
+              icon="history"
+              label={t("Signature log", "签名记录")}
+              detail={t("Every message this wallet has signed, kept on this device", "此钱包签过的每条消息，仅保存在此设备上")}
+              onPress={openSignatureLog}
+            />
             <ListRow icon="lock-outline" label={t("Lock now", "立即锁定")} onPress={forget} />
             {vault.biometricsSupported && (
               <ListRow
@@ -12429,6 +12448,145 @@ function Wallet() {
               "通过 Robinhood Chain 区块浏览器读取，浏览器会看到此钱包地址。撤销是一笔普通交易，需支付少量网络费用。",
             )}
           </Text>
+        </>
+      );
+    }
+    if (settingsSection === "siglog") {
+      const items = sigLog?.items || [];
+      const shown = signatureLogCore.search(items, sigLogQuery);
+      const when = (at: number) =>
+        new Date(at).toLocaleString(data.language === "zh" ? "zh-CN" : undefined, {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+      const short = (a: string) => (a ? `${a.slice(0, 6)}…${a.slice(-4)}` : "");
+      return (
+        <>
+          <Header
+            title={t("Signature log", "签名记录")}
+            onBack={() => setSettingsSection("security")}
+            backLabel={t("Security", "安全")}
+          />
+          <View style={[s.panel, { gap: 6 }]}>
+            <Text style={s.small}>
+              {t(
+                "A transaction leaves a trace on chain. A signed message leaves none — it can log you in, approve a team payment or prove you own this address, and nothing shows it ever happened. Tera keeps that trace here, encrypted on this device and never sent anywhere.",
+                "交易会在链上留下记录，而签名消息不会——它可以让你登录、批准团队付款或证明你拥有此地址，之后却没有任何痕迹。Tera 把这些记录加密保存在此设备上，绝不发送到任何地方。",
+              )}
+            </Text>
+          </View>
+          <Group>
+            <ListRow
+              icon="history"
+              label={t("Keep a signature log", "保留签名记录")}
+              detail={t("Record each message as it's signed", "在每次签名时记录消息")}
+              disabled={!sigLog}
+              onPress={() =>
+                void run(async () => {
+                  const next = { ...(sigLog || {}), off: !sigLog?.off };
+                  await vault.setSignatureLog(next);
+                  setSigLog(next);
+                })
+              }
+              right={<Toggle on={!sigLog?.off} />}
+            />
+          </Group>
+          {items.length > 3 ? (
+            <Field
+              label={t("Search", "搜索")}
+              value={sigLogQuery}
+              onChangeText={setSigLogQuery}
+              placeholder={t("Message, service or account", "消息、服务或账户")}
+            />
+          ) : null}
+          {!sigLog ? (
+            <Text style={[s.small, { textAlign: "center" }]}>{t("Opening the log…", "正在打开记录…")}</Text>
+          ) : !items.length ? (
+            <View style={[s.panel, { alignItems: "center", paddingVertical: 22 }]}>
+              <Text style={s.small}>
+                {sigLog.off
+                  ? t("Logging is off.", "记录已关闭。")
+                  : t("Nothing signed yet. Messages this wallet signs will appear here.", "尚未签名。此钱包签过的消息将显示在这里。")}
+              </Text>
+            </View>
+          ) : (
+            <View style={[s.panel, { gap: 0, paddingVertical: 4 }]}>
+              {shown.map((entry: any, i: number) => {
+                const open = sigLogOpen === entry.at + i;
+                return (
+                  <Pressable
+                    key={`${entry.at}-${i}`}
+                    accessibilityRole="button"
+                    onPress={() => setSigLogOpen(open ? null : entry.at + i)}
+                    style={({ pressed }) => ({
+                      gap: 6,
+                      paddingVertical: 14,
+                      borderTopWidth: i ? StyleSheet.hairlineWidth : 0,
+                      borderColor: colors.line + "4d",
+                      opacity: pressed ? 0.7 : 1,
+                    })}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                      <Icon name={entry.kind === "typed" ? "file-text" : "pencil-outline"} size={18} color={colors.green} />
+                      <Text style={[s.text, { flex: 1, fontWeight: "600" }]} numberOfLines={open ? undefined : 1}>
+                        {entry.title}
+                      </Text>
+                      <Icon name={open ? "chevron-up" : "chevron-down"} size={16} color={colors.muted} />
+                    </View>
+                    <Text style={s.small}>
+                      {[when(entry.at), entry.site, short(entry.address)].filter(Boolean).join(" · ")}
+                    </Text>
+                    {open ? (
+                      <View style={{ gap: 8 }}>
+                        <Text
+                          selectable
+                          style={[
+                            s.mono,
+                            { fontSize: 12, color: colors.ink, backgroundColor: colors.wash, borderRadius: 10, padding: 12 },
+                          ]}
+                        >
+                          {entry.text}
+                        </Text>
+                        <Text style={s.small}>
+                          {t("Signature", "签名")}: <Text style={s.mono}>{entry.signature}</Text>
+                          {entry.detail ? ` · ${entry.detail}` : ""}
+                        </Text>
+                      </View>
+                    ) : null}
+                  </Pressable>
+                );
+              })}
+              {!shown.length ? (
+                <Text style={[s.small, { textAlign: "center", paddingVertical: 14 }]}>
+                  {t("No signatures match.", "没有匹配的签名。")}
+                </Text>
+              ) : null}
+            </View>
+          )}
+          {items.length ? (
+            <Button
+              onPress={() =>
+                confirm(
+                  t("Clear the signature log?", "清除签名记录？"),
+                  t(
+                    `This deletes all ${items.length} entries from this device. The signatures themselves stay valid wherever they were sent.`,
+                    `这将从此设备删除全部 ${items.length} 条记录。已发出的签名本身仍然有效。`,
+                  ),
+                  () =>
+                    void run(async () => {
+                      const next = { off: sigLog?.off, items: [] };
+                      await vault.setSignatureLog(next);
+                      setSigLog(next);
+                    }),
+                )
+              }
+            >
+              {t("Clear log", "清除记录")}
+            </Button>
+          ) : null}
         </>
       );
     }

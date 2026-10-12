@@ -332,3 +332,37 @@ it(
   },
   DERIVES_A_KEY,
 );
+
+it(
+  "logs every message and typed-data signature, sealed, and stops when turned off",
+  async () => {
+    const { recoverMessageAddress, verifyTypedData } = await import("viem");
+    const address = await vault.createWallet(phrase, password);
+    const account = vault.currentAccount();
+    const message = "Tera Wallet tag claim\nTag: jack\nTimestamp: 1";
+    const signature = await account.signMessage({ message });
+    // The wrapper hands back the real signature, unchanged.
+    expect(await recoverMessageAddress({ message, signature })).toBe(address);
+    const typed = {
+      domain: { name: "Safe", chainId: 4663 },
+      types: { SafeTx: [{ name: "value", type: "uint256" }] },
+      primaryType: "SafeTx" as const,
+      message: { value: 10n ** 18n },
+    };
+    const typedSig = await account.signTypedData(typed);
+    expect(await verifyTypedData({ address, ...typed, signature: typedSig })).toBe(true);
+
+    const log = await vault.signatureLog();
+    expect(log.items!.map((e: any) => e.title)).toEqual(["Safe transaction", "Tera Wallet tag claim"]);
+    expect(log.items![1].text).toBe(message);
+    expect(log.items![1].address).toBe(address);
+    expect(log.items![0].text).toContain('"value": "1000000000000000000"');
+    // Sealed like everything else: the message isn't readable on disk.
+    expect([...files.values()].join("")).not.toContain("tag claim");
+
+    await vault.setSignatureLog({ ...log, off: true });
+    await vault.currentAccount().signMessage({ message: "not logged" });
+    expect((await vault.signatureLog()).items!.length).toBe(2);
+  },
+  DERIVES_A_KEY,
+);

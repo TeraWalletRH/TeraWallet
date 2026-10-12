@@ -16,7 +16,8 @@ import {
   walletFromSecret,
   type Box,
 } from "./crypto";
-import type { Asset } from "./config";
+import { API, type Asset } from "./config";
+import { append as logAppend, entryFor as logEntry } from "../../public/tera/core/signature-log.js";
 import { matches as phraseMatches } from "../../public/tera/core/phrase-check.js";
 const WALLET = "tera.wallet.v1";
 const BIOMETRIC = "tera.wallet.biometric.v1";
@@ -189,8 +190,59 @@ export const isUnlocked = () => phrase !== null;
 export const hasPhrase = () => phrase !== null && normalizePrivateKey(phrase) === null;
 export const currentAccount = () => {
   if (!phrase) throw new Error("Wallet locked. / 钱包已锁定。");
-  return walletFromSecret(phrase, selected);
+  return logged(walletFromSecret(phrase, selected));
 };
+/**
+ * The signature log (core/signature-log.js). Every message the wallet signs is
+ * signed through currentAccount(), so wrapping its two message-signing methods
+ * here records all of them — nothing has to remember to log. Transactions are
+ * not logged here; they have the history, and the chain.
+ */
+type SignatureLog = { off?: boolean; items?: any[] };
+const LOG = "signature-log";
+let logQueue: Promise<void> = Promise.resolve();
+function noteSignature(input: Record<string, unknown>) {
+  const version = epoch;
+  let site = API;
+  try {
+    site = new URL(API).host;
+  } catch {}
+  const entry = logEntry({ ...input, site });
+  logQueue = logQueue
+    .catch(() => {})
+    .then(async () => {
+      if (version !== epoch || !phrase) return;
+      const log = await loadSealed<SignatureLog>(LOG);
+      if (log?.off) return;
+      if (version !== epoch) return;
+      await saveSealed(LOG, logAppend(log, entry));
+    })
+    .catch(() => {});
+}
+function logged<A extends ReturnType<typeof walletFromSecret>>(account: A): A {
+  return {
+    ...account,
+    signMessage: async (args: Parameters<A["signMessage"]>[0]) => {
+      const signature = await account.signMessage(args);
+      noteSignature({ kind: "message", message: args.message, address: account.address, signature });
+      return signature;
+    },
+    signTypedData: async (args: Parameters<A["signTypedData"]>[0]) => {
+      const signature = await account.signTypedData(args as never);
+      noteSignature({ kind: "typed", typed: args, address: account.address, signature });
+      return signature;
+    },
+  } as A;
+}
+/** The signature log, newest first. Waits for any entry still being written. */
+export async function signatureLog(): Promise<SignatureLog> {
+  await logQueue.catch(() => {});
+  return (await loadSealed<SignatureLog>(LOG)) || {};
+}
+export async function setSignatureLog(next: SignatureLog) {
+  await logQueue.catch(() => {});
+  await saveSealed(LOG, next);
+}
 export function exportPrivateKey(index: number) {
   if (!phrase) throw new Error("Wallet locked. / 钱包已锁定。");
   if (!indices.includes(index)) throw new Error("Unknown account. / 未知账户。");
