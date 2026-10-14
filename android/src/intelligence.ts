@@ -14,6 +14,8 @@ export type IntelligenceInput = {
   recipient?: string;
   owner?: string;
   knownRecipient?: boolean;
+  /** A saved or past address the recipient imitates (core/poisoning.js impersonates). */
+  lookalikeOf?: { address: string; name: string };
   recipientHasCode?: boolean;
   recipientCodeUnavailable?: boolean;
   checkRecipientContract?: boolean;
@@ -37,6 +39,14 @@ export function reviewIntelligence(input: IntelligenceInput): ReviewIntelligence
   if (input.simulation === "needs-attention") {
     risks.push(zh ? "交易模拟失败或无法完成。" : "The transaction simulation failed or could not be completed.");
     safer.push(zh ? "签名前请稍后重试检查。" : "Wait and retry the check before signing.");
+  }
+  if (target && input.lookalikeOf) {
+    const real = input.lookalikeOf.address;
+    const glance = `${real.slice(0, 6)}…${real.slice(-4)}`;
+    risks.push(zh
+      ? `此地址与「${input.lookalikeOf.name}」的地址（${glance}）首尾相同，但并不是同一个地址。这是常见的骗局。`
+      : `This address starts and ends like ${input.lookalikeOf.name}'s (${glance}) but is a different address. Lookalike addresses are a common scam.`);
+    safer.push(zh ? "请从联系人中选择收款方，不要从记录中复制地址。" : "Pick the recipient from your contacts instead of copying an address from your activity.");
   }
   if (target && !input.knownRecipient) {
     risks.push(zh ? "此收款地址不在联系人或近期付款记录中。" : "This recipient is not in your saved contacts or recent payments.");

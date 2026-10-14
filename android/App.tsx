@@ -32,7 +32,6 @@ import { LinearGradient } from "expo-linear-gradient";
 import { StatusBar } from "expo-status-bar";
 import * as Crypto from "expo-crypto";
 import * as Clipboard from "expo-clipboard";
-import * as Haptics from "expo-haptics";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "./src/speech";
 import { erc20Abi, formatUnits, parseUnits, zeroAddress, isAddress, getAddress, type Address, type Hex } from "viem";
 import { api, requestFor } from "./src/api";
@@ -48,6 +47,7 @@ import { fetchChainHistory, fetchTokenBalances, fetchTransferLegs, type ChainHis
 import { KNOWN_SPENDERS, scanApprovals, type Grant } from "./src/approvals";
 import { captureNote, SecretCover, useBlockScreenCapture } from "./src/secretGuard";
 import { AwayCover } from "./src/awayCover";
+import { buzz, setHapticsEnabled } from "./src/haptics";
 import { deviceReduced, modalAnimation, setMotionChoice, useReducedMotion } from "./src/motion";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
@@ -83,6 +83,7 @@ import {
   textSize as textSizeCore,
   maxAmount as maxAmountCore,
   freshness,
+  haptics as hapticsCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -1152,6 +1153,10 @@ function Wallet() {
   useEffect(() => setRotation(data.rpcRotation !== false), [data.rpcRotation]);
   // Reduce motion: the owner's choice, or the device's when there is none.
   useEffect(() => setMotionChoice(data.reduceMotion), [data.reduceMotion]);
+  // Vibrations (core/haptics.js): on unless turned off in Settings.
+  useEffect(() => setHapticsEnabled(data.haptics !== false), [data.haptics]);
+  // Every success or error notice is felt as well as seen.
+  useEffect(() => buzz(hapticsCore.forTone(notice?.tone)), [notice]);
   // Cmd+K / Ctrl+K opens the command palette on the web, and S, R, /, ?
   // and Esc do what core/keyboard-shortcuts.js says. Not over a review, a
   // PIN prompt or a shown secret, where jumping elsewhere would abandon it.
@@ -1270,7 +1275,7 @@ function Wallet() {
     setTxAlert({ title, body, hash });
     if (alertTimer.current) clearTimeout(alertTimer.current);
     alertTimer.current = setTimeout(() => setTxAlert(null), 6000);
-    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    buzz("success");
     notify.showSystem(title, body, hash, () => setPage("notifications"));
     void refresh();
   }
@@ -3298,7 +3303,7 @@ function Wallet() {
     if (recipientKind === "address") {
       setTagLookup({ state: "idle" });
       if (isAddress(recipient.trim())) return true;
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      buzz("error");
       setNotice({
         title: t("Check the address", "请检查地址"),
         body: t("Enter a valid recipient address.", "请输入有效收款地址。"),
@@ -3315,7 +3320,7 @@ function Wallet() {
     } catch (e) {
       const message = e instanceof Error ? e.message : t("Lookup failed.", "查询失败。");
       setTagLookup({ state: "error", message });
-      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      buzz("error");
       setNotice({
         title: biz.isEmail(typed) ? t("Email not found", "未找到邮箱") : t("Tag not found", "未找到标签"),
         body: message,
@@ -3344,7 +3349,7 @@ function Wallet() {
         const available = BigInt(balance?.[selectedAsset.symbol] || "0");
         if (requested > available) {
           setAmountInvalid(true);
-          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          buzz("error");
           setNotice({
             title: t("Insufficient balance", "余额不足"),
             body: t(
@@ -3359,7 +3364,7 @@ function Wallet() {
         setFlowStep(3);
       } catch (e) {
         setAmountInvalid(true);
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        buzz("error");
         setNotice({
           title: t("Enter an amount", "输入金额"),
           body: e instanceof Error ? e.message : t("Enter a valid amount.", "请输入有效金额。"),
@@ -3395,7 +3400,7 @@ function Wallet() {
         const available = BigInt(balance?.[source.symbol] || "0");
         if (requested > available) {
           setAmountInvalid(true);
-          void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+          buzz("error");
           setNotice({
             title: t("Insufficient balance", "余额不足"),
             body: t(
@@ -3410,7 +3415,7 @@ function Wallet() {
         setBridgeStep(3);
       } catch (e) {
         setAmountInvalid(true);
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        buzz("error");
         setNotice({
           title: t("Enter an amount", "输入金额"),
           body: e instanceof Error ? e.message : t("Enter a valid amount.", "请输入有效金额。"),
@@ -3426,7 +3431,7 @@ function Wallet() {
           ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(destAddr)
           : isAddress(destAddr);
       if (!isValid) {
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        buzz("error");
         setNotice({
           title: t("Invalid destination address", "目标地址无效"),
           body:
@@ -4161,6 +4166,21 @@ function Wallet() {
       Alert.alert(t("Cannot revoke", "无法撤销"), String((e as Error)?.message || e));
     }
   }
+  /**
+   * The saved contact, own wallet or past payee that `address` imitates:
+   * same first and last characters, different address (core/poisoning.js).
+   */
+  function lookalikeOf(address: string): { address: string; name: string } | undefined {
+    const known = [
+      ...contactsCore.cleanBook(data.contacts).map((c: { address: string; name: string }) => ({ address: c.address, name: c.name })),
+      ...accounts.map((a) => ({ address: a.address, name: t(`your ${walletName(a)}`, `你的${walletName(a)}`) })),
+      ...data.history
+        .map((h) => h.payee || h.recipient)
+        .filter((a): a is string => typeof a === "string")
+        .map((a) => ({ address: a, name: t("an address you've paid", "你付过款的地址") })),
+    ];
+    return poisoning.impersonates(address, known) || undefined;
+  }
   async function presentReview(next: Review) {
     setReviewDetailsOpen(false);
     setImpactAccepted(false);
@@ -4168,7 +4188,7 @@ function Wallet() {
     const shownRecipient = next.rows.find(([label]) =>
       label === t("Recipient", "收款地址") || label === t("Recipient", "收款方"))?.[1];
     const intelligenceRecipient = next.payee || shownRecipient || next.recipient;
-    const input = next.intelligenceInput ?? {
+    const input: IntelligenceInput = { ...(next.intelligenceInput ?? {
       language,
       action: next.title === t("Review private route", "审核私密路由")
         ? t("send privately", "私密发送")
@@ -4185,7 +4205,14 @@ function Wallet() {
       checkRecipientContract: next.title !== t("Review bridge", "审核跨链") && next.title !== t("Review private bridge", "审核私密跨链"),
       knownRecipient: !!intelligenceRecipient && (!!contactsCore.nameFor(book, intelligenceRecipient) || data.history.some((h) => h.payee?.toLowerCase() === intelligenceRecipient.toLowerCase())),
       steps: next.steps.length,
-    };
+    }) };
+    // Whoever built the review, its recipient is checked against every
+    // saved and past address.
+    const imitated = input.recipient ? lookalikeOf(input.recipient) : intelligenceRecipient ? lookalikeOf(intelligenceRecipient) : undefined;
+    if (imitated) input.lookalikeOf = imitated;
+    // A lookalike of a saved or past address: the one warning that is felt
+    // differently from everything else, as the review opens.
+    if (input.lookalikeOf) buzz("lookalike");
     const tx0 = next.steps[0];
     const assetFound = assets.find((a) => same(a.address, tx0?.to) || next.rows.some(([l, v]) => v.includes(a.symbol)));
     const delta = calculateNetBalanceDelta({
@@ -8211,7 +8238,7 @@ function Wallet() {
                           const parsed = parseQrAddress(text);
                           if (parsed) {
                             setRecipient(parsed);
-                            void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                            buzz("success");
                             setNotice({
                               title: t("Address scanned", "已扫描地址"),
                               body: parsed,
@@ -12089,6 +12116,15 @@ function Wallet() {
               }
               onPress={() => void run(() => store({ ...dataRef.current, textSize: textSizeCore.next(dataRef.current.textSize) }))}
             />
+            {Platform.OS !== "web" ? (
+              <ListRow
+                icon="vibrate"
+                label={t("Vibrations", "振动反馈")}
+                detail={t("Signing, success, errors and lookalike addresses each feel different", "签名、成功、错误和相似地址各有不同的振动")}
+                onPress={() => void run(() => store({ ...dataRef.current, haptics: dataRef.current.haptics === false }))}
+                right={<Toggle on={data.haptics !== false} />}
+              />
+            ) : null}
             {/*
               The app is dark-mode only for now — toggleTheme/setColorTheme
               still work underneath, so this just needs uncommenting (and a
@@ -15541,7 +15577,7 @@ function Wallet() {
                   if (current) {
                     holdProgress.stopAnimation();
                     holdProgress.setValue(1);
-                    void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                    buzz("confirm");
                     void run(() => signReview(current));
                   }
                 }}
@@ -15553,7 +15589,7 @@ function Wallet() {
                     duration: HOLD_TO_SIGN_MS,
                     useNativeDriver: false,
                   }).start();
-                  void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                  buzz("tap");
                 }}
                 onPressOut={() => {
                   holdProgress.stopAnimation();

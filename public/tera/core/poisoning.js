@@ -90,3 +90,14 @@ export function splitPoisoned(rows, trusted = []) {
   }
   return { shown, hidden };
 }
+
+/**
+ * A known address that `address` imitates: one that reads the same at a
+ * glance but isn't it. known: [{ address, name }]. The first match, or null.
+ * An exact match is the real thing, so it never counts.
+ */
+export function impersonates(address, known = []) {
+  if (!isAddress(address)) return null;
+  if (known.some((k) => isAddress(k?.address) && lower(k.address) === lower(address))) return null;
+  return known.find((k) => looksAlike(address, k?.address)) || null;
+}

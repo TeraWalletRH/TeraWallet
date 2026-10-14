@@ -1,8 +1,8 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-c432e1118c7e",
-  "builtAt": "2026-10-14T21:57:47.971Z",
+  "release": "r-c07428e8e4c1",
+  "builtAt": "2026-10-14T22:10:04.163Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
@@ -56,6 +56,11 @@
       "path": "core/gas-speed.js",
       "hash": "sha256-5JiN94Yn38aPzNVXo2fqva5IAL1v8RpDeeudxt/9D1E=",
       "bytes": 5921
+    },
+    {
+      "path": "core/haptics.js",
+      "hash": "sha256-9ZXmr1YCsXilJHGQHe5yXfdewVnFAmP+B6hQrHhvmc8=",
+      "bytes": 1887
     },
     {
       "path": "core/ingress.js",
@@ -144,8 +149,8 @@
     },
     {
       "path": "core/poisoning.js",
-      "hash": "sha256-GdqnuZyjCnLH5VnsZ7Qf2wv+vpPrlsAEo/LhTcMjABA=",
-      "bytes": 3796
+      "hash": "sha256-Uu/s7U6nwkwLTHZYHNulB8PjTp88dhJnIj0ep7Mq5g0=",
+      "bytes": 4276
     },
     {
       "path": "core/price-impact.js",
@@ -388,5 +393,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-xDLhEYx++xkj1RbUUXF81xbwNDMzkdNvrVMwgmcDhJQ="
+  "filesHash": "sha256-wHQo6OTB2DUm17RNUM1FUWMQ4IIi7+AoZ5sAnOufulA="
 }

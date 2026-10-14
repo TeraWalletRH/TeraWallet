@@ -131,6 +131,8 @@ export type LocalData = {
   textSize?: string;
   /** Amounts were last entered in dollars: Send, Swap and Bridge open that way. */
   amountInUsd?: boolean;
+  /** Vibrations: off only when turned off in Settings. */
+  haptics?: boolean;
   /**
    * Tokens the owner added by contract address — the app checks a balance
    * for these on every refresh alongside the built-in and registry-known
