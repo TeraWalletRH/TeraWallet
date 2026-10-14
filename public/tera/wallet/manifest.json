@@ -1,8 +1,8 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-41b4ed8d4d7b",
-  "builtAt": "2026-10-14T04:05:40.423Z",
+  "release": "r-f9258e6ebfab",
+  "builtAt": "2026-10-14T10:20:46.233Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
@@ -56,6 +56,11 @@
       "path": "core/ingress.js",
       "hash": "sha256-dSyimOuvviIdzrDfHEYNMWZI8Fx6xzzfMm+FGlHUR9w=",
       "bytes": 8034
+    },
+    {
+      "path": "core/keyboard-shortcuts.js",
+      "hash": "sha256-FTML2Jcqa5L/roJyNqZJ6vlhSBl42jbFfqstBnvPnos=",
+      "bytes": 2684
     },
     {
       "path": "core/limit-orders.js",
@@ -363,5 +368,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-QbTtjU17WIefO8AAZhbyYeHDrLoZcq8pZuAYv2NfuQI="
+  "filesHash": "sha256-+SWObr+rLfyqfTQAo00pG2H+P6E7gNlY6XFK6fn4Urc="
 }

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Animated,
   Easing,
@@ -661,6 +661,16 @@ export function Chips({
     </View>
   );
 }
+// The Back of every header on screen, newest last. Esc on the web presses
+// the newest (App.tsx), so it goes exactly where the button would.
+const backStack: { press: () => void }[] = [];
+/** Press the newest header's Back. False when no header on screen has one. */
+export function pressBack(): boolean {
+  const top = backStack[backStack.length - 1];
+  if (!top) return false;
+  top.press();
+  return true;
+}
 /** The kit's screen header: a round back button, the title centred over the screen. */
 export function Header({
   title,
@@ -674,6 +684,18 @@ export function Header({
   right?: React.ReactNode;
 }) {
   const side = { width: 40, height: 40 };
+  const back = useRef(onBack);
+  back.current = onBack;
+  const hasBack = !!onBack;
+  useEffect(() => {
+    if (!hasBack) return;
+    const entry = { press: () => back.current?.() };
+    backStack.push(entry);
+    return () => {
+      const i = backStack.indexOf(entry);
+      if (i >= 0) backStack.splice(i, 1);
+    };
+  }, [hasBack]);
   return (
     <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
       {onBack ? (

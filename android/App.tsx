@@ -77,6 +77,7 @@ import {
   signatureLog as signatureLogCore,
   disclosure as disclosureCore,
   palette as paletteCore,
+  keyboardShortcuts as keysCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -99,6 +100,7 @@ import {
   fontFiles,
   Group,
   Header,
+  pressBack,
   Icon,
   Keypad,
   ListRow,
@@ -671,6 +673,8 @@ function Wallet() {
     [paletteOpen, setPaletteOpen] = useState(false),
     [paletteQuery, setPaletteQuery] = useState(""),
     [paletteIndex, setPaletteIndex] = useState(0),
+    // The keyboard cheat sheet (core/keyboard-shortcuts.js), opened with "?".
+    [shortcutsOpen, setShortcutsOpen] = useState(false),
     [swapReceivePicker, setSwapReceivePicker] = useState(false),
     [swapPayPicker, setSwapPayPicker] = useState(false),
     [voiceMode, setVoiceMode] = useState(false),
@@ -1053,14 +1057,37 @@ function Wallet() {
   }, [owner]);
   // Reads rotate across public nodes unless the owner turned it off.
   useEffect(() => setRotation(data.rpcRotation !== false), [data.rpcRotation]);
-  // Cmd+K / Ctrl+K opens the command palette on the web. Not over a review,
-  // a PIN prompt or a shown secret, where jumping elsewhere would abandon it.
+  // Cmd+K / Ctrl+K opens the command palette on the web, and S, R, /, ?
+  // and Esc do what core/keyboard-shortcuts.js says. Not over a review, a
+  // PIN prompt or a shown secret, where jumping elsewhere would abandon it.
   const paletteBlocked = useRef(false);
   paletteBlocked.current = !!review || !!auth || !!revealed || !!revealedKey || busy || business;
+  // Read at key time, so the listener never acts on a stale page.
+  const shortcutAction = useRef<(action: string) => void>(() => {});
+  shortcutAction.current = (action) => {
+    if (action === "send" || action === "receive") {
+      if (page !== action) openFlow(action);
+    } else if (action === "search") {
+      setPaletteQuery("");
+      setPaletteIndex(0);
+      setPaletteOpen(true);
+    } else if (action === "help") setShortcutsOpen(true);
+    else if (action === "close") pressBack();
+  };
   useEffect(() => {
     if (Platform.OS !== "web" || !owner || typeof window === "undefined") return;
     const onKey = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") {
+        const action = keysCore.shortcutFor(event, {
+          blocked: paletteBlocked.current,
+          // An open dialog keeps its keys; it closes itself on Esc.
+          dialogOpen: !!document.querySelector('[role="dialog"][aria-modal="true"]'),
+        });
+        if (!action) return;
+        event.preventDefault();
+        shortcutAction.current(action);
+        return;
+      }
       event.preventDefault();
       if (paletteBlocked.current) return;
       setPaletteQuery("");
@@ -2222,6 +2249,7 @@ function Wallet() {
       { id: "siglog", kind: "action", icon: "history", label: t("Signature log", "签名记录"), keywords: ["signed messages"], go: () => { setPage("settings"); openSignatureLog(); } },
       { id: "settings", kind: "action", icon: "cog-outline", label: t("Settings", "设置"), keywords: ["preferences", "options"], go: settings("root") },
       { id: "lock", kind: "action", icon: "lock-outline", label: t("Lock now", "立即锁定"), keywords: ["sign out", "log out"], go: forget },
+      { id: "shortcuts", kind: "action", icon: "help-circle-outline", label: t("Keyboard shortcuts", "键盘快捷键"), keywords: ["keys", "help", "hotkeys", "?"], go: () => setShortcutsOpen(true) },
     ];
     const contacts: Entry[] = contactsCore.cleanBook(data.contacts).map((c: any) => ({
       id: `contact:${c.address}`,
@@ -14245,8 +14273,65 @@ function Wallet() {
                     <View style={{ flexDirection: "row", gap: 16, paddingHorizontal: 18, paddingVertical: 10, borderTopWidth: 1, borderColor: colors.line }}>
                       <Text style={[s.small, { color: colors.faint }]}>{t("↑↓ to move", "↑↓ 移动")}</Text>
                       <Text style={[s.small, { color: colors.faint }]}>{t("↵ to open", "↵ 打开")}</Text>
+                      <Text style={[s.small, { color: colors.faint }]}>{t("? for shortcuts", "? 快捷键")}</Text>
                       <Text style={[s.small, { color: colors.faint, marginLeft: "auto" }]}>{mac ? "⌘K" : "Ctrl K"}</Text>
                     </View>
+                  </Pressable>
+                </Pressable>
+              </Modal>
+            );
+          })()
+        : null}
+      {shortcutsOpen && owner
+        ? (() => {
+            const close = () => setShortcutsOpen(false);
+            const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+            const labels: Record<string, string> = {
+              send: t("Send", "发送"),
+              receive: t("Receive", "收款"),
+              search: t("Search", "搜索"),
+              palette: t("Command palette", "命令面板"),
+              help: t("Show these shortcuts", "显示快捷键"),
+              close: t("Close a dialog or go back", "关闭对话框或返回"),
+            };
+            return (
+              <Modal transparent visible animationType="fade" onRequestClose={close}>
+                <Pressable
+                  accessibilityLabel={t("Close", "关闭")}
+                  onPress={close}
+                  style={{ flex: 1, backgroundColor: "#00000099", alignItems: "center", justifyContent: "center", paddingHorizontal: 16 }}
+                >
+                  <Pressable
+                    onPress={() => {}}
+                    accessibilityRole="none"
+                    style={{ width: "100%", maxWidth: 420, borderRadius: 20, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.paper, padding: 20, gap: 14 }}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center" }}>
+                      <Text accessibilityRole="header" style={[s.text, { flex: 1, fontSize: 17, fontWeight: "700" }]}>
+                        {t("Keyboard shortcuts", "键盘快捷键")}
+                      </Text>
+                      <Pressable accessibilityRole="button" accessibilityLabel={t("Close", "关闭")} onPress={close} hitSlop={8}>
+                        <Icon name="x" size={20} color={colors.muted} />
+                      </Pressable>
+                    </View>
+                    {keysCore.SHORTCUTS.map((shortcut: { keys: string[]; action: string }) => (
+                      <View key={shortcut.action} style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                        <Text style={[s.text, { flex: 1 }]}>{labels[shortcut.action]}</Text>
+                        <View
+                          style={{ minWidth: 34, paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, borderWidth: 1, borderColor: colors.line, backgroundColor: colors.wash, alignItems: "center" }}
+                        >
+                          <Text style={[s.small, { color: colors.ink, fontWeight: "700" }]}>
+                            {shortcut.keys.length > 1 ? (mac ? shortcut.keys[0] : shortcut.keys[1]) : shortcut.keys[0]}
+                          </Text>
+                        </View>
+                      </View>
+                    ))}
+                    <Text style={[s.small, { color: colors.muted }]}>
+                      {t(
+                        "Shortcuts are off while you type in a field, and over a transaction review or PIN prompt.",
+                        "在输入框中输入时，以及交易确认或 PIN 提示期间，快捷键不会生效。",
+                      )}
+                    </Text>
                   </Pressable>
                 </Pressable>
               </Modal>
