@@ -82,6 +82,7 @@ import {
   motion as motionCore,
   textSize as textSizeCore,
   maxAmount as maxAmountCore,
+  freshness,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -229,6 +230,63 @@ const logoMark = require("./assets/logo-mark.png");
  * chosen. A real component, not inline JSX in onboarding(), for the same
  * hook-lifecycle reason as Illustration below.
  */
+/**
+ * "Updated 12s ago" (core/freshness.js) under the numbers on Home and
+ * Activity. It keeps its own clock so only it redraws each second, not the
+ * whole wallet. Yellow when the numbers are stale or the last read failed;
+ * tapping it reads again, which is the web's pull to refresh.
+ */
+function UpdatedStamp({
+  at,
+  failed,
+  busy,
+  onPress,
+  t,
+  align = "center",
+}: {
+  at: number;
+  failed: boolean;
+  busy: boolean;
+  onPress: () => void;
+  t: (en: string, zh: string) => string;
+  align?: "center" | "flex-start";
+}) {
+  const [, setTick] = React.useState(0);
+  React.useEffect(() => {
+    if (!at) return;
+    const id = setTimeout(() => setTick((n) => n + 1), freshness.tick(at, Date.now()));
+    return () => clearTimeout(id);
+  });
+  const now = Date.now();
+  const a = freshness.age(at, now);
+  if (!a && !failed && !busy) return null;
+  const zhUnit = { s: "秒", m: "分钟", h: "小时", d: "天" } as Record<string, string>;
+  const when = !a
+    ? ""
+    : a.unit === "now"
+      ? t("Updated just now", "刚刚更新")
+      : t(`Updated ${a.n}${a.unit} ago`, `${a.n}${zhUnit[a.unit]}前更新`);
+  const text = busy
+    ? t("Updating…", "更新中…")
+    : failed
+      ? when
+        ? t(`Couldn't update · ${when.toLowerCase()}`, `更新失败 · ${when}`)
+        : t("Couldn't update", "更新失败")
+      : when;
+  const warn = !busy && freshness.stale(at, now, failed);
+  return (
+    <Pressable
+      accessibilityRole="button"
+      accessibilityLabel={`${text}. ${t("Tap to refresh", "点按刷新")}`}
+      onPress={busy ? undefined : onPress}
+      hitSlop={8}
+      style={({ pressed }) => ({ flexDirection: "row", alignItems: "center", gap: 5, alignSelf: align, opacity: pressed ? 0.6 : 1 })}
+    >
+      <Icon name={warn ? "triangle-alert" : "refresh-cw"} size={12} color={warn ? colors.yellow : colors.muted} />
+      <Text style={[s.small, { fontSize: 12, color: warn ? colors.yellow : colors.muted }]}>{text}</Text>
+    </Pressable>
+  );
+}
 function WelcomeHero() {
   const pulse = React.useRef(new Animated.Value(0)).current;
   const spin = React.useRef(new Animated.Value(0)).current;
@@ -791,6 +849,12 @@ function Wallet() {
     // sparklines above.
     [ranks, setRanks] = useState<Record<string, number>>({}),
     [refreshing, setRefreshing] = useState(false),
+    // When balances and the activity list were last read, and whether the
+    // last try failed: the "Updated 12s ago" stamps (core/freshness.js).
+    [balancesAt, setBalancesAt] = useState(0),
+    [balancesFailed, setBalancesFailed] = useState(false),
+    [historyAt, setHistoryAt] = useState(0),
+    [historyFailed, setHistoryFailed] = useState(false),
     [flowStep, setFlowStep] = useState(0),
     [amountInvalid, setAmountInvalid] = useState(false),
     [settingsSection, setSettingsSection] = useState<
@@ -1252,6 +1316,8 @@ function Wallet() {
       const entries = await fetchChainHistory(address as Address, t);
       if (address !== ownerRef.current) return;
       setChainHistory(entries);
+      setHistoryAt(Date.now());
+      setHistoryFailed(false);
       const alerts = dataRef.current.alerts || {};
       // The first read on a wallet that has never listened announces nothing:
       // its whole history is not news.
@@ -1341,16 +1407,31 @@ function Wallet() {
         alerts: { ...dataRef.current.alerts, readAt: Date.now() },
       }).catch(() => {});
   }, [page, owner]);
+  /** Re-read the activity list from the explorer, stamping when it landed. */
+  async function loadHistory() {
+    const address = ownerRef.current;
+    if (!address) return;
+    try {
+      const entries = await fetchChainHistory(address as Address, t);
+      if (address !== ownerRef.current) return;
+      setChainHistory(entries);
+      setHistoryAt(Date.now());
+      setHistoryFailed(false);
+    } catch {
+      if (address === ownerRef.current) setHistoryFailed(true);
+    }
+  }
   useEffect(() => {
     if (page !== "activity" || !owner) return;
-    let live = true;
-    void fetchChainHistory(owner, t)
-      .then((entries) => live && setChainHistory(entries))
-      .catch(() => {});
-    return () => {
-      live = false;
-    };
+    void loadHistory();
   }, [page, owner]);
+  // A different wallet, or none: its stamps start over.
+  useEffect(() => {
+    setBalancesAt(0);
+    setBalancesFailed(false);
+    setHistoryAt(0);
+    setHistoryFailed(false);
+  }, [owner]);
   useEffect(() => {
     if (page !== "token-detail" || !tokenDetailSymbol) return;
     if (data.noMarketData) {
@@ -2681,8 +2762,12 @@ function Wallet() {
     ]);
     if (version !== vault.sessionVersion()) return;
     setListedSymbols(registry.map((asset) => asset.symbol.toUpperCase()));
-    if (balanceResult.status === "fulfilled") setBalance(balanceResult.value);
-    else
+    if (balanceResult.status === "fulfilled") {
+      setBalance(balanceResult.value);
+      setBalancesAt(Date.now());
+      setBalancesFailed(false);
+    } else setBalancesFailed(true);
+    if (balanceResult.status !== "fulfilled")
       setError(
         t("Could not refresh balances. Pull again when connected.", "无法刷新余额，请联网后重试。"),
       );
@@ -2711,7 +2796,8 @@ function Wallet() {
   async function pullRefresh() {
     setRefreshing(true);
     try {
-      await refresh();
+      // Pulling Activity re-reads the list too, not only the balances.
+      await Promise.all([refresh(), page === "activity" ? loadHistory() : null]);
     } finally {
       setRefreshing(false);
     }
@@ -6597,6 +6683,9 @@ function Wallet() {
                           : t("No prices could be read.", "无法读取价格。")}
                       </Text>
                     ) : null}
+                    <View style={{ marginTop: 6 }}>
+                      <UpdatedStamp at={balancesAt} failed={balancesFailed} busy={refreshing} onPress={() => void pullRefresh()} t={t} />
+                    </View>
                     {pnlSummary && pnlSummary.total.costBasis > 0 ? (
                       <Pressable accessibilityRole="button" onPress={() => setPage("pnl")} hitSlop={8}>
                         <Text
@@ -10934,6 +11023,7 @@ function Wallet() {
               ) : undefined
             }
           />
+          <UpdatedStamp at={historyAt} failed={historyFailed} busy={refreshing} onPress={() => void pullRefresh()} t={t} />
           {combinedHistory.length ? (
             <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
               <View

@@ -56,6 +56,8 @@ export * as motion from "../../public/tera/core/motion.js";
 export * as textSize from "../../public/tera/core/text-size.js";
 // The Max button on Send, and dollars ⇄ tokens.
 export * as maxAmount from "../../public/tera/core/max-amount.js";
+// "Updated 12s ago" on Home and Activity.
+export * as freshness from "../../public/tera/core/freshness.js";
 
 // What holdings are worth. Shared because the honest part of a valuation is arithmetic,
 // not presentation: an unpriced holding must be left out of the total and named, on both

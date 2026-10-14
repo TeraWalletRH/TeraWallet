@@ -21,3 +21,16 @@ test("chain history keeps sent and received transfers distinct", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("chain history: both explorer reads failing is an error, not an empty history", async () => {
+  const address = "0x1111111111111111111111111111111111111111" as const;
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () => {
+    throw new TypeError("Failed to fetch");
+  }) as unknown as typeof fetch;
+  try {
+    await expect(fetchChainHistory(address, (en) => en)).rejects.toThrow("explorer");
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});

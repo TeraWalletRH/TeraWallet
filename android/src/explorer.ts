@@ -119,12 +119,18 @@ export async function fetchChainHistory(
   t: (en: string, zh: string) => string,
 ): Promise<ChainHistoryEntry[]> {
   const lower = address.toLowerCase();
+  // One list failing still shows the other. Both failing is an error, not an
+  // empty history: the caller keeps what it had and says the read failed.
+  let failures = 0;
+  const failed = () => {
+    failures++;
+    return { items: [] };
+  };
   const [transfers, transactions] = await Promise.all([
-    explorerGet(`/addresses/${address}/token-transfers?type=ERC-20`).catch(() => ({ items: [] })),
-    explorerGet(`/addresses/${address}/transactions?filter=to%20%7C%20from`).catch(() => ({
-      items: [],
-    })),
+    explorerGet(`/addresses/${address}/token-transfers?type=ERC-20`).catch(failed),
+    explorerGet(`/addresses/${address}/transactions?filter=to%20%7C%20from`).catch(failed),
   ]);
+  if (failures === 2) throw new Error("The explorer could not be reached. / 无法连接区块浏览器。");
   const entries = new Map<string, ChainHistoryEntry>();
   // Token transfers first: they carry the asset/amount that actually
   // moved, which a raw transaction record (value in native currency only)
