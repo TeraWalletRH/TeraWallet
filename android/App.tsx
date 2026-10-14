@@ -81,6 +81,7 @@ import {
   keyboardShortcuts as keysCore,
   motion as motionCore,
   textSize as textSizeCore,
+  maxAmount as maxAmountCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -996,6 +997,8 @@ function Wallet() {
   const [amount, setAmount] = useState(""),
     [amountInUsd, setAmountInUsd] = useState(false),
     [usdAmountInput, setUsdAmountInput] = useState(""),
+    // What Max kept back for the network fee, in wei; null until Max is pressed.
+    [maxReserve, setMaxReserve] = useState<bigint | null>(null),
     [recipient, setRecipient] = useState(""),
     [spendAmount, setSpendAmount] = useState(""),
     [spendTo, setSpendTo] = useState(""),
@@ -3005,43 +3008,89 @@ function Wallet() {
   function clearAmount() {
     setAmount("");
     setUsdAmountInput("");
-    setAmountInUsd(false);
+    // Amounts open in whichever unit the owner last chose.
+    setAmountInUsd(!!dataRef.current.amountInUsd);
     setAmountInvalid(false);
+    setMaxReserve(null);
   }
-  function amountDisplay() {
-    return amountInUsd ? usdAmountInput : amount;
+  /** Dollar entry is on for this token: chosen, and the token has a price to convert with. */
+  function usdOn(symbol: string) {
+    return amountInUsd && !!usablePrice(symbol);
+  }
+  function amountDisplay(symbol: string) {
+    return usdOn(symbol) ? usdAmountInput : amount;
   }
   function usablePrice(symbol: string) {
     const price = prices[symbol];
     return Number.isFinite(price) && price > 0 && Number(price.toFixed(12)) > 0 ? price : null;
   }
   function setAmountDisplay(symbol: string, decimals: number, value: string) {
-    if (!amountInUsd) {
+    setMaxReserve(null);
+    if (!usdOn(symbol)) {
+      // Typed in tokens: that is the unit now, even if dollars were chosen
+      // before this token had a price.
+      if (amountInUsd) setAmountInUsd(false);
       setAmount(value);
       return;
     }
     const input = value.replace(",", ".");
     if (!/^\d*(\.\d{0,8})?$/.test(input)) return;
     setUsdAmountInput(input);
-    const price = usablePrice(symbol);
-    if (!price || !input || input === ".") {
-      setAmount("");
-      return;
-    }
-    const usdUnits = parseUnits(input.endsWith(".") ? `${input}0` : input, 12);
-    const priceUnits = parseUnits(price.toFixed(12), 12);
-    const tokenUnits = (usdUnits * 10n ** BigInt(decimals)) / priceUnits;
-    setAmount(formatUnits(tokenUnits, decimals));
+    const units = maxAmountCore.tokensForDollars(input, usablePrice(symbol), decimals);
+    setAmount(units === null ? "" : formatUnits(BigInt(units), decimals));
   }
   function selectAmountMode(symbol: string, useUsd: boolean) {
-    if (useUsd === amountInUsd || (useUsd && !usablePrice(symbol))) return;
+    if (useUsd === usdOn(symbol) || (useUsd && !usablePrice(symbol))) return;
     if (useUsd) {
-      const estimate = Number(amount || 0) * (usablePrice(symbol) || 0);
-      setUsdAmountInput(
-        amount && Number.isFinite(estimate) ? String(Number(estimate.toFixed(8))) : "",
-      );
+      let raw: bigint | null = null;
+      try {
+        raw = amount ? parseUnits(amount, assetDecimals(symbol)) : null;
+      } catch {}
+      const dollars = raw === null ? null : maxAmountCore.dollarsForTokens(raw.toString(), usablePrice(symbol), assetDecimals(symbol));
+      setUsdAmountInput(dollars ?? "");
     }
     setAmountInUsd(useUsd);
+    // Remembered: the next Send, Swap or Bridge opens in this unit.
+    if (owner && !!dataRef.current.amountInUsd !== useUsd)
+      void store({ ...dataRef.current, amountInUsd: useUsd }).catch(() => {});
+  }
+  function assetDecimals(symbol: string) {
+    return (assets.find((a) => a.symbol === symbol) || sources.find((a) => a.symbol === symbol))?.decimals ?? 18;
+  }
+  /**
+   * Max on Send (core/max-amount.js): the whole balance of a token, or of ETH
+   * less the network fee, read live and doubled, at most the 0.001 ETH limit.
+   */
+  async function fillMax() {
+    const asset = selectedAsset;
+    const native = asset.symbol === "ETH";
+    let reserve = maxAmountCore.FEE_CAP_WEI;
+    if (native && owner) {
+      try {
+        const [gas, fees] = await Promise.all([
+          client.estimateGas({ account: owner as Address, to: owner as Address, value: 0n }),
+          client.estimateFeesPerGas(),
+        ]);
+        reserve = maxAmountCore.feeReserve(gas, fees.maxFeePerGas);
+      } catch {}
+    }
+    const raw = maxAmountCore.maxSendable({ balance: balance?.[asset.symbol] || "0", native, reserve });
+    setAmountInvalid(false);
+    setAmount(raw === "0" ? "" : formatUnits(BigInt(raw), asset.decimals));
+    if (usdOn(asset.symbol))
+      setUsdAmountInput(raw === "0" ? "" : maxAmountCore.dollarsForTokens(raw, usablePrice(asset.symbol), asset.decimals) ?? "");
+    setMaxReserve(native ? reserve : 0n);
+    if (raw === "0")
+      setNotice({
+        title: t("Nothing to send", "没有可发送的金额"),
+        body: native
+          ? t(
+              `Your ETH doesn't cover the network fee (about ${formatUnits(reserve, 18)} ETH).`,
+              `你的 ETH 不足以支付网络手续费（约 ${formatUnits(reserve, 18)} ETH）。`,
+            )
+          : t(`You have no ${asset.symbol} to send.`, `你没有可发送的 ${asset.symbol}。`),
+        tone: "error",
+      });
   }
   function amountModeToggle(symbol: string) {
     const priceAvailable = !!usablePrice(symbol);
@@ -3060,7 +3109,7 @@ function Wallet() {
             key={useUsd ? "usd" : "token"}
             accessibilityRole="button"
             accessibilityState={{
-              selected: amountInUsd === useUsd,
+              selected: usdOn(symbol) === useUsd,
               disabled: useUsd && !priceAvailable,
             }}
             disabled={useUsd && !priceAvailable}
@@ -3071,14 +3120,14 @@ function Wallet() {
               paddingHorizontal: 12,
               borderRadius: 10,
               alignItems: "center",
-              backgroundColor: amountInUsd === useUsd ? colors.raised : "transparent",
+              backgroundColor: usdOn(symbol) === useUsd ? colors.raised : "transparent",
               opacity: useUsd && !priceAvailable ? 0.4 : 1,
             }}
           >
             <Text
               style={[
                 s.small,
-                { fontWeight: "700", color: amountInUsd === useUsd ? colors.ink : colors.muted },
+                { fontWeight: "700", color: usdOn(symbol) === useUsd ? colors.ink : colors.muted },
               ]}
             >
               {useUsd ? "USD" : symbol}
@@ -3094,7 +3143,7 @@ function Wallet() {
     return price && Number.isFinite(value) ? valueCore.format(value) : null;
   }
   function amountCounterpart(symbol: string) {
-    if (amountInUsd) return `${amount || "0"} ${symbol}`;
+    if (usdOn(symbol)) return `${amount || "0"} ${symbol}`;
     const estimate = usdEstimate(symbol, amount || "0");
     return estimate
       ? `\u2248 ${estimate}`
@@ -7956,7 +8005,7 @@ function Wallet() {
               {amountModeToggle(selectedAsset.symbol)}
               <TextInput
                 autoFocus
-                value={amountDisplay()}
+                value={amountDisplay(selectedAsset.symbol)}
                 onChangeText={(value) => {
                   setAmountDisplay(selectedAsset.symbol, selectedAsset.decimals, value);
                   setAmountInvalid(false);
@@ -7973,15 +8022,51 @@ function Wallet() {
                 }}
               />
               <Text style={s.small}>{amountCounterpart(selectedAsset.symbol)}</Text>
-              <Text style={[s.small, amountInvalid && { color: colors.danger }]}>
-                {amountInvalid
-                  ? t("Amount exceeds your on-chain balance", "金额超过链上余额")
-                  : `${t("Available:", "可用:")} ${
-                      balance?.[selectedAsset.symbol]
-                        ? formatUnits(BigInt(balance[selectedAsset.symbol]), selectedAsset.decimals)
-                        : "0"
-                    } ${selectedAsset.symbol}`}
-              </Text>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap", justifyContent: "center" }}>
+                <Text style={[s.small, amountInvalid && { color: colors.danger }]}>
+                  {amountInvalid
+                    ? t("Amount exceeds your on-chain balance", "金额超过链上余额")
+                    : `${t("Available:", "可用:")} ${
+                        balance?.[selectedAsset.symbol]
+                          ? formatUnits(BigInt(balance[selectedAsset.symbol]), selectedAsset.decimals)
+                          : "0"
+                      } ${selectedAsset.symbol}`}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel={t(`Send the most ${selectedAsset.symbol} you can`, `发送最多的 ${selectedAsset.symbol}`)}
+                  onPress={() => void fillMax()}
+                  hitSlop={6}
+                  style={({ pressed }) => ({
+                    paddingHorizontal: 12,
+                    paddingVertical: 5,
+                    borderRadius: 999,
+                    borderWidth: 1,
+                    borderColor: colors.green,
+                    backgroundColor: pressed ? colors.tint : "transparent",
+                  })}
+                >
+                  <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>{t("Max", "最大")}</Text>
+                </Pressable>
+              </View>
+              {maxReserve !== null ? (
+                <Text style={[s.small, { color: colors.muted, textAlign: "center" }]}>
+                  {maxReserve > 0n
+                    ? t(
+                        `Keeps ${formatUnits(maxReserve, 18)} ETH back for the network fee.`,
+                        `已预留 ${formatUnits(maxReserve, 18)} ETH 作为网络手续费。`,
+                      )
+                    : BigInt(balance?.ETH || "0") === 0n
+                      ? t(
+                          "The network fee is paid in ETH, and this wallet has none.",
+                          "网络手续费以 ETH 支付，而此钱包没有 ETH。",
+                        )
+                      : t(
+                          `All of your ${selectedAsset.symbol}. The network fee is paid in ETH.`,
+                          `全部 ${selectedAsset.symbol}。网络手续费以 ETH 支付。`,
+                        )}
+                </Text>
+              ) : null}
             </View>
           )}
           {flowStep === 3 && (
@@ -8289,7 +8374,7 @@ function Wallet() {
               {amountModeToggle(paySymbol)}
             </View>
             <TextInput
-              value={amountDisplay()}
+              value={amountDisplay(paySymbol)}
               onChangeText={(value) => setAmountDisplay(paySymbol, payAsset.decimals, value)}
               keyboardType="decimal-pad"
               placeholder="0.00"
@@ -9073,7 +9158,7 @@ function Wallet() {
                 {amountModeToggle(selectedSource.symbol)}
                 <TextInput
                   autoFocus
-                  value={amountDisplay()}
+                  value={amountDisplay(selectedSource.symbol)}
                   onChangeText={(value) => {
                     setAmountDisplay(selectedSource.symbol, selectedSource.decimals, value);
                     setAmountInvalid(false);

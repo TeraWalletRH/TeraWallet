@@ -129,6 +129,8 @@ export type LocalData = {
   reduceMotion?: boolean;
   /** Larger text: "default", "large" or "larger" (core/text-size.js). */
   textSize?: string;
+  /** Amounts were last entered in dollars: Send, Swap and Bridge open that way. */
+  amountInUsd?: boolean;
   /**
    * Tokens the owner added by contract address — the app checks a balance
    * for these on every refresh alongside the built-in and registry-known
