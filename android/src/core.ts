@@ -44,6 +44,8 @@ export * as phraseCheck from "../../public/tera/core/phrase-check.js";
 export * as checkup from "../../public/tera/core/checkup.js";
 // Every message the wallet signs, kept on the device.
 export * as signatureLog from "../../public/tera/core/signature-log.js";
+// Exactly what each assistant message sent.
+export * as disclosure from "../../public/tera/core/disclosure.js";
 
 // What holdings are worth. Shared because the honest part of a valuation is arithmetic,
 // not presentation: an unpriced holding must be left out of the total and named, on both

@@ -35,7 +35,7 @@ import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import { ExpoSpeechRecognitionModule, useSpeechRecognitionEvent } from "./src/speech";
 import { erc20Abi, formatUnits, parseUnits, zeroAddress, isAddress, getAddress, type Address, type Hex } from "viem";
-import { api } from "./src/api";
+import { api, requestFor } from "./src/api";
 import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
 import * as biz from "./src/business";
@@ -75,6 +75,7 @@ import {
   phraseCheck,
   checkup as checkupCore,
   signatureLog as signatureLogCore,
+  disclosure as disclosureCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -873,8 +874,18 @@ function Wallet() {
     [bridgeReturnPage, setBridgeReturnPage] = useState("home"),
     [message, setMessage] = useState(""),
     [chat, setChat] = useState<
-      { role: string; text: string; minimised?: boolean; sent?: string; replaced?: number }[]
-    >([]);
+      {
+        role: string;
+        text: string;
+        minimised?: boolean;
+        sent?: string;
+        replaced?: number;
+        // Exactly what this message sent (core/disclosure.js), for "What was sent".
+        request?: ReturnType<typeof disclosureCore.disclose>;
+      }[]
+    >([]),
+    // Which message's "What was sent" panel is open, by index into `chat`.
+    [disclosureOpen, setDisclosureOpen] = useState<number | null>(null);
   const [minimiseEnabled, setMinimiseEnabled] = useState(true),
     [minimisePlan, setMinimisePlan] = useState<MinimiseResult | null>(null);
   const [propose, setPropose] = useState(false),
@@ -1970,6 +1981,7 @@ function Wallet() {
     setAuth(null);
     setReview(null);
     setChat([]);
+    setDisclosureOpen(null);
     setMessage("");
     setData(vault.emptyData());
     dataRef.current = vault.emptyData();
@@ -2225,6 +2237,7 @@ function Wallet() {
   async function adopt(address: Address) {
     setBalance(null);
     setChat([]);
+    setDisclosureOpen(null);
     setMyTag(null);
     setError("");
     setOwner(address);
@@ -4086,6 +4099,14 @@ function Wallet() {
       );
     }
     const minimised = !!plan?.placeholders.length;
+    const path = propose ? "/api/agent/propose" : "/api/agent/chat";
+    const body = propose
+      ? {
+          prompt: outgoing,
+          ownerAddress: owner,
+          ...(dataRef.current.token ? { sessionToken: dataRef.current.token } : {}),
+        }
+      : { message: outgoing };
     setMessage("");
     setChat((c) => [
       ...c,
@@ -4095,18 +4116,10 @@ function Wallet() {
         sent: minimised ? outgoing : undefined,
         minimised,
         replaced: plan?.placeholders.length || 0,
+        request: disclosureCore.disclose(requestFor(path, body), { owner }),
       },
     ]);
-    const result = await api(
-      propose ? "/api/agent/propose" : "/api/agent/chat",
-      propose
-        ? {
-            prompt: outgoing,
-            ownerAddress: owner,
-            ...(dataRef.current.token ? { sessionToken: dataRef.current.token } : {}),
-          }
-        : { message: outgoing },
-    );
+    const result = await api(path, body);
     guard();
     const reply =
       result.reply || result.explanation || t("Proposal prepared.", "Proposal prepared.");
@@ -5212,6 +5225,62 @@ function Wallet() {
                   <Text selectable style={[s.text, { color: colors.paper }]}>
                     {m.text.replace(/\*\*(.*?)\*\*/g, "$1").replace(/^#{1,6}\s/gm, "")}
                   </Text>
+                  {m.request ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel={t("What was sent", "发送了什么")}
+                      onPress={() => setDisclosureOpen(disclosureOpen === i ? null : i)}
+                      hitSlop={8}
+                      style={{ flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-end" }}
+                    >
+                      <Icon name="eye-outline" size={13} color={colors.paper} />
+                      <Text style={[s.small, { color: colors.paper, opacity: 0.85, fontWeight: "600" }]}>
+                        {disclosureOpen === i ? t("Hide what was sent", "隐藏发送内容") : t("What was sent", "发送了什么")}
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                  {m.request && disclosureOpen === i ? (
+                    <View style={{ gap: 8, marginTop: 4, padding: 12, borderRadius: 12, backgroundColor: colors.paper }}>
+                      <Text selectable style={[s.mono, { fontSize: 12, color: colors.ink }]}>
+                        {`${m.request.method} ${m.request.url}\n${Object.entries(m.request.headers)
+                          .map(([k, v]) => `${k}: ${v}`)
+                          .join("\n")}\n\n${m.request.body}`}
+                      </Text>
+                      <Text style={[s.small, { color: colors.ink }]}>
+                        {t(
+                          `Contains only: ${m.request.fields.join(", ") || "nothing"}.`,
+                          `仅包含：${m.request.fields.join("、") || "无"}。`,
+                        )}
+                      </Text>
+                      <Text style={[s.small, { color: m.request.addressSent ? colors.danger : colors.green, fontWeight: "600" }]}>
+                        {m.request.addressSent
+                          ? t("Your wallet address was included.", "包含了你的钱包地址。")
+                          : t("Your wallet address was not included.", "未包含你的钱包地址。")}
+                      </Text>
+                      {m.minimised ? (
+                        <Text style={[s.small, { color: colors.ink }]}>
+                          {t(
+                            `${m.replaced} detail${m.replaced === 1 ? " was" : "s were"} replaced with placeholders before sending, and put back in the reply on this device.`,
+                            `发送前有 ${m.replaced} 处细节被替换为占位符，并在此设备上还原到回复中。`,
+                          )}
+                        </Text>
+                      ) : null}
+                      {m.request.secrets.length ? (
+                        <Text style={[s.small, { color: colors.ink }]}>
+                          {t(
+                            "Your session token was sent so the service can prepare the proposal; it's masked here.",
+                            "已发送你的会话令牌以便服务准备提案；此处已遮盖。",
+                          )}
+                        </Text>
+                      ) : null}
+                      <Text style={[s.small, { color: colors.muted }]}>
+                        {t(
+                          "Sent over HTTPS. Like any website, the service also sees your IP address and the time. No balances, history, contacts or keys are added — what's above is the whole request.",
+                          "通过 HTTPS 发送。与任何网站一样，服务也能看到你的 IP 地址和时间。不会附加余额、记录、联系人或密钥——以上就是完整的请求。",
+                        )}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
               ) : (
                 <View
@@ -13235,6 +13304,7 @@ function Wallet() {
                 () =>
                   void run(async () => {
                     setChat([]);
+                    setDisclosureOpen(null);
                     await store({ ...dataRef.current, drafts: [] });
                     setNotice({
                       title: t("Deleted", "已删除"),
@@ -13434,6 +13504,7 @@ function Wallet() {
               () =>
                 void run(async () => {
                   setChat([]);
+                  setDisclosureOpen(null);
                   await store({ ...dataRef.current, drafts: [] });
                 }),
             )

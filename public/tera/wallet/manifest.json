@@ -1,8 +1,8 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-4113cdc06b48",
-  "builtAt": "2026-10-12T14:42:16.776Z",
+  "release": "r-57eaff202a9e",
+  "builtAt": "2026-10-14T02:14:38.030Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
@@ -36,6 +36,11 @@
       "path": "core/csv-export.js",
       "hash": "sha256-K9kXJ+BpCOi0MrBjl5+9/feItEeVR5njpuM55EXvnRs=",
       "bytes": 5562
+    },
+    {
+      "path": "core/disclosure.js",
+      "hash": "sha256-c8Xg1UWS96W8x2VL/nOEFB8VFpba9kmUxfxr72RiYdQ=",
+      "bytes": 2588
     },
     {
       "path": "core/discretion.js",
@@ -353,5 +358,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-QRPNwGtIH9kdegff9LqNWogH6O2MPpEKrzTwdfonu9Q="
+  "filesHash": "sha256-V+r/ICqeXfXE76fF8wkZ/GF6t6sSLK3S+/ieJL8Bo3E="
 }
