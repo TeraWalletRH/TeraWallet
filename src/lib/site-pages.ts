@@ -1,4 +1,6 @@
 // Serves the exported Tera Wallet static pages (src/site/**) at pretty URLs.
+import { policyFor, surfaceFor } from "./csp.js";
+
 const pages = import.meta.glob("../site/**/index.html", {
   query: "?raw",
   import: "default",
@@ -64,8 +66,21 @@ export async function serveSitePage(pathname: string): Promise<Response> {
     );
   }
 
+  const headers: Record<string, string> = { "content-type": "text/html; charset=utf-8" };
+  // /app and the dashboard hold a wallet: limit what they may load and run.
+  const surface = found ? surfaceFor(pathname) : null;
+  if (surface)
+    headers["content-security-policy"] = await policyFor(surface, html, {
+      connect: [
+        import.meta.env["VITE_BACKEND_URL"],
+        import.meta.env["VITE_API_URL"],
+        import.meta.env["VITE_RPC_URL"],
+        import.meta.env["VITE_EXPLORER_URL"],
+      ].filter(Boolean),
+    });
+
   return new Response(html, {
     status: found ? 200 : 404,
-    headers: { "content-type": "text/html; charset=utf-8" },
+    headers,
   });
 }
