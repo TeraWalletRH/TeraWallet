@@ -127,6 +127,8 @@ export type LocalData = {
   rpcRotation?: boolean;
   /** Reduce motion: true or false once chosen in Settings; unset follows the device. */
   reduceMotion?: boolean;
+  /** Larger text: "default", "large" or "larger" (core/text-size.js). */
+  textSize?: string;
   /**
    * Tokens the owner added by contract address — the app checks a balance
    * for these on every refresh alongside the built-in and registry-known

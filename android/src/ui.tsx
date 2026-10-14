@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import {
   Animated,
   Easing,
+  Platform,
   Pressable,
   StyleSheet,
   Text as NativeText,
@@ -16,6 +17,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import { Icon } from "./icons";
 import { spinnerTurn, useReducedMotion } from "./motion";
+import { textSize } from "./core";
 // Tokens sampled from the wordmark itself (public/logo.png): the olive-green
 // and cream fold, the gold-to-copper fold, and the forest-green-to-warm-brown
 // ambient gradient behind it. Old names are kept so every screen picks the
@@ -116,18 +118,39 @@ const familyFor = (weight: TextStyle["fontWeight"]) => {
   if (w >= 500) return "PlusJakartaSans-Medium";
   return "PlusJakartaSans-Regular";
 };
+// Larger text (core/text-size.js): every Text and TextInput is scaled here.
+// App.tsx sets it from Settings and re-renders, which redraws every Text.
+let textScale = 1;
+export function setTextScale(scale: number) {
+  textScale = scale;
+}
+export const getTextScale = () => textScale;
 function withFont(style: StyleProp<TextStyle>): StyleProp<TextStyle> {
-  if (!fontsReady) return style;
+  if (!fontsReady && textScale === 1) return style;
   const flat = StyleSheet.flatten(style) || {};
+  const sized = textSize.scaleStyle(flat, textScale);
+  const scaled = sized ? [style, sized] : style;
   // Monospace stays monospace: addresses and hashes are read character by character.
-  if (flat.fontFamily) return style;
-  return [style, { fontFamily: familyFor(flat.fontWeight), fontWeight: "normal" }];
+  if (!fontsReady || flat.fontFamily) return scaled;
+  return [scaled, { fontFamily: familyFor(flat.fontWeight), fontWeight: "normal" }];
 }
 export function Text(props: TextProps) {
-  return <NativeText {...props} style={withFont(props.style)} />;
+  return (
+    <NativeText
+      maxFontSizeMultiplier={textSize.systemAllowance(textScale)}
+      {...props}
+      style={withFont(props.style)}
+    />
+  );
 }
 export function TextInput(props: TextInputProps) {
-  return <NativeTextInput {...props} style={withFont(props.style)} />;
+  return (
+    <NativeTextInput
+      maxFontSizeMultiplier={textSize.systemAllowance(textScale)}
+      {...props}
+      style={withFont(props.style)}
+    />
+  );
 }
 
 // One icon component for every call site: Lucide icons rendered as SVG
@@ -170,7 +193,9 @@ function buildStyles() {
     },
     text: { color: colors.ink, fontSize: 15, lineHeight: 22 },
     small: { color: colors.muted, fontSize: 13, lineHeight: 19 },
-    mono: { fontFamily: "monospace", color: colors.ink, fontSize: 13, lineHeight: 21 },
+    // Addresses and hashes have no spaces: on the web they may break at any
+    // character instead of running off a narrow screen (native already does).
+    mono: { fontFamily: "monospace", color: colors.ink, fontSize: 13, lineHeight: 21, ...(Platform.OS === "web" ? ({ wordBreak: "break-all" } as object) : null) },
     label: { color: colors.ink, fontSize: 14, fontWeight: "600" },
     row: {
       flexDirection: "row",

@@ -52,6 +52,8 @@ export * as palette from "../../public/tera/core/palette.js";
 export * as keyboardShortcuts from "../../public/tera/core/keyboard-shortcuts.js";
 // Reduce motion: the device setting, or the owner's choice in Settings.
 export * as motion from "../../public/tera/core/motion.js";
+// Larger text: Default, Large or Larger.
+export * as textSize from "../../public/tera/core/text-size.js";
 
 // What holdings are worth. Shared because the honest part of a valuation is arithmetic,
 // not presentation: an unpriced holding must be left out of the total and named, on both

@@ -80,6 +80,7 @@ import {
   palette as paletteCore,
   keyboardShortcuts as keysCore,
   motion as motionCore,
+  textSize as textSizeCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -112,6 +113,7 @@ import {
   Skeleton,
   TeraSpinner,
   setFontsReady,
+  setTextScale,
   Steps,
   styles as s,
   Text,
@@ -761,6 +763,8 @@ function Wallet() {
     setColorTheme(effectiveTheme);
   }, [effectiveTheme]);
   const [data, setData] = useState(vault.emptyData());
+  // Larger text: set before any child renders, so every Text draws at it.
+  setTextScale(textSizeCore.scaleFor(data.textSize));
   // Which wallet this session opens: the personal one, or Tera Business — a
   // separate wallet with its own secret and PIN, web only for now (on the
   // phone biz.mode() is always "personal"). `bizSplash` is the door screen
@@ -11898,6 +11902,18 @@ function Wallet() {
               }
               right={<Toggle on={reduceMotion} />}
             />
+            <ListRow
+              icon="type"
+              label={t("Text size", "文字大小")}
+              detail={
+                {
+                  default: t("Default", "默认"),
+                  large: t("Large", "大"),
+                  larger: t("Larger", "更大"),
+                }[textSizeCore.current(data.textSize) as "default" | "large" | "larger"]
+              }
+              onPress={() => void run(() => store({ ...dataRef.current, textSize: textSizeCore.next(dataRef.current.textSize) }))}
+            />
             {/*
               The app is dark-mode only for now — toggleTheme/setColorTheme
               still work underneath, so this just needs uncommenting (and a
@@ -13881,17 +13897,19 @@ function Wallet() {
       )}
       {owner && !wide && page === "home" && (
         <View style={s.header}>
+          {/* The name gives way first on a narrow screen or at a larger text
+              size, so the controls on the right never slide off the edge. */}
           <Pressable
             onPress={() => setPage("home")}
-            style={{ flexDirection: "row", alignItems: "center", gap: 9 }}
+            style={{ flexDirection: "row", alignItems: "center", gap: 9, flexShrink: 1 }}
           >
             <Image
               source={require("./assets/logo-mark.png")}
               style={{ width: 28, height: 28 }}
               resizeMode="contain"
             />
-            <View>
-              <Text style={{ color: colors.ink, fontWeight: "800", fontSize: 14 }}>
+            <View style={{ flexShrink: 1 }}>
+              <Text numberOfLines={1} style={{ color: colors.ink, fontWeight: "800", fontSize: 14 }}>
                 {brand}
               </Text>
             </View>
