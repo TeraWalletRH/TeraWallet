@@ -48,6 +48,7 @@ import { fetchChainHistory, fetchTokenBalances, fetchTransferLegs, type ChainHis
 import { KNOWN_SPENDERS, scanApprovals, type Grant } from "./src/approvals";
 import { captureNote, SecretCover, useBlockScreenCapture } from "./src/secretGuard";
 import { AwayCover } from "./src/awayCover";
+import { deviceReduced, modalAnimation, setMotionChoice, useReducedMotion } from "./src/motion";
 import { policyFor } from "./src/policy";
 import { proposalVerdicts, verifyProposal } from "./src/proposals";
 import { reviewIntelligence, type IntelligenceInput, type ReviewIntelligence } from "./src/intelligence";
@@ -78,6 +79,7 @@ import {
   disclosure as disclosureCore,
   palette as paletteCore,
   keyboardShortcuts as keysCore,
+  motion as motionCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -227,7 +229,14 @@ const logoMark = require("./assets/logo-mark.png");
 function WelcomeHero() {
   const pulse = React.useRef(new Animated.Value(0)).current;
   const spin = React.useRef(new Animated.Value(0)).current;
+  // Reduced motion: the mark holds still.
+  const reduce = useReducedMotion();
   React.useEffect(() => {
+    if (reduce) {
+      pulse.setValue(0);
+      spin.setValue(0);
+      return;
+    }
     const pulseLoop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, {
@@ -260,7 +269,7 @@ function WelcomeHero() {
       pulseLoop.stop();
       spinLoop.stop();
     };
-  }, [pulse, spin]);
+  }, [pulse, spin, reduce]);
   const scale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.12] });
   const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ["0deg", "360deg"] });
   return (
@@ -330,7 +339,12 @@ function WelcomeHero() {
  */
 function Illustration() {
   const bob = React.useRef(new Animated.Value(0)).current;
+  const reduce = useReducedMotion();
   React.useEffect(() => {
+    if (reduce) {
+      bob.setValue(0);
+      return;
+    }
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(bob, {
@@ -349,7 +363,7 @@ function Illustration() {
     );
     loop.start();
     return () => loop.stop();
-  }, [bob]);
+  }, [bob, reduce]);
   return (
     <View style={{ alignItems: "center", marginTop: 12, marginBottom: 4 }}>
       <View
@@ -465,7 +479,13 @@ function VoiceBlob({
   const [d, setD] = React.useState(() =>
     wobblePath(size / 2, size / 2, size / 2 - amp, amp, freq, 0),
   );
+  // Reduced motion: one still shape instead of a morphing one.
+  const reduce = useReducedMotion();
   React.useEffect(() => {
+    if (reduce) {
+      setD(wobblePath(size / 2, size / 2, size / 2 - amp, amp, freq, 0));
+      return;
+    }
     const id = phase.addListener(({ value }) => {
       setD(wobblePath(size / 2, size / 2, size / 2 - amp, amp, freq, value * Math.PI * 2));
     });
@@ -482,7 +502,7 @@ function VoiceBlob({
       loop.stop();
       phase.removeListener(id);
     };
-  }, [phase, duration, size, amp, freq]);
+  }, [phase, duration, size, amp, freq, reduce]);
   return (
     <Svg width={size} height={size} style={{ position: "absolute" }}>
       <Defs>
@@ -654,6 +674,8 @@ function Wallet() {
   // Phones, and every native build, keep the mobile layout exactly.
   const { width: windowWidth } = useWindowDimensions();
   const wide = Platform.OS === "web" && windowWidth >= WIDE_MIN;
+  // Dialogs appear without sliding or fading when motion is reduced.
+  const reduceMotion = useReducedMotion();
   const [language, setLanguage] = useState<"en" | "zh">("en");
   const t = (en: string, zh: string) => (language === "zh" ? zh : en);
   const [theme, setTheme] = useState<"light" | "dark">("dark");
@@ -1057,6 +1079,8 @@ function Wallet() {
   }, [owner]);
   // Reads rotate across public nodes unless the owner turned it off.
   useEffect(() => setRotation(data.rpcRotation !== false), [data.rpcRotation]);
+  // Reduce motion: the owner's choice, or the device's when there is none.
+  useEffect(() => setMotionChoice(data.reduceMotion), [data.reduceMotion]);
   // Cmd+K / Ctrl+K opens the command palette on the web, and S, R, /, ?
   // and Esc do what core/keyboard-shortcuts.js says. Not over a review, a
   // PIN prompt or a shown secret, where jumping elsewhere would abandon it.
@@ -11114,7 +11138,7 @@ function Wallet() {
               </View>
             );
           })}
-          <Modal visible={csvModalOpen} transparent animationType="fade" onRequestClose={() => setCsvModalOpen(false)}>
+          <Modal visible={csvModalOpen} transparent animationType={modalAnimation("fade", reduceMotion)} onRequestClose={() => setCsvModalOpen(false)}>
             <View style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "center", alignItems: "center", padding: 20 }}>
               <View style={[s.panel, { width: "100%", maxWidth: 380, borderRadius: 24, padding: 22, gap: 16, backgroundColor: colors.sheet, borderWidth: 1, borderColor: colors.line }]}>
                 <View style={{ gap: 4 }}>
@@ -11858,6 +11882,22 @@ function Wallet() {
                 onPress={startTour}
               />
             ) : null}
+            <ListRow
+              icon="pause"
+              label={t("Reduce motion", "减少动态效果")}
+              detail={
+                {
+                  on: t("On", "已开启"),
+                  off: t("Off", "已关闭"),
+                  "device-on": t("On · following your device", "已开启 · 跟随设备"),
+                  "device-off": t("Off · following your device", "已关闭 · 跟随设备"),
+                }[motionCore.describe(deviceReduced(), data.reduceMotion) as "on" | "off" | "device-on" | "device-off"]
+              }
+              onPress={() =>
+                void run(() => store({ ...dataRef.current, reduceMotion: motionCore.toggled(deviceReduced(), dataRef.current.reduceMotion) }))
+              }
+              right={<Toggle on={reduceMotion} />}
+            />
             {/*
               The app is dark-mode only for now — toggleTheme/setColorTheme
               still work underneath, so this just needs uncommenting (and a
@@ -14188,7 +14228,7 @@ function Wallet() {
             const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
             const kindLabel = { action: t("Action", "操作"), contact: t("Contact", "联系人"), token: t("Token", "代币") };
             return (
-              <Modal transparent visible animationType="fade" onRequestClose={close}>
+              <Modal transparent visible animationType={modalAnimation("fade", reduceMotion)} onRequestClose={close}>
                 <Pressable
                   accessibilityLabel={t("Close", "关闭")}
                   onPress={close}
@@ -14295,7 +14335,7 @@ function Wallet() {
               close: t("Close a dialog or go back", "关闭对话框或返回"),
             };
             return (
-              <Modal transparent visible animationType="fade" onRequestClose={close}>
+              <Modal transparent visible animationType={modalAnimation("fade", reduceMotion)} onRequestClose={close}>
                 <Pressable
                   accessibilityLabel={t("Close", "关闭")}
                   onPress={close}
@@ -14539,7 +14579,7 @@ function Wallet() {
       <Modal
         visible={renamingIndex !== null && !!owner}
         transparent
-        animationType="slide"
+        animationType={modalAnimation("slide", reduceMotion)}
         onRequestClose={() => setRenamingIndex(null)}
       >
         <KeyboardAvoidingView
@@ -14610,7 +14650,7 @@ function Wallet() {
       <Modal
         visible={accountsInfo}
         transparent
-        animationType="slide"
+        animationType={modalAnimation("slide", reduceMotion)}
         onRequestClose={() => setAccountsInfo(false)}
       >
         <Pressable
@@ -14700,7 +14740,7 @@ function Wallet() {
       <Modal
         visible={contactsInfo}
         transparent
-        animationType="slide"
+        animationType={modalAnimation("slide", reduceMotion)}
         onRequestClose={() => setContactsInfo(false)}
       >
         <Pressable
@@ -14728,7 +14768,7 @@ function Wallet() {
       </Modal>
       <Modal
         visible={swapPayPicker && !!owner}
-        animationType="slide"
+        animationType={modalAnimation("slide", reduceMotion)}
         onRequestClose={() => setSwapPayPicker(false)}
       >
         <SafeAreaProvider>
@@ -14772,7 +14812,7 @@ function Wallet() {
       </Modal>
       <Modal
         visible={swapReceivePicker && !!owner}
-        animationType="slide"
+        animationType={modalAnimation("slide", reduceMotion)}
         onRequestClose={() => setSwapReceivePicker(false)}
       >
         <SafeAreaProvider>
@@ -14813,7 +14853,7 @@ function Wallet() {
       </Modal>
       <Modal
         visible={voiceMode && !!owner}
-        animationType="fade"
+        animationType={modalAnimation("fade", reduceMotion)}
         transparent
         onDismiss={() => {
           if (pendingVoiceNotice.current) {
@@ -14863,7 +14903,7 @@ function Wallet() {
       </Modal>
       <Modal
         visible={!!minimisePlan && !!owner}
-        animationType="slide"
+        animationType={modalAnimation("slide", reduceMotion)}
         onRequestClose={() => !busy && setMinimisePlan(null)}
       >
         <SafeAreaProvider>
@@ -14933,7 +14973,7 @@ function Wallet() {
       <Modal
         visible={!!review && !!owner}
         transparent
-        animationType="slide"
+        animationType={modalAnimation("slide", reduceMotion)}
         onRequestClose={() => !busy && !signing && setReview(null)}
       >
         <View style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "flex-end" }}>
@@ -15376,7 +15416,7 @@ function Wallet() {
       <Modal
         visible={!!notice}
         transparent
-        animationType="slide"
+        animationType={modalAnimation("slide", reduceMotion)}
         onRequestClose={() => setNotice(null)}
       >
         <Pressable
@@ -15426,7 +15466,7 @@ function Wallet() {
       <Modal
         visible={!!contactSheet && !!owner}
         transparent
-        animationType="slide"
+        animationType={modalAnimation("slide", reduceMotion)}
         onRequestClose={() => setContactSheet(null)}
       >
         <KeyboardAvoidingView
@@ -15509,7 +15549,7 @@ function Wallet() {
       <Modal
         visible={!!auth && !!owner && !review}
         transparent
-        animationType="fade"
+        animationType={modalAnimation("fade", reduceMotion)}
         onRequestClose={() => !busy && setAuth(null)}
       >
         <View
@@ -15588,7 +15628,7 @@ function Wallet() {
       <Modal
         visible={biometricSheet && !!owner}
         transparent
-        animationType="fade"
+        animationType={modalAnimation("fade", reduceMotion)}
         onRequestClose={() => !busy && setBiometricSheet(false)}
       >
         <View
@@ -15650,7 +15690,7 @@ function Wallet() {
       <Modal
         visible={biometricSheet && !!owner}
         transparent
-        animationType="fade"
+        animationType={modalAnimation("fade", reduceMotion)}
         onRequestClose={() => !busy && setBiometricSheet(false)}
       >
         <View

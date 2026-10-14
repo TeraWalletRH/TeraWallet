@@ -69,6 +69,7 @@ export {
   loadEmailConfig,
   resolveEmail,
 } from "./business/email";
+import { duration, useReducedMotion } from "./motion";
 
 export type Mode = store.VaultKind;
 export const available = true;
@@ -106,20 +107,21 @@ const logoMark = require("../assets/logo-mark.png");
 /** The door into Tera Business: the mark, the name under it, then the wallet. */
 export function Splash({ onDone }: { onDone: () => void }) {
   const shown = useRef(new Animated.Value(0)).current;
+  const reduce = useReducedMotion();
   const done = useRef(onDone);
   done.current = onDone;
   useEffect(() => {
     const run = Animated.sequence([
       Animated.timing(shown, {
         toValue: 1,
-        duration: 520,
+        duration: duration(520, reduce),
         easing: Easing.bezier(0.16, 1, 0.3, 1),
         useNativeDriver: true,
       }),
       Animated.delay(1100),
       Animated.timing(shown, {
         toValue: 2,
-        duration: 360,
+        duration: duration(360, reduce),
         easing: Easing.bezier(0.4, 0, 0.7, 0.2),
         useNativeDriver: true,
       }),

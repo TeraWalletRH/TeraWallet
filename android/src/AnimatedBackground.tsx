@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { Animated, Easing, StyleSheet } from "react-native";
 import { colors } from "./ui";
+import { useReducedMotion } from "./motion";
 
 /**
  * Three soft color glows sampled from the wordmark's own gradient (olive,
@@ -19,8 +20,14 @@ export function AnimatedBackground() {
   const a = useRef(new Animated.Value(0)).current;
   const b = useRef(new Animated.Value(0)).current;
   const c = useRef(new Animated.Value(0)).current;
+  // Reduced motion: the glows stay where they start.
+  const reduce = useReducedMotion();
 
   useEffect(() => {
+    if (reduce) {
+      [a, b, c].forEach((value) => value.setValue(0));
+      return;
+    }
     const drift = (value: Animated.Value, duration: number, delay = 0) =>
       Animated.loop(
         Animated.sequence([
@@ -44,7 +51,7 @@ export function AnimatedBackground() {
     const animations = [drift(a, 17000), drift(b, 22000, 1500), drift(c, 27000, 3500)];
     animations.forEach((animation) => animation.start());
     return () => animations.forEach((animation) => animation.stop());
-  }, [a, b, c]);
+  }, [a, b, c, reduce]);
 
   const path = (value: Animated.Value, dx: number, dy: number) => ({
     transform: [

@@ -125,6 +125,8 @@ export type LocalData = {
    * one (core/rpc-rotation.js). Absent means on.
    */
   rpcRotation?: boolean;
+  /** Reduce motion: true or false once chosen in Settings; unset follows the device. */
+  reduceMotion?: boolean;
   /**
    * Tokens the owner added by contract address — the app checks a balance
    * for these on every refresh alongside the built-in and registry-known

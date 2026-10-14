@@ -11,6 +11,7 @@ import {
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, Icon, styles as s, Text } from "./ui";
+import { duration, useReducedMotion } from "./motion";
 
 export type SheetAction = {
   key: string;
@@ -56,6 +57,8 @@ export function ActionSheet({
   const wide = Platform.OS === "web" && useWindowDimensions().width >= 1024;
   // Stays mounted through the closing animation, then unmounts.
   const [mounted, setMounted] = useState(visible);
+  // Reduced motion: the sheet is simply there, and simply gone.
+  const reduce = useReducedMotion();
   const [height, setHeight] = useState(420);
   const shown = useRef(new Animated.Value(0)).current; // 0 hidden → 1 open
   const drag = useRef(new Animated.Value(0)).current;
@@ -74,17 +77,17 @@ export function ActionSheet({
       Animated.parallel([
         Animated.timing(shown, {
           toValue: 1,
-          duration: OPEN_MS,
+          duration: duration(OPEN_MS, reduce),
           easing: settle,
           useNativeDriver: true,
         }),
         Animated.stagger(
-          35,
+          reduce ? 0 : 35,
           tiles.map((tile) =>
             Animated.timing(tile, {
               toValue: 1,
-              duration: 420,
-              delay: 140,
+              duration: duration(420, reduce),
+              delay: duration(140, reduce),
               easing: settle,
               useNativeDriver: true,
             }),
@@ -94,7 +97,7 @@ export function ActionSheet({
     } else if (mounted) {
       Animated.timing(shown, {
         toValue: 0,
-        duration: CLOSE_MS,
+        duration: duration(CLOSE_MS, reduce),
         easing: leave,
         useNativeDriver: true,
       }).start(({ finished }) => {

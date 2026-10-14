@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { Icon } from "./icons";
+import { spinnerTurn, useReducedMotion } from "./motion";
 // Tokens sampled from the wordmark itself (public/logo.png): the olive-green
 // and cream fold, the gold-to-copper fold, and the forest-green-to-warm-brown
 // ambient gradient behind it. Old names are kept so every screen picks the
@@ -252,18 +253,20 @@ const logoMark = require("../assets/logo-mark.png");
  */
 export function TeraSpinner({ size = 20 }: { size?: number }) {
   const spin = React.useRef(new Animated.Value(0)).current;
+  // Reduced motion slows it down; a spinner that stops reads as a hang.
+  const reduce = useReducedMotion();
   React.useEffect(() => {
     const loop = Animated.loop(
       Animated.timing(spin, {
         toValue: 1,
-        duration: 1100,
+        duration: spinnerTurn(1100, reduce),
         easing: Easing.linear,
         useNativeDriver: true,
       }),
     );
     loop.start();
     return () => loop.stop();
-  }, [spin]);
+  }, [spin, reduce]);
   return (
     <Animated.Image
       source={logoMark}
@@ -295,7 +298,13 @@ export function Skeleton({
   style?: StyleProp<ViewStyle>;
 }) {
   const pulse = React.useRef(new Animated.Value(0)).current;
+  const reduce = useReducedMotion();
   React.useEffect(() => {
+    // Reduced motion: a still block, halfway between the pulse's ends.
+    if (reduce) {
+      pulse.setValue(0.5);
+      return;
+    }
     const loop = Animated.loop(
       Animated.sequence([
         Animated.timing(pulse, {
@@ -314,7 +323,7 @@ export function Skeleton({
     );
     loop.start();
     return () => loop.stop();
-  }, [pulse]);
+  }, [pulse, reduce]);
   return (
     <Animated.View
       style={[
