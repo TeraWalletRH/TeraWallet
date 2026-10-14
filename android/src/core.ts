@@ -46,6 +46,8 @@ export * as checkup from "../../public/tera/core/checkup.js";
 export * as signatureLog from "../../public/tera/core/signature-log.js";
 // Exactly what each assistant message sent.
 export * as disclosure from "../../public/tera/core/disclosure.js";
+// The Cmd+K command palette: ranking entries for a query.
+export * as palette from "../../public/tera/core/palette.js";
 
 // What holdings are worth. Shared because the honest part of a valuation is arithmetic,
 // not presentation: an unpriced holding must be left out of the total and named, on both

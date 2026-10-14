@@ -76,6 +76,7 @@ import {
   checkup as checkupCore,
   signatureLog as signatureLogCore,
   disclosure as disclosureCore,
+  palette as paletteCore,
 } from "./src/core";
 import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
@@ -666,6 +667,10 @@ function Wallet() {
     [owner, setOwner] = useState<Address | "">("");
   const [page, setPage] = useState("home"),
     [sheetOpen, setSheetOpen] = useState(false),
+    // The command palette (core/palette.js): Cmd+K / Ctrl+K on the web.
+    [paletteOpen, setPaletteOpen] = useState(false),
+    [paletteQuery, setPaletteQuery] = useState(""),
+    [paletteIndex, setPaletteIndex] = useState(0),
     [swapReceivePicker, setSwapReceivePicker] = useState(false),
     [swapPayPicker, setSwapPayPicker] = useState(false),
     [voiceMode, setVoiceMode] = useState(false),
@@ -1048,6 +1053,23 @@ function Wallet() {
   }, [owner]);
   // Reads rotate across public nodes unless the owner turned it off.
   useEffect(() => setRotation(data.rpcRotation !== false), [data.rpcRotation]);
+  // Cmd+K / Ctrl+K opens the command palette on the web. Not over a review,
+  // a PIN prompt or a shown secret, where jumping elsewhere would abandon it.
+  const paletteBlocked = useRef(false);
+  paletteBlocked.current = !!review || !!auth || !!revealed || !!revealedKey || busy || business;
+  useEffect(() => {
+    if (Platform.OS !== "web" || !owner || typeof window === "undefined") return;
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "k") return;
+      event.preventDefault();
+      if (paletteBlocked.current) return;
+      setPaletteQuery("");
+      setPaletteIndex(0);
+      setPaletteOpen((open) => !open);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [owner]);
   // When the recovery phrase was last checked. Read on every unlock, which is
   // also what resets the quiz's tries.
   useEffect(() => {
@@ -2177,6 +2199,57 @@ function Wallet() {
     });
     const value = checkupCore.score(list);
     return { list, value, grade: checkupCore.grade(value) };
+  }
+  /** Everything the command palette can do: actions, contacts, then tokens. */
+  function paletteEntries() {
+    type Entry = { id: string; kind: "action" | "contact" | "token"; label: string; detail?: string; keywords?: string[]; icon: string; go: () => void };
+    const settings = (section: typeof settingsSection) => () => {
+      setSettingsSection(section);
+      setPage("settings");
+    };
+    const actions: Entry[] = [
+      { id: "send", kind: "action", icon: "arrow-top-right", label: t("Send", "发送"), keywords: ["pay", "transfer", "付款", "转账"], go: () => openFlow("send") },
+      { id: "receive", kind: "action", icon: "arrow-down", label: t("Receive", "收款"), keywords: ["deposit", "address", "qr", "地址"], go: () => openFlow("receive") },
+      { id: "swap", kind: "action", icon: "swap-horizontal", label: t("Swap", "兑换"), keywords: ["trade", "exchange", "buy", "sell", "交易"], go: () => openFlow("swap") },
+      { id: "bridge", kind: "action", icon: "bridge", label: t("Bridge", "跨链"), keywords: ["base", "ethereum", "move"], go: () => openFlow("bridge") },
+      { id: "private", kind: "action", icon: "shield-lock-outline", label: t("Private send", "私密发送"), keywords: ["privacy", "shield"], go: () => openFlow("send", "private") },
+      { id: "activity", kind: "action", icon: "history", label: t("Activity", "记录"), keywords: ["history", "transactions", "交易记录"], go: () => setPage("activity") },
+      { id: "assistant", kind: "action", icon: "message-text-outline", label: t("Assistant", "助手"), keywords: ["ai", "chat", "ask"], go: () => setPage("assistant") },
+      { id: "contacts", kind: "action", icon: "users", label: t("Contacts", "联系人"), keywords: ["address book", "people"], go: settings("contacts") },
+      { id: "scheduled", kind: "action", icon: "calendar-clock", label: t("Scheduled payments", "定期付款"), keywords: ["recurring", "subscription"], go: () => setPage("scheduled") },
+      { id: "pnl", kind: "action", icon: "chart-line", label: t("Profit & loss", "盈亏"), keywords: ["pnl", "returns", "performance"], go: () => setPage("pnl") },
+      { id: "checkup", kind: "action", icon: "shield-check", label: t("Security checkup", "安全检查"), keywords: ["score", "security", "safety"], go: () => { setPage("settings"); openCheckup(); } },
+      { id: "siglog", kind: "action", icon: "history", label: t("Signature log", "签名记录"), keywords: ["signed messages"], go: () => { setPage("settings"); openSignatureLog(); } },
+      { id: "settings", kind: "action", icon: "cog-outline", label: t("Settings", "设置"), keywords: ["preferences", "options"], go: settings("root") },
+      { id: "lock", kind: "action", icon: "lock-outline", label: t("Lock now", "立即锁定"), keywords: ["sign out", "log out"], go: forget },
+    ];
+    const contacts: Entry[] = contactsCore.cleanBook(data.contacts).map((c: any) => ({
+      id: `contact:${c.address}`,
+      kind: "contact",
+      icon: "account-outline",
+      label: c.name,
+      detail: `${c.address.slice(0, 6)}…${c.address.slice(-4)}`,
+      keywords: [c.address],
+      go: () => {
+        openFlow("send");
+        setRecipient(c.address);
+      },
+    }));
+    const seen = new Set<string>();
+    const tokens: Entry[] = [
+      ...allHeld.map((row: any) => ({ symbol: row.asset.symbol as string, name: (row.asset.name || "") as string })),
+      ...popularTokens,
+    ]
+      .filter((token) => token.symbol && !seen.has(token.symbol) && !!seen.add(token.symbol))
+      .map((token) => ({
+        id: `token:${token.symbol}`,
+        kind: "token",
+        icon: "chart-line",
+        label: token.symbol,
+        detail: token.name,
+        go: () => openTokenDetail(token.symbol),
+      }));
+    return [...actions, ...contacts, ...tokens];
   }
   function openSignatureLog() {
     setSigLog(null);
@@ -13877,6 +13950,7 @@ function Wallet() {
                   ["cog-outline", "Settings", "设置", "settings"],
                 ] as ReadonlyArray<readonly [string, string, string, string]>)
               : ([
+                  ["search", "Search ⌘K", "搜索 ⌘K", "palette"],
                   ["wallet-outline", "Wallet", "钱包", "home"],
                   ["history", "Activity", "记录", "activity"],
                   ["lightning-bolt-outline", "Actions", "操作", "actions"],
@@ -13884,7 +13958,7 @@ function Wallet() {
                   ["cog-outline", "Settings", "设置", "settings"],
                 ] as ReadonlyArray<readonly [string, string, string, string]>)
             ).map(([icon, en, zh, p]) => {
-              const active = p === "actions" ? sheetOpen : page === p;
+              const active = p === "actions" ? sheetOpen : p === "palette" ? paletteOpen : page === p;
               return (
                 <Pressable
                   key={p}
@@ -13893,6 +13967,11 @@ function Wallet() {
                   disabled={busy}
                   onPress={() => {
                     if (p === "actions") return setSheetOpen(true);
+                    if (p === "palette") {
+                      setPaletteQuery("");
+                      setPaletteIndex(0);
+                      return setPaletteOpen(true);
+                    }
                     setError("");
                     if (p === "settings") setSettingsSection("root");
                     setPage(p);
@@ -14049,6 +14128,131 @@ function Wallet() {
             />
           );
         })()}
+      {paletteOpen && owner
+        ? (() => {
+            const entries = paletteEntries();
+            const address = paletteCore.pastedAddress(paletteQuery);
+            const named = address ? contactsCore.nameFor(contactsCore.cleanBook(data.contacts), address) : "";
+            const results = [
+              ...(address
+                ? [{
+                    id: "paste",
+                    kind: "action" as const,
+                    icon: "arrow-top-right",
+                    label: named ? t(`Send to ${named}`, `发送给 ${named}`) : t("Send to this address", "发送到此地址"),
+                    detail: `${address.slice(0, 6)}…${address.slice(-4)}`,
+                    go: () => {
+                      openFlow("send");
+                      setRecipient(address);
+                    },
+                  }]
+                : []),
+              ...(paletteCore.rank(entries, paletteQuery, 8) as typeof entries),
+            ];
+            const highlighted = Math.min(paletteIndex, Math.max(0, results.length - 1));
+            const close = () => setPaletteOpen(false);
+            const choose = (entry?: { go: () => void }) => {
+              if (!entry) return;
+              close();
+              setError("");
+              entry.go();
+            };
+            const mac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+            const kindLabel = { action: t("Action", "操作"), contact: t("Contact", "联系人"), token: t("Token", "代币") };
+            return (
+              <Modal transparent visible animationType="fade" onRequestClose={close}>
+                <Pressable
+                  accessibilityLabel={t("Close", "关闭")}
+                  onPress={close}
+                  style={{ flex: 1, backgroundColor: "#00000099", alignItems: "center", paddingTop: "12%", paddingHorizontal: 16 }}
+                >
+                  <Pressable
+                    onPress={() => {}}
+                    accessibilityRole="none"
+                    style={{
+                      width: "100%",
+                      maxWidth: 560,
+                      borderRadius: 20,
+                      borderWidth: 1,
+                      borderColor: colors.line,
+                      backgroundColor: colors.paper,
+                      overflow: "hidden",
+                      shadowColor: "#000000",
+                      shadowOpacity: 0.45,
+                      shadowRadius: 32,
+                      shadowOffset: { width: 0, height: 16 },
+                    }}
+                  >
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 10, paddingHorizontal: 18, borderBottomWidth: 1, borderColor: colors.line }}>
+                      <Icon name="search" size={18} color={colors.muted} />
+                      <TextInput
+                        autoFocus
+                        value={paletteQuery}
+                        onChangeText={(text) => {
+                          setPaletteQuery(text);
+                          setPaletteIndex(0);
+                        }}
+                        placeholder={t("Send, receive, swap, a contact or a token…", "发送、收款、兑换、联系人或代币…")}
+                        placeholderTextColor={colors.faint}
+                        autoCorrect={false}
+                        autoCapitalize="none"
+                        accessibilityLabel={t("Command palette", "命令面板")}
+                        onKeyPress={(e: any) => {
+                          const key = e.nativeEvent?.key;
+                          if (key === "ArrowDown" || key === "ArrowUp") {
+                            e.preventDefault?.();
+                            setPaletteIndex(paletteCore.move(highlighted, results.length, key === "ArrowDown" ? 1 : -1));
+                          } else if (key === "Escape") close();
+                        }}
+                        onSubmitEditing={() => choose(results[highlighted])}
+                        style={[s.text, { flex: 1, paddingVertical: 16, fontSize: 16, color: colors.ink, outlineStyle: "none" } as any]}
+                      />
+                      <Text style={[s.small, { color: colors.faint }]}>esc</Text>
+                    </View>
+                    <View style={{ paddingVertical: 6, maxHeight: 420 }}>
+                      {results.length ? (
+                        results.map((entry, i) => (
+                          <Pressable
+                            key={entry.id}
+                            accessibilityRole="button"
+                            onPress={() => choose(entry)}
+                            onHoverIn={() => setPaletteIndex(i)}
+                            style={{
+                              flexDirection: "row",
+                              alignItems: "center",
+                              gap: 12,
+                              marginHorizontal: 6,
+                              paddingHorizontal: 12,
+                              paddingVertical: 10,
+                              borderRadius: 12,
+                              backgroundColor: i === highlighted ? colors.wash : "transparent",
+                            }}
+                          >
+                            <Icon name={entry.icon} size={18} color={i === highlighted ? colors.green : colors.muted} />
+                            <Text style={[s.text, { flex: 1, fontWeight: i === highlighted ? "700" : "500" }]} numberOfLines={1}>
+                              {entry.label}
+                              {entry.detail ? <Text style={[s.small, { color: colors.muted }]}>{`  ${entry.detail}`}</Text> : null}
+                            </Text>
+                            <Text style={[s.small, { color: colors.faint }]}>{kindLabel[entry.kind]}</Text>
+                          </Pressable>
+                        ))
+                      ) : (
+                        <Text style={[s.small, { textAlign: "center", paddingVertical: 18 }]}>
+                          {t("Nothing matches.", "没有匹配项。")}
+                        </Text>
+                      )}
+                    </View>
+                    <View style={{ flexDirection: "row", gap: 16, paddingHorizontal: 18, paddingVertical: 10, borderTopWidth: 1, borderColor: colors.line }}>
+                      <Text style={[s.small, { color: colors.faint }]}>{t("↑↓ to move", "↑↓ 移动")}</Text>
+                      <Text style={[s.small, { color: colors.faint }]}>{t("↵ to open", "↵ 打开")}</Text>
+                      <Text style={[s.small, { color: colors.faint, marginLeft: "auto" }]}>{mac ? "⌘K" : "Ctrl K"}</Text>
+                    </View>
+                  </Pressable>
+                </Pressable>
+              </Modal>
+            );
+          })()
+        : null}
       <ActionSheet
         visible={sheetOpen && !!owner}
         onClose={() => setSheetOpen(false)}
