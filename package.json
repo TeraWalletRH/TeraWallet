@@ -20,7 +20,8 @@
     "verify:receipt": "node scripts/verify-receipt.mjs",
     "build:model": "node scripts/build-model.mjs",
     "build:wordlist": "node scripts/build-wordlist.mjs",
-    "build:registry": "node scripts/build-registry.mjs"
+    "build:registry": "node scripts/build-registry.mjs",
+    "build:extension": "bun scripts/build-extension.ts"
   },
   "overrides": {
     "rolldown": "1.2.1"
@@ -86,6 +87,7 @@
   "devDependencies": {
     "@eslint/js": "^9.32.0",
     "@lovable.dev/vite-tanstack-config": "^2.20.0",
+    "@types/chrome": "^0.3.5",
     "@types/node": "^22.16.5",
     "@types/react": "^19.2.0",
     "@types/react-dom": "^19.2.0",

@@ -1,0 +1,60 @@
+name: Browser extension
+on:
+  push:
+    branches: [main]
+    paths:
+      - "extension/**"
+      - "public/tera/core/**"
+      - "android/src/crypto.ts"
+      - "android/src/kdf.web.ts"
+      - "android/src/config.ts"
+      - "scripts/build-extension.ts"
+      - ".github/workflows/extension.yml"
+  pull_request:
+    paths:
+      - "extension/**"
+      - "public/tera/core/**"
+      - "scripts/build-extension.ts"
+      - ".github/workflows/extension.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: extension-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  build:
+    if: github.repository == 'TeraWalletRH/TeraWallet'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      # The extension bundles android/src/crypto.ts, which resolves its
+      # crypto libraries from the app's own dependencies.
+      - run: bun install --frozen-lockfile
+        working-directory: android
+      - name: Rules
+        run: node --test tests/frontend/dapp-connect.test.js tests/frontend/rpc-rotation.test.js
+      - name: Types
+        run: bunx tsc --noEmit -p extension
+      - name: Build
+        run: bun run build:extension
+      - name: Package
+        run: |
+          version=$(cat dist-extension/VERSION)
+          (cd dist-extension && zip -qr "../tera-wallet-$version.extension.zip" .)
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      # Publishing to the Chrome Web Store is a manual upload for now; this
+      # zip is what gets uploaded.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tera-wallet-extension-${{ env.VERSION }}
+          path: tera-wallet-${{ env.VERSION }}.extension.zip
+          if-no-files-found: error
