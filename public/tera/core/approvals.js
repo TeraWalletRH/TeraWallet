@@ -33,6 +33,20 @@ export const LOG_SPAN = 10_000_000n;
  */
 export const UNLIMITED_FROM = 2n ** 128n;
 
+/**
+ * Spenders the wallet itself approves, by name ([English, 中文]). Anything else
+ * is shown by address. Shared so the app's approvals screen and the browser
+ * extension's signature check name the same contracts.
+ *
+ * @type {Record<string, [string, string]>}
+ */
+export const KNOWN_SPENDERS = {
+  "0xcaf681a66d020601342297493863e78c959e5cb2": ["Tera swap router", "Tera 兑换路由"],
+  "0x8876789976decbfcbbbe364623c63652db8c0904": ["Uniswap Universal Router", "Uniswap 通用路由"],
+  "0x000000000022d473030f116ddee9f6b43ac78ba3": ["Uniswap Permit2", "Uniswap Permit2"],
+  "0x4cd00e387622c35bddb9b4c962c136462338bc31": ["Relay bridge", "Relay 跨链"],
+};
+
 const APPROVE = "0x095ea7b3";
 const SET_APPROVAL_FOR_ALL = "0xa22cb465";
 const ADDRESS = /^0x[0-9a-f]{40}$/i;

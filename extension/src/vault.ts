@@ -2,7 +2,8 @@
 // key), sealed with the owner's password exactly as the web app seals it, in
 // the extension's own storage. The address is kept beside it in the clear so
 // connected sites can be answered without asking for the password each time;
-// the secret itself is only ever opened to check the password.
+// the secret itself is only opened with the password, to check it or to sign
+// one approved request, and is never kept.
 
 import { open, seal, walletFromSecret, type Box } from "../../android/src/crypto";
 import { PASSWORD_ITERATIONS, passwordKey } from "../../android/src/kdf.web";
@@ -25,13 +26,19 @@ export async function createVault(secret: string, password: string): Promise<Vau
   return { v: 1, kdf: PASSWORD_ITERATIONS, salt: hex(salt), box, address: account.address };
 }
 
-/** True when `password` opens the vault and the secret still derives its address. */
-export async function checkPassword(vault: Vault, password: string): Promise<boolean> {
+/**
+ * The secret, when `password` opens the vault and the secret still derives its
+ * address; otherwise null. Callers use it at once and keep no copy.
+ */
+export async function openSecret(vault: Vault, password: string): Promise<string | null> {
   try {
     const key = await passwordKey(password, unhex(vault.salt), vault.kdf);
     const secret = open(key, vault.box);
-    return walletFromSecret(secret).address === vault.address;
+    return walletFromSecret(secret).address === vault.address ? secret : null;
   } catch {
-    return false;
+    return null;
   }
 }
+
+/** The account that signs with `secret`. */
+export const signer = (secret: string) => walletFromSecret(secret);

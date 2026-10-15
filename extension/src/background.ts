@@ -1,11 +1,13 @@
 // The extension's background worker: the one place that decides what a site
 // gets. Sites reach it through content.ts; the popup and the approval window
-// reach it through runtime messages. The rules are in core/dapp-connect.js.
+// reach it through runtime messages. The rules are in core/dapp-connect.js
+// (connecting) and core/dapp-sign.js (signatures).
 //
 // Chrome stops this worker when idle and starts it again on the next message,
 // so nothing that matters lives only in memory: the wallet and the connected
 // sites are in storage. A connection request waiting on the owner does live
-// in memory, kept awake by the approval window, and if the worker restarts
+// in memory (as does a signature request), kept awake by the approval window,
+// and if the worker restarts
 // anyway the site gets a clear error and the window says the request expired.
 
 import {
@@ -23,12 +25,22 @@ import {
   siteOrigin,
   switchChain,
 } from "../../public/tera/core/dapp-connect.js";
+import { SIGNABLE, refusal, signRequest } from "../../public/tera/core/dapp-sign.js";
+import { KNOWN_SPENDERS } from "../../public/tera/core/approvals.js";
+import { append, entryFor } from "../../public/tera/core/signature-log.js";
 import { createRotation, isNodeFault, nodeList } from "../../public/tera/core/rpc-rotation.js";
-import { PUBLIC_RPCS, RPC } from "../../android/src/config";
-import { checkPassword, createVault, type Vault } from "./vault";
+import { PUBLIC_RPCS, RPC, USDG } from "../../android/src/config";
+import { createVault, openSecret, signer, type Vault } from "./vault";
 
 type Sites = Record<string, { accounts: string[]; connectedAt: number }>;
 type RpcErr = { code: number; message: string; data?: unknown };
+type SignRequest = Exclude<ReturnType<typeof signRequest>, { error: unknown }>;
+
+// What typed-data explanations name: the tokens and contracts Tera knows.
+const TOKENS = { [USDG.toLowerCase()]: { symbol: "USDG", decimals: 6 } };
+const SPENDERS = Object.fromEntries(
+  Object.entries(KNOWN_SPENDERS).map(([address, [en]]) => [address, en]),
+);
 
 // The wallet's storage is for this worker and the extension's own pages,
 // never for content scripts running inside websites.
@@ -134,11 +146,17 @@ async function handle(origin: string, request: { method: string; params?: unknow
       );
     case "read":
       return read(method, Array.isArray(params) ? params : []);
-    case "signing":
-      throw rpcError(
-        ERRORS.unsupported,
-        "Signing isn't in this version of the Tera extension yet. Use the Tera app to send or sign.",
-      );
+    case "signing": {
+      if (!SIGNABLE.has(method)) throw refusal(method);
+      const request = signRequest(method, params, {
+        origin,
+        accounts: accountsFor(sites, origin),
+        tokens: TOKENS,
+        spenders: SPENDERS,
+      });
+      if ("error" in request) throw request.error;
+      return askToSign(origin, request as SignRequest);
+    }
     default:
       throw rpcError(ERRORS.unsupported, `Tera Wallet doesn't support ${method}.`);
   }
@@ -147,33 +165,48 @@ async function handle(origin: string, request: { method: string; params?: unknow
 // ------------------------------------------------------------ approvals ----
 
 type Approval = {
+  kind: "connect" | "sign";
   origin: string;
-  resolve: (accounts: string[]) => void;
+  request?: SignRequest;
+  resolve: (value: unknown) => void;
   reject: (error: RpcErr) => void;
-  promise: Promise<string[]>;
+  promise: Promise<unknown>;
   windowId?: number;
 };
 const approvals = new Map<string, Approval>();
 
-function askToConnect(origin: string): Promise<string[]> {
-  // A site asking twice while the first window is open gets the same window.
-  for (const approval of approvals.values())
-    if (approval.origin === origin) return approval.promise;
+function ask(kind: Approval["kind"], origin: string, request?: SignRequest) {
   const id = crypto.randomUUID();
   let resolve!: Approval["resolve"];
   let reject!: Approval["reject"];
-  const promise = new Promise<string[]>((res, rej) => {
+  const promise = new Promise<unknown>((res, rej) => {
     resolve = res;
     reject = rej;
   });
-  const approval: Approval = { origin, resolve, reject, promise };
+  const approval: Approval = { kind, origin, request, resolve, reject, promise };
   approvals.set(id, approval);
   void openWindow(id).then((windowId) => {
     if (windowId === undefined)
-      finish(id, rpcError(ERRORS.internal, "Couldn't open the Tera window."));
+      finish(id, undefined, rpcError(ERRORS.internal, "Couldn't open the Tera window."));
     else approval.windowId = windowId;
   });
   return promise;
+}
+
+function askToConnect(origin: string) {
+  // A site asking twice while the first window is open gets the same window.
+  for (const approval of approvals.values())
+    if (approval.kind === "connect" && approval.origin === origin)
+      return approval.promise as Promise<string[]>;
+  return ask("connect", origin) as Promise<string[]>;
+}
+
+function askToSign(origin: string, request: SignRequest) {
+  // One signature at a time per site, so a page can't bury the owner in windows.
+  for (const approval of approvals.values())
+    if (approval.kind === "sign" && approval.origin === origin)
+      throw rpcError(ERRORS.pending, "A signature request from this site is already open in Tera.");
+  return ask("sign", origin, request);
 }
 
 async function openWindow(id: string) {
@@ -205,12 +238,12 @@ async function openWindow(id: string) {
   }
 }
 
-function finish(id: string, outcome: string[] | RpcErr) {
+function finish(id: string, result: unknown, error?: RpcErr) {
   const approval = approvals.get(id);
   if (!approval) return;
   approvals.delete(id);
-  if (Array.isArray(outcome)) approval.resolve(outcome);
-  else approval.reject(outcome);
+  if (error) approval.reject(error);
+  else approval.resolve(result);
   if (approval.windowId !== undefined) chrome.windows.remove(approval.windowId).catch(() => {});
 }
 
@@ -218,7 +251,7 @@ chrome.windows.onRemoved.addListener((windowId) => {
   for (const [id, approval] of approvals)
     if (approval.windowId === windowId) {
       approval.windowId = undefined;
-      finish(id, rpcError(ERRORS.rejected, "The request was declined."));
+      finish(id, undefined, rpcError(ERRORS.rejected, "The request was declined."));
     }
 });
 
@@ -226,15 +259,16 @@ chrome.windows.onRemoved.addListener((windowId) => {
 
 async function tryPassword(
   password: string,
-): Promise<{ ok: true; vault: Vault } | { ok: false; error: string }> {
+): Promise<{ ok: true; vault: Vault; secret: string } | { ok: false; error: string }> {
   const { vault, failures, failedAt } = await load();
   if (!vault) return { ok: false, error: "There's no wallet in this browser yet." };
   const wait = failedAt + passwordWait(failures) - Date.now();
   if (wait > 0)
     return { ok: false, error: `Too many wrong tries. Wait ${Math.ceil(wait / 1000)}s.` };
-  if (await checkPassword(vault, String(password ?? ""))) {
+  const secret = await openSecret(vault, String(password ?? ""));
+  if (secret) {
     await chrome.storage.local.set({ failures: 0, failedAt: 0 });
-    return { ok: true, vault };
+    return { ok: true, vault, secret };
   }
   await chrome.storage.local.set({ failures: failures + 1, failedAt: Date.now() });
   const next = passwordWait(failures + 1);
@@ -270,7 +304,12 @@ async function page(message: PageMessage) {
       return { ok: true };
     case "state": {
       const { vault, sites } = await load();
-      return { address: vault?.address ?? null, sites: listSites(sites) };
+      const { signatures } = await chrome.storage.local.get("signatures");
+      return {
+        address: vault?.address ?? null,
+        sites: listSites(sites),
+        signatures: ((signatures as { items?: unknown[] } | undefined)?.items ?? []).slice(0, 10),
+      };
     }
     case "wallet:add": {
       if ((await load()).vault)
@@ -282,7 +321,7 @@ async function page(message: PageMessage) {
     case "wallet:remove": {
       const tried = await tryPassword(String(message.password ?? ""));
       if (!tried.ok) return { error: tried.error };
-      await chrome.storage.local.remove(["vault", "sites", "failures", "failedAt"]);
+      await chrome.storage.local.remove(["vault", "sites", "failures", "failedAt", "signatures"]);
       broadcast(null, "accountsChanged", []);
       return { ok: true };
     }
@@ -296,7 +335,12 @@ async function page(message: PageMessage) {
       const approval = approvals.get(String(message.id));
       if (!approval) return { expired: true };
       const { vault } = await load();
-      return { origin: approval.origin, address: vault?.address ?? null };
+      return {
+        kind: approval.kind,
+        origin: approval.origin,
+        address: vault?.address ?? null,
+        request: approval.request,
+      };
     }
     case "approval:connect": {
       const approval = approvals.get(String(message.id));
@@ -310,12 +354,67 @@ async function page(message: PageMessage) {
       finish(String(message.id), accounts);
       return { ok: true };
     }
+    case "approval:sign": {
+      const approval = approvals.get(String(message.id));
+      if (!approval?.request) return { expired: true };
+      // The site may have been disconnected while the window was open.
+      if (!accountsFor((await load()).sites, approval.origin).length) {
+        finish(
+          String(message.id),
+          undefined,
+          rpcError(ERRORS.unauthorized, "The site was disconnected."),
+        );
+        return { expired: true };
+      }
+      const tried = await tryPassword(String(message.password ?? ""));
+      if (!tried.ok) return { error: tried.error };
+      const signature = await sign(tried.secret, approval.request);
+      await logSignature(approval.origin, approval.request, signature);
+      finish(String(message.id), signature);
+      return { ok: true };
+    }
     case "approval:reject":
-      finish(String(message.id), rpcError(ERRORS.rejected, "The request was declined."));
+      finish(String(message.id), undefined, rpcError(ERRORS.rejected, "The request was declined."));
       return { ok: true };
     default:
       return { error: "Unknown request." };
   }
+}
+
+// ------------------------------------------------------------- signing ----
+
+async function sign(secret: string, request: SignRequest): Promise<string> {
+  const account = signer(secret);
+  if (request.kind === "message")
+    return account.signMessage({ message: request.sign as string | { raw: `0x${string}` } });
+  const { domain, types, primaryType, message } = request.typed as {
+    domain: Record<string, unknown>;
+    types: Record<string, { name: string; type: string }[]>;
+    primaryType: string;
+    message: Record<string, unknown>;
+  };
+  // The site's own EIP712Domain type is used when it sends one, as the spec says.
+  return account.signTypedData({ domain, types, primaryType, message } as Parameters<
+    typeof account.signTypedData
+  >[0]);
+}
+
+// The signature log (core/signature-log.js): a record on this computer of
+// every message signed, since a signature leaves no trace on chain.
+async function logSignature(origin: string, request: SignRequest, signature: string) {
+  const { signatures } = await chrome.storage.local.get("signatures");
+  const entry = entryFor(
+    request.kind === "typed"
+      ? { kind: "typed", typed: request.typed, address: request.address, site: origin, signature }
+      : {
+          kind: "message",
+          message: request.text,
+          address: request.address,
+          site: origin,
+          signature,
+        },
+  );
+  await chrome.storage.local.set({ signatures: append(signatures, entry) });
 }
 
 // ---------------------------------------------------------------- reads ----

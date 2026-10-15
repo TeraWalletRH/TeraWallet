@@ -1,18 +1,64 @@
 // The toolbar popup: the wallet's address, the sites it's connected to (each
-// with Disconnect), and bringing a wallet in or taking it out.
+// with Disconnect), the messages it has signed, and bringing a wallet in or
+// taking it out.
 
 import { ask, errorBox, h, header, setupForm, short } from "./ui";
 
 const root = document.getElementById("root")!;
 
-type State = { address: string | null; sites: { origin: string; connectedAt: number }[] };
+type Signed = { at: number; title: string; site: string; text: string; signature: string };
+type State = {
+  address: string | null;
+  sites: { origin: string; connectedAt: number }[];
+  signatures: Signed[];
+};
+
+const host = (origin: string) => origin.replace(/^https:\/\//, "");
+const when = (at: number) =>
+  new Date(at).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+
+function signedList(signatures: Signed[]) {
+  if (!signatures.length)
+    return h(
+      "p",
+      { class: "muted small" },
+      "Nothing signed yet. Every signature you approve is listed here, on this computer only.",
+    );
+  return h(
+    "ul",
+    { class: "signed" },
+    ...signatures.map((entry) =>
+      h(
+        "li",
+        {},
+        h(
+          "details",
+          {},
+          h(
+            "summary",
+            {},
+            h("span", { class: "title" }, entry.title),
+            h("span", { class: "muted small" }, `${host(entry.site)} · ${when(entry.at)}`),
+          ),
+          h("pre", { class: "message" }, entry.text),
+          h("span", { class: "mono muted small" }, `Signature ${entry.signature}`),
+        ),
+      ),
+    ),
+  );
+}
 
 async function render() {
   const state = await ask<State>({ type: "state" });
   root.replaceChildren(header(), ...(state.address ? wallet(state) : [setupForm(render)]));
 }
 
-function wallet({ address, sites }: State) {
+function wallet({ address, sites, signatures }: State) {
   const copy = h("button", { class: "small", type: "button" }, "Copy") as HTMLButtonElement;
   copy.addEventListener("click", async () => {
     await navigator.clipboard.writeText(address!);
@@ -28,11 +74,7 @@ function wallet({ address, sites }: State) {
           h(
             "li",
             {},
-            h(
-              "span",
-              { class: "origin", title: site.origin },
-              site.origin.replace(/^https:\/\//, ""),
-            ),
+            h("span", { class: "origin", title: site.origin }, host(site.origin)),
             h(
               "button",
               {
@@ -67,10 +109,11 @@ function wallet({ address, sites }: State) {
       h("strong", {}, `Connected sites${sites.length ? ` (${sites.length})` : ""}`),
       list,
     ),
+    h("section", { class: "card" }, h("strong", {}, "Recent signatures"), signedList(signatures)),
     h(
       "p",
       { class: "note" },
-      "This version connects to sites and shares your address only. Approving transactions and signatures comes in the next update.",
+      "This version connects to sites and signs messages. Approving transactions comes in the next update.",
     ),
     removeSection(address!),
   ];

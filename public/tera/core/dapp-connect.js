@@ -18,8 +18,9 @@
 //   eth_accounts is empty. After, it gets the one address it was given.
 //   Disconnecting takes the address back immediately.
 //
-//   Signing (transactions, messages, typed data) is not in this version: it
-//   is refused with the standard "unsupported" error rather than pretended.
+//   Signing messages and typed data has its own rules (core/dapp-sign.js).
+//   Sending transactions is not in this version: it is refused with the
+//   standard "unsupported" error rather than pretended.
 //
 //   Tera is a Robinhood Chain wallet. Switching to it succeeds; switching to
 //   anything else is refused with the standard "unrecognized chain" error,
@@ -37,6 +38,7 @@ export const ERRORS = {
   unauthorized: 4100,
   unsupported: 4200,
   disconnected: 4900,
+  pending: -32002,
   unrecognizedChain: 4902,
   invalidRequest: -32600,
   invalidParams: -32602,
@@ -83,7 +85,7 @@ export const READS = new Set([
   "web3_clientVersion",
 ]);
 
-/** Methods that would sign. Refused until signing ships. */
+/** Methods that sign. core/dapp-sign.js decides which are offered. */
 export const SIGNING = new Set([
   "eth_sendTransaction",
   "eth_sign",

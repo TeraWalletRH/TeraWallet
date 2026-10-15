@@ -10,12 +10,7 @@ import { explorerLogs } from "./explorer";
  * explorer sees the wallet's address, as it already does for Activity.
  */
 /** Spenders the wallet itself approves, by name. Anything else is shown by address. */
-export const KNOWN_SPENDERS: Record<string, [string, string]> = {
-  "0xcaf681a66d020601342297493863e78c959e5cb2": ["Tera swap router", "Tera 兑换路由"],
-  "0x8876789976decbfcbbbe364623c63652db8c0904": ["Uniswap Universal Router", "Uniswap 通用路由"],
-  "0x000000000022d473030f116ddee9f6b43ac78ba3": ["Uniswap Permit2", "Uniswap Permit2"],
-  "0x4cd00e387622c35bddb9b4c962c136462338bc31": ["Relay bridge", "Relay 跨链"],
-};
+export const KNOWN_SPENDERS: Record<string, [string, string]> = rules.KNOWN_SPENDERS;
 
 export type Grant = {
   kind: "token" | "collection";
