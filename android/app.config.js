@@ -30,7 +30,7 @@ module.exports = ({ config }) => {
     android: {
       ...config.android,
       package: release ? "app.terawallet.android" : "app.terawallet.android.preview",
-      versionCode: Number(process.env.TERA_VERSION_CODE || process.env.GITHUB_RUN_NUMBER || 2),
+      versionCode: Number(process.env.TERA_VERSION_CODE || process.env.GITHUB_RUN_NUMBER || 3),
       permissions: [
         ...(config.android.permissions ?? []),
         ...(release ? [] : ["android.permission.REQUEST_INSTALL_PACKAGES"]),
@@ -49,7 +49,7 @@ module.exports = ({ config }) => {
     ios: {
       ...config.ios,
       bundleIdentifier: release ? "app.terawallet.ios" : "app.terawallet.ios.preview",
-      buildNumber: String(process.env.TERA_VERSION_CODE || process.env.GITHUB_RUN_NUMBER || 2),
+      buildNumber: String(process.env.TERA_VERSION_CODE || process.env.GITHUB_RUN_NUMBER || 3),
     },
   };
 };

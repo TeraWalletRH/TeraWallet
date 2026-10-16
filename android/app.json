@@ -2,19 +2,21 @@
   "expo": {
     "name": "Tera Wallet",
     "slug": "tera-wallet",
-    "version": "0.1.1",
+    "version": "0.1.2",
     "icon": "./assets/icon.png",
     "orientation": "portrait",
     "userInterfaceStyle": "dark",
     "scheme": "terawallet",
     "android": {
       "package": "app.terawallet.android",
-      "versionCode": 2,
+      "versionCode": 3,
       "allowBackup": false,
       "blockedPermissions": [
         "android.permission.CAMERA",
         "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE"
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES",
+        "android.permission.READ_MEDIA_VIDEO"
       ]
     },
     "ios": {
