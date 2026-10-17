@@ -30,7 +30,7 @@ module.exports = ({ config }) => {
     android: {
       ...config.android,
       package: release ? "app.terawallet.android" : "app.terawallet.android.preview",
-      versionCode: Number(process.env.TERA_VERSION_CODE || process.env.GITHUB_RUN_NUMBER || 4),
+      versionCode: Number(process.env.TERA_VERSION_CODE || process.env.GITHUB_RUN_NUMBER || 5),
       permissions: [
         ...(config.android.permissions ?? []),
         ...(release ? [] : ["android.permission.REQUEST_INSTALL_PACKAGES"]),
