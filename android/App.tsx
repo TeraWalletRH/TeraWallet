@@ -13719,13 +13719,23 @@ function Wallet() {
           </View>
           <Button
             disabled={busy}
-            onPress={() => {
-              const url =
-                typeof window !== "undefined" && window.location?.origin
-                  ? `${window.location.origin}/delete-account/`
-                  : "https://terawallet.app/delete-account";
-              void Linking.openURL(url);
-            }}
+            onPress={() =>
+              confirm(
+                t("Delete assistant data", "删除助手数据"),
+                t("Remove messages and drafts from this device?", "删除此设备上的消息和草稿？"),
+                () =>
+                  void run(async () => {
+                    setChat([]);
+                    setDisclosureOpen(null);
+                    await store({ ...dataRef.current, drafts: [] });
+                    setNotice({
+                      title: t("Deleted", "已删除"),
+                      body: t("Local assistant data was removed.", "本地助手数据已删除。"),
+                      tone: "success",
+                    });
+                  }),
+              )
+            }
           >
             {t("Delete local assistant data", "删除本地助手数据")}
           </Button>
@@ -13922,13 +13932,23 @@ function Wallet() {
         </Text>
         <Button
           disabled={busy}
-          onPress={() => {
-            const url =
-              typeof window !== "undefined" && window.location?.origin
-                ? `${window.location.origin}/delete-account/`
-                : "https://terawallet.app/delete-account";
-            void Linking.openURL(url);
-          }}
+          onPress={() =>
+            confirm(
+              t("Delete assistant data", "删除助手数据"),
+              t("Remove messages and drafts from this device?", "删除此设备上的消息和草稿？"),
+              () =>
+                void run(async () => {
+                  setChat([]);
+                  setDisclosureOpen(null);
+                  await store({ ...dataRef.current, drafts: [] });
+                  setNotice({
+                    title: t("Deleted", "已删除"),
+                    body: t("Local assistant data was removed.", "本地助手数据已删除。"),
+                    tone: "success",
+                  });
+                }),
+            )
+          }
         >
           {t("Delete local assistant data", "删除本地助手数据")}
         </Button>
@@ -13992,36 +14012,50 @@ function Wallet() {
             );
           }
           return (
-            <Button
-              danger
-              disabled={busy}
-              onPress={() =>
-                confirm(
-                  t("Schedule account deletion?", "申请注销账户与数据？"),
-                  t(
-                    "Your account will enter a 30-day recovery grace period. If you do not recover it within 30 days, all account data is permanently deleted.",
-                    "你的账户将进入30天的恢复宽限期。若30天内未恢复，所有账户数据将被永久删除。",
-                  ),
-                  () =>
-                    void run(async () => {
-                      await vault.scheduleAccountDeletion();
-                      try {
-                        await api("/api/account/deletion/request", { accountAddress: owner, scope: "full" });
-                      } catch (_) {}
-                      setNotice({
-                        title: t("Account deletion scheduled", "已安排注销账户"),
-                        body: t(
-                          "You have 30 days to recover your account if you change your mind.",
-                          "若改变主意，你可以在 30 天内恢复账户。",
-                        ),
-                        tone: "neutral",
-                      });
-                    }),
-                )
-              }
-            >
-              {t("Schedule account deletion (30 days)", "申请注销账户（30天宽限期）")}
-            </Button>
+            <>
+              <Button
+                danger
+                disabled={busy}
+                onPress={() =>
+                  confirm(
+                    t("Schedule account deletion?", "申请注销账户与数据？"),
+                    t(
+                      "Your account will enter a 30-day recovery grace period. If you do not recover it within 30 days, all account data is permanently deleted.",
+                      "你的账户将进入30天的恢复宽限期。若30天内未恢复，所有账户数据将被永久删除。",
+                    ),
+                    () =>
+                      void run(async () => {
+                        await vault.scheduleAccountDeletion();
+                        try {
+                          await api("/api/account/deletion/request", { accountAddress: owner, scope: "full" });
+                        } catch (_) {}
+                        setNotice({
+                          title: t("Account deletion scheduled", "已安排注销账户"),
+                          body: t(
+                            "You have 30 days to recover your account if you change your mind.",
+                            "若改变主意，你可以在 30 天内恢复账户。",
+                          ),
+                          tone: "neutral",
+                        });
+                      }),
+                  )
+                }
+              >
+                {t("Schedule account deletion (30 days)", "申请注销账户（30天宽限期）")}
+              </Button>
+              <Button
+                disabled={busy}
+                onPress={() => {
+                  const url =
+                    typeof window !== "undefined" && window.location?.origin
+                      ? `${window.location.origin}/delete-account/`
+                      : "https://terawallet.app/delete-account";
+                  void Linking.openURL(url);
+                }}
+              >
+                {t("Open web deletion page ↗", "打开网页端注销页面 ↗")}
+              </Button>
+            </>
           );
         })()}
         <Text style={s.eyebrow}>{t("AGENT SESSIONS", "代理会话")}</Text>

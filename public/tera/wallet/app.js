@@ -4439,10 +4439,35 @@ document.addEventListener("click", async (event) => {
       state.notice = "Encrypted drafts and device-side records were cleared.";
       render();
     }
-    if (action === "assistant-local-clear") {
-      window.location.href = "/delete-account/";
-      return;
-    }
+    if (action === "assistant-local-clear")
+      confirmDialog(
+        {
+          title: "Delete local assistant data?",
+          lead: "Everything the assistant has left on this device is removed. No request is made and nothing is told to Tera.",
+          consequence:
+            "This cannot be undone from here. A turn answered on this device exists nowhere else, so deleting it ends it.",
+          goes: [
+            "Assistant messages and replies held in this browser.",
+            "Drafts and saved proposal versions.",
+            "Your policy simulator presets.",
+            "The local request log behind the privacy status centre.",
+          ],
+          keeps: [
+            "Records Tera already holds. Deleting those is the separate control below.",
+            "Confirmed receipts and anything already on chain.",
+            "Your vault, its passphrase, and your recovery shares.",
+          ],
+          confirmLabel: "Delete from this device",
+          cancelLabel: "Keep it",
+        },
+        async () => {
+          clearLocalAssistantData();
+          await persist();
+          closeDialog();
+          state.notice = "Local assistant data was deleted from this device.";
+          render();
+        },
+      );
     if (action === "assistant-server-clear")
       confirmDialog(
         {
