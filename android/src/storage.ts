@@ -30,6 +30,14 @@ export const biometricsSupported = store.biometricsSupported;
  * and a downgrade to an older build still finds the envelope it expects —
  * `address` remains the index-0 address and remains what `unlock` checks against.
  */
+export type DeletedAccount = {
+  index: number;
+  address: string;
+  name: string;
+  deletedAt: number;
+  expiresAt: number;
+};
+
 type Envelope = {
   v: 1;
   address: string;
@@ -45,6 +53,9 @@ type Envelope = {
    * stored name it never asked for.
    */
   names?: Record<string, string>;
+  deletedAccounts?: DeletedAccount[];
+  accountDeletionScheduledAt?: number;
+  accountDeletionExpiresAt?: number;
 };
 export type LocalData = {
   drafts: any[];
@@ -189,6 +200,9 @@ export let authenticating = false;
 let indices: number[] = [0];
 let selected = 0;
 let names: Record<string, string> = {};
+let deletedAccounts: DeletedAccount[] = [];
+let accountDeletionScheduledAt: number | undefined;
+let accountDeletionExpiresAt: number | undefined;
 export const sessionVersion = () => epoch;
 export const isUnlocked = () => phrase !== null;
 /**
@@ -345,9 +359,184 @@ export async function renameAccount(index: number, name: string) {
  * Re-sealing on every switch would mean an owner could lose their wallet to a
  * process kill in the middle of tapping an account.
  */
-async function writeSettings(next: Partial<Pick<Envelope, "accounts" | "selected" | "names">>) {
+async function writeSettings(
+  next: Partial<
+    Pick<
+      Envelope,
+      | "accounts"
+      | "selected"
+      | "names"
+      | "deletedAccounts"
+      | "accountDeletionScheduledAt"
+      | "accountDeletionExpiresAt"
+    >
+  >,
+) {
   const saved = await envelope();
   await store.secureSet(WALLET, JSON.stringify({ ...saved, ...next } satisfies Envelope));
+}
+
+/**
+ * Returns secondary wallets currently in the 30-day recovery bin.
+ */
+export function listDeletedAccounts() {
+  const now = Date.now();
+  return deletedAccounts
+    .filter((d) => d.expiresAt > now)
+    .map((d) => ({
+      ...d,
+      daysRemaining: Math.max(0, Math.ceil((d.expiresAt - now) / 86400000)),
+    }));
+}
+
+/**
+ * Soft-delete a secondary wallet (index > 0).
+ * Preserved in deletedAccounts for 30 days before permanent erasure.
+ */
+export async function deleteAccount(index: number) {
+  if (!phrase) throw new Error("Wallet locked. / 钱包已锁定。");
+  if (index === 0)
+    throw new Error(
+      "Cannot delete primary wallet. Use full account deletion. / 无法删除主钱包，请使用注销账户功能。",
+    );
+  if (!indices.includes(index)) throw new Error("Unknown account. / 未知账户。");
+
+  const address = walletFromSecret(phrase, index).address;
+  const name = names[String(index)] || "";
+  const now = Date.now();
+  const expiresAt = now + 30 * 86400000;
+
+  const previousIndices = indices;
+  const previousSelected = selected;
+  const previousNames = { ...names };
+  const previousDeleted = [...deletedAccounts];
+
+  // Remove index
+  const nextIndices = indices.filter((i) => i !== index);
+  // If active account is deleted, fall back to index 0
+  const nextSelected = selected === index ? 0 : selected;
+  const nextNames = { ...names };
+  delete nextNames[String(index)];
+
+  const nextDeleted = [
+    ...deletedAccounts.filter((d) => d.index !== index),
+    { index, address, name, deletedAt: now, expiresAt },
+  ];
+
+  indices = nextIndices;
+  selected = nextSelected;
+  names = nextNames;
+  deletedAccounts = nextDeleted;
+
+  try {
+    await writeSettings({
+      accounts: nextIndices,
+      selected: nextSelected,
+      names: nextNames,
+      deletedAccounts: nextDeleted,
+    });
+  } catch (error) {
+    indices = previousIndices;
+    selected = previousSelected;
+    names = previousNames;
+    deletedAccounts = previousDeleted;
+    throw error;
+  }
+
+  return currentAccount().address;
+}
+
+/**
+ * Restore a soft-deleted wallet within the 30-day recovery window.
+ */
+export async function restoreAccount(index: number) {
+  if (!phrase) throw new Error("Wallet locked. / 钱包已锁定。");
+  const target = deletedAccounts.find((d) => d.index === index);
+  if (!target) throw new Error("Wallet not found in recovery bin. / 回收站中未找到该钱包。");
+
+  const previousIndices = indices;
+  const previousNames = { ...names };
+  const previousDeleted = [...deletedAccounts];
+
+  const nextIndices = [...new Set([...indices, index])].sort((a, b) => a - b);
+  const nextNames = { ...names };
+  if (target.name) nextNames[String(index)] = target.name;
+  const nextDeleted = deletedAccounts.filter((d) => d.index !== index);
+
+  indices = nextIndices;
+  names = nextNames;
+  deletedAccounts = nextDeleted;
+
+  try {
+    await writeSettings({
+      accounts: nextIndices,
+      names: nextNames,
+      deletedAccounts: nextDeleted,
+    });
+  } catch (error) {
+    indices = previousIndices;
+    names = previousNames;
+    deletedAccounts = previousDeleted;
+    throw error;
+  }
+
+  return target.address;
+}
+
+/**
+ * Permanently purge a deleted wallet without waiting for the 30 days.
+ */
+export async function permanentlyDeleteAccount(index: number) {
+  const target = deletedAccounts.find((d) => d.index === index);
+  if (!target) return;
+
+  const nextDeleted = deletedAccounts.filter((d) => d.index !== index);
+  deletedAccounts = nextDeleted;
+  await writeSettings({ deletedAccounts: nextDeleted });
+  await store.deleteFile(dataFile(target.address)).catch(() => {});
+}
+
+/**
+ * Schedule full account deletion with a 30-day recovery window.
+ */
+export async function scheduleAccountDeletion() {
+  const now = Date.now();
+  const expiresAt = now + 30 * 86400000;
+  accountDeletionScheduledAt = now;
+  accountDeletionExpiresAt = expiresAt;
+  await writeSettings({
+    accountDeletionScheduledAt: now,
+    accountDeletionExpiresAt: expiresAt,
+  });
+  return { scheduledAt: now, expiresAt };
+}
+
+/**
+ * Cancel scheduled full account deletion and restore normal active status.
+ */
+export async function cancelAccountDeletion() {
+  accountDeletionScheduledAt = undefined;
+  accountDeletionExpiresAt = undefined;
+  await writeSettings({
+    accountDeletionScheduledAt: undefined,
+    accountDeletionExpiresAt: undefined,
+  });
+}
+
+/**
+ * Check whether full account deletion is scheduled and days remaining.
+ */
+export function accountDeletionStatus() {
+  if (!accountDeletionScheduledAt || !accountDeletionExpiresAt) {
+    return { scheduled: false, daysRemaining: 0 };
+  }
+  const now = Date.now();
+  const diff = accountDeletionExpiresAt - now;
+  return {
+    scheduled: diff > 0,
+    daysRemaining: Math.max(0, Math.ceil(diff / 86400000)),
+    expiresAt: accountDeletionExpiresAt,
+  };
 }
 
 /** Switch to an account this wallet already has. */
@@ -511,8 +700,25 @@ export async function unlock(password: string | null) {
     selected = indices.includes(saved.selected as number) ? (saved.selected as number) : 0;
     names =
       saved.names && typeof saved.names === "object" ? (saved.names as Record<string, string>) : {};
-    if (password !== null && !saved.kdf)
-      void upgradeLegacyEnvelope(password, saved, recovered, version).catch(() => {});
+    
+    // Purge expired deleted accounts (past 30 days)
+    const now = Date.now();
+    deletedAccounts = (saved.deletedAccounts || []).filter((item) => {
+      if (item && item.expiresAt && now >= item.expiresAt) {
+        void store.deleteFile(dataFile(item.address)).catch(() => {});
+        return false;
+      }
+      return true;
+    });
+
+    accountDeletionScheduledAt = saved.accountDeletionScheduledAt;
+    accountDeletionExpiresAt = saved.accountDeletionExpiresAt;
+
+    // Check if full account deletion reached 30 days
+    if (accountDeletionExpiresAt && now >= accountDeletionExpiresAt) {
+      await eraseWallet();
+      throw new Error("Account has been permanently deleted after the 30-day grace period. / 账户已在30天宽限期后永久删除。");
+    }
     // The account the owner was last on, not index 0. Opening somewhere other
     // than where they left off would be its own kind of surprise, and on a
     // wallet with one account these are the same address anyway.

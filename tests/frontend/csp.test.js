@@ -3,9 +3,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { APP_CONNECT, inlineScripts, policyFor, surfaceFor } from "../../src/lib/csp.js";
 
-const root = new URL("../../", import.meta.url).pathname;
+const root = fileURLToPath(new URL("../../", import.meta.url));
 const directive = (policy, name) =>
   policy.split("; ").find((d) => d.split(" ")[0] === name)?.split(" ").slice(1) ?? null;
 const hash = (text) => `'sha256-${createHash("sha256").update(text).digest("base64")}'`;

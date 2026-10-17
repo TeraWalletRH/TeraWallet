@@ -12697,6 +12697,61 @@ function Wallet() {
             },
             false,
           )}
+          {(() => {
+            const deleted = vault.listDeletedAccounts();
+            if (deleted.length === 0) return null;
+            return (
+              <>
+                <Text style={[s.eyebrow, { marginTop: 20 }]}>
+                  {t("RECENTLY DELETED (30-DAY RECOVERY)", "最近删除（30天内可恢复）")}
+                </Text>
+                <Group>
+                  {deleted.map((del) => (
+                    <ListRow
+                      key={`del-${del.index}`}
+                      icon="trash-can-outline"
+                      label={del.name || t(`Wallet ${del.index + 1}`, `钱包 ${del.index + 1}`)}
+                      detail={t(
+                        `${del.daysRemaining} days left · ${short(del.address)}`,
+                        `剩余 ${del.daysRemaining} 天 · ${short(del.address)}`,
+                      )}
+                      disabled={busy}
+                      right={
+                        <Button
+                          small
+                          disabled={busy}
+                          onPress={() =>
+                            confirm(
+                              t("Restore wallet?", "恢复钱包？"),
+                              t(
+                                `Restore ${del.name || `Wallet ${del.index + 1}`} back to your wallets?`,
+                                `将此钱包恢复到你的钱包列表中？`,
+                              ),
+                              () =>
+                                void run(async () => {
+                                  await vault.restoreAccount(del.index);
+                                  syncAccounts();
+                                  setNotice({
+                                    title: t("Wallet restored", "钱包已恢复"),
+                                    body: t(
+                                      "The wallet has been restored to your list.",
+                                      "钱包已成功恢复到你的列表中。",
+                                    ),
+                                    tone: "success",
+                                  });
+                                }),
+                            )
+                          }
+                        >
+                          {t("Restore", "恢复")}
+                        </Button>
+                      }
+                    />
+                  ))}
+                </Group>
+              </>
+            );
+          })()}
         </>
       );
     if (settingsSection === "security")
@@ -13663,27 +13718,29 @@ function Wallet() {
             </Text>
           </View>
           <Button
-            danger
             disabled={busy}
-            onPress={() =>
-              confirm(
-                t("Delete assistant data", "删除助手数据"),
-                t("Remove messages and drafts from this device?", "删除此设备上的消息和草稿？"),
-                () =>
-                  void run(async () => {
-                    setChat([]);
-                    setDisclosureOpen(null);
-                    await store({ ...dataRef.current, drafts: [] });
-                    setNotice({
-                      title: t("Deleted", "已删除"),
-                      body: t("Local assistant data was removed.", "本地助手数据已删除。"),
-                      tone: "success",
-                    });
-                  }),
-              )
-            }
+            onPress={() => {
+              const url =
+                typeof window !== "undefined" && window.location?.origin
+                  ? `${window.location.origin}/delete-account/`
+                  : "https://terawallet.app/delete-account";
+              void Linking.openURL(url);
+            }}
           >
             {t("Delete local assistant data", "删除本地助手数据")}
+          </Button>
+          <Button
+            danger
+            disabled={busy}
+            onPress={() => {
+              const url =
+                typeof window !== "undefined" && window.location?.origin
+                  ? `${window.location.origin}/delete-account/`
+                  : "https://terawallet.app/delete-account";
+              void Linking.openURL(url);
+            }}
+          >
+            {t("Delete account & data (30-day recovery) ↗", "注销账户与数据（30天恢复期）↗")}
           </Button>
         </>
       );
@@ -13865,18 +13922,13 @@ function Wallet() {
         </Text>
         <Button
           disabled={busy}
-          onPress={() =>
-            confirm(
-              t("Delete assistant data", "删除助手数据"),
-              t("Remove messages and drafts from this device?", "删除此设备上的消息和草稿？"),
-              () =>
-                void run(async () => {
-                  setChat([]);
-                  setDisclosureOpen(null);
-                  await store({ ...dataRef.current, drafts: [] });
-                }),
-            )
-          }
+          onPress={() => {
+            const url =
+              typeof window !== "undefined" && window.location?.origin
+                ? `${window.location.origin}/delete-account/`
+                : "https://terawallet.app/delete-account";
+            void Linking.openURL(url);
+          }}
         >
           {t("Delete local assistant data", "删除本地助手数据")}
         </Button>
@@ -13894,6 +13946,84 @@ function Wallet() {
         >
           {t("Delete stored proposal data", "删除服务器提案数据")}
         </Button>
+        <Text style={s.eyebrow}>{t("ACCOUNT & DATA DELETION", "账户与数据注销")}</Text>
+        {(() => {
+          const status = vault.accountDeletionStatus();
+          if (status.scheduled) {
+            return (
+              <View style={[s.panel, { borderColor: colors.yellow || "#eab308" }]}>
+                <Text style={[s.small, { color: colors.yellow || "#eab308", fontWeight: "bold" }]}>
+                  {t(
+                    `⏳ Account deletion scheduled (${status.daysRemaining} days left to recover)`,
+                    `⏳ 账户已申请注销（剩余 ${status.daysRemaining} 天可恢复）`,
+                  )}
+                </Text>
+                <Text style={s.small}>
+                  {t(
+                    "Your data will be permanently wiped when the 30-day grace period expires.",
+                    "30天宽限期到期后，你的数据将被永久清除。",
+                  )}
+                </Text>
+                <Button
+                  small
+                  disabled={busy}
+                  onPress={() =>
+                    confirm(
+                      t("Cancel deletion?", "取消注销？"),
+                      t("Restore your account to active status?", "将账户恢复为正常活跃状态？"),
+                      () =>
+                        void run(async () => {
+                          await vault.cancelAccountDeletion();
+                          try {
+                            await api("/api/account/deletion/recover", { accountAddress: owner });
+                          } catch (_) {}
+                          setNotice({
+                            title: t("Account restored", "账户已恢复"),
+                            body: t("Account deletion has been cancelled.", "账户注销已取消。"),
+                            tone: "success",
+                          });
+                        }),
+                    )
+                  }
+                >
+                  {t("Cancel deletion & recover account", "取消注销并恢复账户")}
+                </Button>
+              </View>
+            );
+          }
+          return (
+            <Button
+              danger
+              disabled={busy}
+              onPress={() =>
+                confirm(
+                  t("Schedule account deletion?", "申请注销账户与数据？"),
+                  t(
+                    "Your account will enter a 30-day recovery grace period. If you do not recover it within 30 days, all account data is permanently deleted.",
+                    "你的账户将进入30天的恢复宽限期。若30天内未恢复，所有账户数据将被永久删除。",
+                  ),
+                  () =>
+                    void run(async () => {
+                      await vault.scheduleAccountDeletion();
+                      try {
+                        await api("/api/account/deletion/request", { accountAddress: owner, scope: "full" });
+                      } catch (_) {}
+                      setNotice({
+                        title: t("Account deletion scheduled", "已安排注销账户"),
+                        body: t(
+                          "You have 30 days to recover your account if you change your mind.",
+                          "若改变主意，你可以在 30 天内恢复账户。",
+                        ),
+                        tone: "neutral",
+                      });
+                    }),
+                )
+              }
+            >
+              {t("Schedule account deletion (30 days)", "申请注销账户（30天宽限期）")}
+            </Button>
+          );
+        })()}
         <Text style={s.eyebrow}>{t("AGENT SESSIONS", "代理会话")}</Text>
         <Field
           label={t("Connect a scoped token", "连接限定权限令牌")}
@@ -14802,6 +14932,41 @@ function Wallet() {
                 afterWalletMenuCloses.current = () => requestPrivateKey(entry.index);
               },
             },
+            ...(entry.index > 0
+              ? [
+                  {
+                    key: "delete-wallet",
+                    icon: "trash-can-outline",
+                    label: t("Delete this wallet", "删除此钱包"),
+                    onPress: () => {
+                      afterWalletMenuCloses.current = () =>
+                        confirm(
+                          t(`Delete ${walletName(entry)}?`, `删除 ${walletName(entry)}？`),
+                          t(
+                            "This wallet will be moved to Recently Deleted and can be recovered within 30 days. After 30 days, it is permanently deleted.",
+                            "此钱包将被移至“最近删除”，并可在 30 天内恢复。30 天后将被永久删除。",
+                          ),
+                          () =>
+                            void run(async () => {
+                              await vault.deleteAccount(entry.index);
+                              syncAccounts();
+                              if (entry.active) {
+                                await switchTo(0);
+                              }
+                              setNotice({
+                                title: t("Wallet moved to recovery bin", "钱包已移至回收站"),
+                                body: t(
+                                  "You can restore it within 30 days from the Wallet Switcher.",
+                                  "你可以在 30 天内从钱包切换器中恢复它。",
+                                ),
+                                tone: "neutral",
+                              });
+                            }),
+                        );
+                    },
+                  },
+                ]
+              : []),
           ];
         })()}
       />

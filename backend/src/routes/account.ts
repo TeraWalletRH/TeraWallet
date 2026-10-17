@@ -170,4 +170,217 @@ router.get("/api/account/:address/history", async (req: Request, res: Response) 
   });
 });
 
+// In-memory deletion storage fallback
+interface DeletionSchedule {
+  accountAddress: string;
+  scope: string;
+  walletIndex?: number;
+  reason?: string;
+  status: "pending_deletion" | "recovered" | "purged";
+  requestedAt: string;
+  expiresAt: string;
+}
+const memoryDeletions: Record<string, DeletionSchedule> = {};
+
+/**
+ * POST /api/account/deletion/request
+ * Schedules an account or specific sub-wallet for deletion with a 30-day recovery period.
+ */
+router.post("/api/account/deletion/request", async (req: Request, res: Response) => {
+  try {
+    const { accountAddress, scope = "full", walletIndex, reason } = req.body;
+    if (!accountAddress) {
+      res.status(400).json({ success: false, error: "accountAddress is required" });
+      return;
+    }
+
+    const lower = String(accountAddress).toLowerCase();
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const parsedIndex = walletIndex !== undefined && walletIndex !== "" ? Number(walletIndex) : null;
+
+    if (pool) {
+      try {
+        await pool.query(`
+          CREATE TABLE IF NOT EXISTS account_deletions (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            account_address VARCHAR(42) NOT NULL,
+            owner_address VARCHAR(42),
+            scope VARCHAR(32) NOT NULL DEFAULT 'full',
+            wallet_index INTEGER,
+            status VARCHAR(32) NOT NULL DEFAULT 'pending_deletion',
+            reason TEXT,
+            requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            expires_at TIMESTAMPTZ NOT NULL DEFAULT (NOW() + INTERVAL '30 days'),
+            recovered_at TIMESTAMPTZ,
+            purged_at TIMESTAMPTZ
+          )
+        `);
+
+        const insertRes = await pool.query(
+          `INSERT INTO account_deletions (account_address, scope, wallet_index, reason, status, requested_at, expires_at)
+           VALUES ($1, $2, $3, $4, 'pending_deletion', NOW(), NOW() + INTERVAL '30 days')
+           RETURNING id, account_address, scope, wallet_index, status, requested_at, expires_at`,
+          [lower, scope, parsedIndex, reason || null]
+        );
+
+        res.status(200).json({
+          success: true,
+          message: "Deletion scheduled. Recoverable for 30 days.",
+          record: insertRes.rows[0],
+          daysRemaining: 30,
+        });
+        return;
+      } catch (dbErr) {
+        logger.warn(req, "account.deletion_db_fallback", dbErr);
+      }
+    }
+
+    memoryDeletions[lower] = {
+      accountAddress: lower,
+      scope,
+      walletIndex: parsedIndex ?? undefined,
+      reason,
+      status: "pending_deletion",
+      requestedAt: now.toISOString(),
+      expiresAt: expiresAt.toISOString(),
+    };
+
+    res.status(200).json({
+      success: true,
+      message: "Deletion scheduled. Recoverable for 30 days.",
+      record: memoryDeletions[lower],
+      daysRemaining: 30,
+    });
+  } catch (error) {
+    logger.error(req, "account.deletion_request_failed", error);
+    res.status(500).json({ success: false, error: "Failed to schedule deletion" });
+  }
+});
+
+/**
+ * POST /api/account/deletion/recover
+ * Recovers an account or sub-wallet within the 30-day grace period.
+ */
+router.post("/api/account/deletion/recover", async (req: Request, res: Response) => {
+  try {
+    const { accountAddress } = req.body;
+    if (!accountAddress) {
+      res.status(400).json({ success: false, error: "accountAddress is required" });
+      return;
+    }
+
+    const lower = String(accountAddress).toLowerCase();
+
+    if (pool) {
+      try {
+        const updateRes = await pool.query(
+          `UPDATE account_deletions
+           SET status = 'recovered', recovered_at = NOW()
+           WHERE account_address = $1 AND status = 'pending_deletion' AND expires_at > NOW()
+           RETURNING id, account_address, status, recovered_at`,
+          [lower]
+        );
+
+        if (updateRes.rowCount && updateRes.rowCount > 0) {
+          res.status(200).json({
+            success: true,
+            message: "Account restored successfully. Deletion has been cancelled.",
+            record: updateRes.rows[0],
+          });
+          return;
+        }
+      } catch (dbErr) {
+        logger.warn(req, "account.recovery_db_fallback", dbErr);
+      }
+    }
+
+    const existing = memoryDeletions[lower];
+    if (existing && existing.status === "pending_deletion") {
+      const now = new Date();
+      if (new Date(existing.expiresAt) > now) {
+        existing.status = "recovered";
+        res.status(200).json({
+          success: true,
+          message: "Account restored successfully. Deletion has been cancelled.",
+          record: existing,
+        });
+        return;
+      }
+    }
+
+    res.status(200).json({
+      success: true,
+      message: "Account is active or already restored.",
+    });
+  } catch (error) {
+    logger.error(req, "account.recovery_failed", error);
+    res.status(500).json({ success: false, error: "Failed to recover account" });
+  }
+});
+
+/**
+ * GET /api/account/deletion/status/:address
+ * Checks deletion status and remaining grace period days.
+ */
+router.get("/api/account/deletion/status/:address", async (req: Request, res: Response) => {
+  try {
+    const address = String(req.params.address).toLowerCase();
+
+    if (pool) {
+      try {
+        const queryRes = await pool.query(
+          `SELECT id, account_address, scope, wallet_index, status, requested_at, expires_at
+           FROM account_deletions
+           WHERE account_address = $1
+           ORDER BY requested_at DESC
+           LIMIT 1`,
+          [address]
+        );
+
+        if (queryRes.rows.length > 0) {
+          const rec = queryRes.rows[0];
+          const expires = new Date(rec.expires_at).getTime();
+          const now = Date.now();
+          const daysRemaining = Math.max(0, Math.ceil((expires - now) / (1000 * 60 * 60 * 24)));
+
+          res.status(200).json({
+            success: true,
+            record: rec,
+            isPending: rec.status === "pending_deletion" && expires > now,
+            daysRemaining,
+          });
+          return;
+        }
+      } catch (dbErr) {
+        logger.warn(req, "account.status_db_fallback", dbErr);
+      }
+    }
+
+    const rec = memoryDeletions[address];
+    if (rec) {
+      const expires = new Date(rec.expiresAt).getTime();
+      const now = Date.now();
+      const daysRemaining = Math.max(0, Math.ceil((expires - now) / (1000 * 60 * 60 * 24)));
+
+      res.status(200).json({
+        success: true,
+        record: rec,
+        isPending: rec.status === "pending_deletion" && expires > now,
+        daysRemaining,
+      });
+      return;
+    }
+
+    res.status(200).json({
+      success: true,
+      isPending: false,
+      message: "No scheduled deletion found for this account.",
+    });
+  } catch (error) {
+    logger.error(req, "account.deletion_status_failed", error);
+    res.status(500).json({ success: false, error: "Failed to check deletion status" });
+  }
+});
+
 export default router;

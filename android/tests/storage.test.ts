@@ -366,3 +366,50 @@ it(
   },
   DERIVES_A_KEY,
 );
+
+it(
+  "can delete a secondary wallet, keep it in 30-day recovery, and restore it",
+  async () => {
+    const root = await vault.createWallet(phrase, password);
+    const sub = await vault.addAccount();
+    expect(vault.accountIndices()).toEqual([0, 1]);
+
+    // Deleting root is rejected
+    await expect(vault.deleteAccount(0)).rejects.toThrow("Cannot delete primary wallet");
+
+    // Delete sub-wallet 1
+    await vault.deleteAccount(1);
+    expect(vault.accountIndices()).toEqual([0]);
+
+    // Shows in deleted accounts list
+    const deleted = vault.listDeletedAccounts();
+    expect(deleted).toHaveLength(1);
+    expect(deleted[0].index).toBe(1);
+    expect(deleted[0].address).toBe(sub);
+    expect(deleted[0].daysRemaining).toBe(30);
+
+    // Restore sub-wallet 1
+    await vault.restoreAccount(1);
+    expect(vault.accountIndices()).toEqual([0, 1]);
+    expect(vault.listDeletedAccounts()).toHaveLength(0);
+  },
+  DERIVES_A_KEY,
+);
+
+it(
+  "schedules and cancels full account deletion with a 30-day recovery window",
+  async () => {
+    await vault.createWallet(phrase, password);
+    expect(vault.accountDeletionStatus().scheduled).toBe(false);
+
+    await vault.scheduleAccountDeletion();
+    const status = vault.accountDeletionStatus();
+    expect(status.scheduled).toBe(true);
+    expect(status.daysRemaining).toBe(30);
+
+    await vault.cancelAccountDeletion();
+    expect(vault.accountDeletionStatus().scheduled).toBe(false);
+  },
+  DERIVES_A_KEY,
+);
+
