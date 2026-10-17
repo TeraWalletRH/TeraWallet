@@ -9,3 +9,4 @@ dist/
 *.p8
 scripts/release-keystore.b64
 dist-web/
+release/
