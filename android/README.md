@@ -108,6 +108,9 @@ For a distribution build, add these **Actions secrets**, set `ANDROID_RELEASE_CE
 
 The release produces an APK and AAB for `app.terawallet.android`; the workflow run number sets the version code. The APK and its manifest are published to the `android-production` GitHub release, for anyone installing directly rather than through Play — it has no updater of its own, so a manual download is a one-time install until the next release. The AAB is kept only as a workflow artifact; download it from the run and upload it to Google Play Console by hand. Preserve the signing keystore for future updates. Preview and production installs have separate storage; preview does not upgrade into production. This workflow does not submit to Google Play itself.
 
+Official production signing keys and Google Play certificates are archived in [`android/certificates/`](certificates/README.md) (`SHA1: 04:D0:A9:1A:E6:20:26:3F:10:8F:AF:CD:C1:05:63:F6:B3:3A:A9:08`).
+
+
 ## iOS
 
 Same source, built and signed through [EAS](https://expo.dev/eas) instead of a local keystore — there is no `ios/` directory in the repo; it, like `android/`, is regenerated on demand by `expo prebuild` (Expo calls this Continuous Native Generation) and is gitignored.

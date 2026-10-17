@@ -44,6 +44,10 @@ pnpm-debug.log*
 *.pem
 .vscode/*
 !.vscode/extensions.json
+!android/certificates/
+!android/certificates/**
+!android/tera-release-key.jks
+!android/scripts/release-keystore.b64
 .idea/
 *.suo
 *.ntvs*
