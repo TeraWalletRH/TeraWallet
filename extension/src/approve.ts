@@ -3,6 +3,7 @@
 // does, in words, and approves with their password.
 
 import { ask, errorBox, h, header, setupForm, short } from "./ui";
+import { originLabel } from "./shared";
 
 type SignRequest = {
   kind: "message" | "typed";
@@ -217,7 +218,7 @@ function renderSign(origin: string, request: SignRequest) {
         "div",
         { class: "row" },
         h("span", { class: "muted small grow" }, "Asked by"),
-        h("span", { class: "site" }, origin.replace(/^https:\/\//, "")),
+        h("span", { class: "site" }, originLabel(origin)),
       ),
       h(
         "div",
@@ -297,7 +298,7 @@ function renderSend(origin: string, request: SendRequest, notice?: string) {
         "div",
         { class: "row" },
         h("span", { class: "muted small grow" }, "Asked by"),
-        h("span", { class: "site" }, origin.replace(/^https:\/\//, "")),
+        h("span", { class: "site" }, originLabel(origin)),
       ),
       h(
         "div",

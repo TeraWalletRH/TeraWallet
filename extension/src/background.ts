@@ -38,8 +38,17 @@ import { keccak256 } from "viem";
 import { KNOWN_SPENDERS } from "../../public/tera/core/approvals.js";
 import { append, entryFor } from "../../public/tera/core/signature-log.js";
 import { createRotation, isNodeFault, nodeList } from "../../public/tera/core/rpc-rotation.js";
-import { PUBLIC_RPCS, RPC, USDG } from "../../android/src/config";
+import {
+  NATIVE,
+  buildTransfer,
+  checkAmount,
+  checkRecipient,
+  cleanRegistry,
+  toUnits,
+} from "../../public/tera/core/wallet-send.js";
+import { API, PUBLIC_RPCS, RPC, sources } from "../../android/src/config";
 import { createVault, openSecret, signer, type Vault } from "./vault";
+import { OWN } from "./shared";
 
 type Sites = Record<string, { accounts: string[]; connectedAt: number }>;
 type RpcErr = { code: number; message: string; data?: unknown };
@@ -69,8 +78,22 @@ type Sent = {
   status: "broadcasting" | "pending" | "confirmed" | "failed" | "unknown" | "dropped";
 };
 
-// What typed-data explanations name: the tokens and contracts Tera knows.
-const TOKENS = { [USDG.toLowerCase()]: { symbol: "USDG", decimals: 6 } };
+// What explanations name: the tokens and contracts Tera knows. Tokens are
+// the wallet's own (USDG, ETH) plus Tera's registry once it has been read.
+type Asset = { symbol: string; name: string; address: string; decimals: number };
+const PINNED: Asset[] = sources.map((s) => ({
+  symbol: s.symbol,
+  name: s.symbol === "ETH" ? "Ether" : "Global Dollar",
+  address: s.address.toLowerCase(),
+  decimals: s.decimals,
+}));
+const tokenMap = (assets: Asset[]) =>
+  Object.fromEntries(
+    assets
+      .filter((a) => a.address !== NATIVE)
+      .map((a) => [a.address, { symbol: a.symbol, decimals: a.decimals }]),
+  );
+const tokens = async () => tokenMap(await registry());
 const SPENDERS = Object.fromEntries(
   Object.entries(KNOWN_SPENDERS).map(([address, [en]]) => [address, en]),
 );
@@ -184,7 +207,7 @@ async function handle(origin: string, request: { method: string; params?: unknow
       const request = signRequest(method, params, {
         origin,
         accounts: accountsFor(sites, origin),
-        tokens: TOKENS,
+        tokens: await tokens(),
         spenders: SPENDERS,
       });
       if ("error" in request) throw request.error;
@@ -272,11 +295,16 @@ function askToConnect(origin: string) {
 // One signature or transaction at a time per site, so a page can't bury the
 // owner in windows.
 function oneAtATime(origin: string) {
-  if (preparing.has(origin))
-    throw rpcError(ERRORS.pending, "A request from this site is already open in Tera.");
-  for (const approval of approvals.values())
-    if (approval.kind !== "connect" && approval.origin === origin)
-      throw rpcError(ERRORS.pending, "A request from this site is already open in Tera.");
+  const busy =
+    preparing.has(origin) ||
+    [...approvals.values()].some((a) => a.kind !== "connect" && a.origin === origin);
+  if (busy)
+    throw rpcError(
+      ERRORS.pending,
+      origin === OWN
+        ? "A send is already open in a Tera window. Confirm or cancel it first."
+        : "A request from this site is already open in Tera.",
+    );
 }
 
 function askToSign(origin: string, request: SignRequest) {
@@ -388,6 +416,9 @@ type PageMessage = {
   secret?: unknown;
   password?: unknown;
   origin?: unknown;
+  asset?: unknown;
+  to?: unknown;
+  amount?: unknown;
 };
 
 async function page(message: PageMessage) {
@@ -431,6 +462,10 @@ async function page(message: PageMessage) {
       broadcast(origin, "accountsChanged", []);
       return { ok: true };
     }
+    case "wallet:balances":
+      return balances();
+    case "wallet:send":
+      return walletSend(message);
     case "approval:get": {
       const approval = approvals.get(String(message.id));
       if (!approval) return { expired: true };
@@ -481,7 +516,8 @@ async function page(message: PageMessage) {
         let request = approval.request as SendRequest;
         if (request.blocked || !request.fee)
           return { error: request.blocked ?? "Can't send this." };
-        if (!accountsFor((await load()).sites, approval.origin).length) {
+        // The owner's own sends (OWN) have no site to be disconnected from.
+        if (approval.origin !== OWN && !accountsFor((await load()).sites, approval.origin).length) {
           finish(id, undefined, rpcError(ERRORS.unauthorized, "The site was disconnected."));
           return { expired: true };
         }
@@ -608,7 +644,7 @@ async function isNft(contract: string) {
 async function prepare(tx: Tx): Promise<SendRequest> {
   const paid = (await loadSent()).map((sent) => sent.recipient);
   const nft = tx.data.startsWith("0x095ea7b3") && (await isNft(tx.to));
-  const described = describe(tx, { tokens: TOKENS, spenders: SPENDERS, paid, nft });
+  const described = describe(tx, { tokens: await tokens(), spenders: SPENDERS, paid, nft });
   const preparedAt = Date.now();
   const call = { from: tx.from, to: tx.to, value: tx.value, data: tx.data };
   let balance: bigint;
@@ -779,6 +815,136 @@ async function refreshSent() {
   );
   await saveSent(next);
   return next;
+}
+
+// --------------------------------------------------------------- wallet ----
+
+// Tera's asset registry and prices, from the same API the app uses. Neither
+// request says which wallet is asking; balances come from the chain.
+async function api(path: string) {
+  if (!API.startsWith("https://")) throw new Error("HTTPS is required.");
+  const response = await fetch(`${API}${path}`, { signal: AbortSignal.timeout(10_000) });
+  const body = await response.json();
+  if (!response.ok || body.success === false)
+    throw new Error(`Tera answered HTTP ${response.status}.`);
+  return body;
+}
+
+const HOUR = 3_600_000;
+
+/** The assets the wallet lists: its own, then the registry's (refreshed hourly, kept if Tera is down). */
+async function registry(): Promise<Asset[]> {
+  const { registry: cached } = (await chrome.storage.local.get("registry")) as {
+    registry?: { at: number; entries: unknown[] };
+  };
+  if (cached && Date.now() - cached.at < HOUR) return cleanRegistry(cached.entries, PINNED);
+  try {
+    const { assets } = await api("/api/assets");
+    await chrome.storage.local.set({ registry: { at: Date.now(), entries: assets } });
+    return cleanRegistry(assets, PINNED);
+  } catch {
+    return cleanRegistry(cached?.entries ?? [], PINNED);
+  }
+}
+
+let priceCache: { at: number; prices: Record<string, number> } | null = null;
+async function prices() {
+  if (priceCache && Date.now() - priceCache.at < 60_000) return priceCache;
+  try {
+    const body = await api("/api/assets/prices");
+    priceCache = { at: Date.now(), prices: body.prices ?? {} };
+  } catch {
+    // No prices: balances still show; values show as unknown.
+  }
+  return priceCache ?? { at: 0, prices: {} };
+}
+
+/** One asset's balance in base units, or null when it couldn't be read. */
+function balanceOf(asset: Asset, owner: string): Promise<string | null> {
+  return (
+    asset.address === NATIVE
+      ? read("eth_getBalance", [owner, "latest"])
+      : read("eth_call", [
+          {
+            to: asset.address,
+            data: "0x70a08231" + owner.slice(2).toLowerCase().padStart(64, "0"),
+          },
+          "latest",
+        ])
+  )
+    .then((hex: string) => (hex && hex !== "0x" ? BigInt(hex.slice(0, 66)).toString() : "0"))
+    .catch(() => null);
+}
+
+/** Balances for every listed asset, prices, and the fee rate for ETH's Max. */
+async function balances() {
+  const { vault } = await load();
+  if (!vault) return { error: "There's no wallet in this browser yet." };
+  const owner = vault.address;
+  const assets = await registry();
+  const [amounts, priced, block, tip] = await Promise.all([
+    Promise.all(assets.map((asset) => balanceOf(asset, owner))),
+    prices(),
+    read("eth_getBlockByNumber", ["latest", false]).catch(() => null),
+    read("eth_maxPriorityFeePerGas", []).catch(() => "0x0"),
+  ]);
+  const maxFeePerGas = block?.baseFeePerGas
+    ? ((BigInt(block.baseFeePerGas) * 12n) / 10n + BigInt(tip)).toString()
+    : null;
+  return {
+    address: owner,
+    assets,
+    balances: Object.fromEntries(assets.map((asset, i) => [asset.address, amounts[i]])),
+    prices: priced.prices,
+    pricesAt: priced.at,
+    maxFeePerGas,
+  };
+}
+
+/** A send the owner started in the popup: checked, prepared, and opened in the review window. */
+async function walletSend(message: PageMessage) {
+  const { vault } = await load();
+  if (!vault) return { error: "There's no wallet in this browser yet." };
+  const wanted = String(message.asset ?? "").toLowerCase();
+  const asset = (await registry()).find((a) => a.address === wanted);
+  if (!asset) return { error: "Pick an asset to send." };
+  const recipient = checkRecipient(message.to, { owner: vault.address, asset });
+  if (recipient.error) return { error: recipient.error };
+  const amount = toUnits(message.amount, asset.decimals);
+  if (amount.error) return { error: amount.error };
+  const short = checkAmount({
+    units: amount.units,
+    balance: await balanceOf(asset, vault.address),
+    symbol: asset.symbol,
+    decimals: asset.decimals,
+  });
+  if (short) return { error: short };
+  const tx = buildTransfer({
+    owner: vault.address,
+    asset,
+    to: recipient.address,
+    units: amount.units,
+  }) as Tx;
+  oneAtATime(OWN);
+  preparing.add(OWN);
+  let prepared: SendRequest;
+  try {
+    prepared = await prepare(tx);
+  } finally {
+    preparing.delete(OWN);
+  }
+  const paid = (await loadSent()).map((sent) => sent.recipient.toLowerCase());
+  if (recipient.self)
+    prepared.described.warnings.push(
+      "This sends to your own address. Nothing leaves the wallet but the fee.",
+    );
+  else if (!paid.includes(String(recipient.address)))
+    prepared.described.warnings.push(
+      "You haven't sent to this address from this browser before. Check it against where you got it, all the way through.",
+    );
+  // The review window decides; the popup has usually closed by then.
+  ask("send", OWN, prepared).catch(() => {});
+  return { ok: true };
 }
 
 // ---------------------------------------------------------------- reads ----

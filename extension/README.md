@@ -1,10 +1,35 @@
 # Tera Wallet for Chrome
 
-The Tera wallet as a browser extension: sites on Robinhood Chain can find it
-(`window.ethereum` and EIP-6963) and ask to connect, and the owner decides.
+The Tera wallet as a browser extension: a wallet in the toolbar, and one
+that sites on Robinhood Chain can find (`window.ethereum` and EIP-6963) and
+ask to connect, with the owner deciding.
 
-**This version (0.3) connects, signs and sends.** A connected site gets the
-wallet's address, can read the chain through it, and can ask for:
+**This version (0.4) is the wallet in the popup.** Click the toolbar icon:
+
+- **Wallet**: the total value, and what the wallet holds (ETH, USDG, and any
+  asset from Tera's registry with a balance), each with its dollar value.
+  Balances are read from the chain; the registry and prices come from Tera's
+  API, and neither request says which wallet is asking. The registry is
+  checked by `core/wallet-send.js`: it can't relabel USDG or ETH.
+- **Send**: ETH or a token, to a 0x address. The recipient is checked as you
+  type (not the zero address, not the token's own contract, and a lookalike
+  of someone you've paid is called out), the amount can't exceed the balance,
+  and ETH's Max keeps the network fee back. Review opens the same window a
+  site's request does, with the same simulation, fee cap and plain-words
+  description, and a note when you've never sent to that address before.
+  An unfinished send survives the popup closing.
+- **Receive**: the address and its QR code.
+- **Activity**: recent transactions with their status, and every signature.
+- **Settings**: connected sites, and removing the wallet.
+
+Tera never stays unlocked, so there's nothing to lock on blur or after a
+timeout: every send and signature asks for the password, and the key is
+opened only for that one step.
+
+Swapping and staking come next.
+
+**Sites.** A connected site gets the wallet's address, can read the chain
+through it, and can ask for:
 
 - **Transactions** (`eth_sendTransaction`), described in words by
   `core/dapp-send.js`. ETH sends and token transfers read as "Send 5 USDG".
@@ -52,13 +77,17 @@ unpacked** → pick `dist-extension/`. Pin Tera from the puzzle-piece menu.
 | `src/content.ts` | the site's tab, isolated | nothing; relays messages |
 | `src/background.ts` | the extension's worker | every decision, the connected-site list, the signature log |
 | `src/vault.ts` | the extension's worker | the sealed wallet |
-| `src/popup.ts`, `src/approve.ts` | extension pages | the toolbar popup and the connect window |
+| `src/popup.ts` | extension page | the wallet: balances, send, receive, activity, settings |
+| `src/approve.ts` | extension page | the window that reviews every connection, signature and send |
+| `src/shared.ts` | both | what the worker and the pages agree on |
 
 The rules are in `public/tera/core/dapp-connect.js` (which sites may connect,
 what each request is, wrong-password waits) and `public/tera/core/dapp-sign.js`
 (what a signature request asks and how risky it is) and
 `public/tera/core/dapp-send.js` (what a transaction does, and whether the
-wallet can pay for it), each with its own test file in `tests/frontend/`.
+wallet can pay for it) and `public/tera/core/wallet-send.js` (the popup's
+assets, amounts and recipients), each with its own test file in
+`tests/frontend/`.
 
 - The wallet is sealed with the owner's password exactly as the web app seals
   it (PBKDF2-SHA256, 600,000 rounds, AES-GCM), in `chrome.storage.local`,
