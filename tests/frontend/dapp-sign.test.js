@@ -153,6 +153,6 @@ test("typed data must define its own type", () => {
 
 test("raw-hash signing and transactions are refused with reasons", () => {
   assert.match(refusal("eth_sign").message, /raw hashes/);
-  assert.match(refusal("eth_sendTransaction").message, /transactions/);
+  assert.match(refusal("eth_signTransaction").message, /eth_sendTransaction only/);
   assert.equal(signRequest("eth_sign", [ME, "0x00"], site).error.code, ERRORS.unsupported);
 });

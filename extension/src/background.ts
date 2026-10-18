@@ -1,7 +1,8 @@
 // The extension's background worker: the one place that decides what a site
 // gets. Sites reach it through content.ts; the popup and the approval window
 // reach it through runtime messages. The rules are in core/dapp-connect.js
-// (connecting) and core/dapp-sign.js (signatures).
+// (connecting), core/dapp-sign.js (signatures) and core/dapp-send.js
+// (transactions).
 //
 // Chrome stops this worker when idle and starts it again on the next message,
 // so nothing that matters lives only in memory: the wallet and the connected
@@ -12,6 +13,7 @@
 
 import {
   CHAIN_HEX,
+  CHAIN_ID,
   ERRORS,
   accountsFor,
   checkRequest,
@@ -26,6 +28,13 @@ import {
   switchChain,
 } from "../../public/tera/core/dapp-connect.js";
 import { SIGNABLE, refusal, signRequest } from "../../public/tera/core/dapp-sign.js";
+import {
+  describe,
+  feeCheck,
+  formatEth,
+  readTransaction,
+} from "../../public/tera/core/dapp-send.js";
+import { keccak256 } from "viem";
 import { KNOWN_SPENDERS } from "../../public/tera/core/approvals.js";
 import { append, entryFor } from "../../public/tera/core/signature-log.js";
 import { createRotation, isNodeFault, nodeList } from "../../public/tera/core/rpc-rotation.js";
@@ -35,6 +44,24 @@ import { createVault, openSecret, signer, type Vault } from "./vault";
 type Sites = Record<string, { accounts: string[]; connectedAt: number }>;
 type RpcErr = { code: number; message: string; data?: unknown };
 type SignRequest = Exclude<ReturnType<typeof signRequest>, { error: unknown }>;
+type Tx = { from: string; to: string; value: string; data: string };
+// A transaction as the approval window shows it. Amounts are strings so the
+// whole thing passes through runtime messaging unchanged.
+type SendRequest = {
+  tx: Tx;
+  described: ReturnType<typeof describe>;
+  fee?: { gas: string; maxFeePerGas: string; maxPriorityFeePerGas: string; maxFee: string };
+  // Set when the transaction can't go ahead: it would fail, or can't be paid for.
+  blocked?: string;
+};
+type Sent = {
+  hash: string;
+  at: number;
+  site: string;
+  title: string;
+  recipient: string;
+  status: "broadcasting" | "pending" | "confirmed" | "failed" | "unknown";
+};
 
 // What typed-data explanations name: the tokens and contracts Tera knows.
 const TOKENS = { [USDG.toLowerCase()]: { symbol: "USDG", decimals: 6 } };
@@ -157,6 +184,12 @@ async function handle(origin: string, request: { method: string; params?: unknow
       if ("error" in request) throw request.error;
       return askToSign(origin, request as SignRequest);
     }
+    case "send": {
+      const read = readTransaction(params, { accounts: accountsFor(sites, origin) });
+      if (read.error) throw read.error;
+      oneAtATime(origin);
+      return ask("send", origin, await prepare(read.tx as Tx));
+    }
     default:
       throw rpcError(ERRORS.unsupported, `Tera Wallet doesn't support ${method}.`);
   }
@@ -165,9 +198,9 @@ async function handle(origin: string, request: { method: string; params?: unknow
 // ------------------------------------------------------------ approvals ----
 
 type Approval = {
-  kind: "connect" | "sign";
+  kind: "connect" | "sign" | "send";
   origin: string;
-  request?: SignRequest;
+  request?: SignRequest | SendRequest;
   resolve: (value: unknown) => void;
   reject: (error: RpcErr) => void;
   promise: Promise<unknown>;
@@ -175,7 +208,7 @@ type Approval = {
 };
 const approvals = new Map<string, Approval>();
 
-function ask(kind: Approval["kind"], origin: string, request?: SignRequest) {
+function ask(kind: Approval["kind"], origin: string, request?: SignRequest | SendRequest) {
   const id = crypto.randomUUID();
   let resolve!: Approval["resolve"];
   let reject!: Approval["reject"];
@@ -201,11 +234,16 @@ function askToConnect(origin: string) {
   return ask("connect", origin) as Promise<string[]>;
 }
 
-function askToSign(origin: string, request: SignRequest) {
-  // One signature at a time per site, so a page can't bury the owner in windows.
+// One signature or transaction at a time per site, so a page can't bury the
+// owner in windows.
+function oneAtATime(origin: string) {
   for (const approval of approvals.values())
-    if (approval.kind === "sign" && approval.origin === origin)
-      throw rpcError(ERRORS.pending, "A signature request from this site is already open in Tera.");
+    if (approval.kind !== "connect" && approval.origin === origin)
+      throw rpcError(ERRORS.pending, "A request from this site is already open in Tera.");
+}
+
+function askToSign(origin: string, request: SignRequest) {
+  oneAtATime(origin);
   return ask("sign", origin, request);
 }
 
@@ -309,6 +347,7 @@ async function page(message: PageMessage) {
         address: vault?.address ?? null,
         sites: listSites(sites),
         signatures: ((signatures as { items?: unknown[] } | undefined)?.items ?? []).slice(0, 10),
+        transactions: (await refreshSent()).slice(0, 10),
       };
     }
     case "wallet:add": {
@@ -321,7 +360,14 @@ async function page(message: PageMessage) {
     case "wallet:remove": {
       const tried = await tryPassword(String(message.password ?? ""));
       if (!tried.ok) return { error: tried.error };
-      await chrome.storage.local.remove(["vault", "sites", "failures", "failedAt", "signatures"]);
+      await chrome.storage.local.remove([
+        "vault",
+        "sites",
+        "failures",
+        "failedAt",
+        "signatures",
+        "transactions",
+      ]);
       broadcast(null, "accountsChanged", []);
       return { ok: true };
     }
@@ -368,10 +414,27 @@ async function page(message: PageMessage) {
       }
       const tried = await tryPassword(String(message.password ?? ""));
       if (!tried.ok) return { error: tried.error };
-      const signature = await sign(tried.secret, approval.request);
-      await logSignature(approval.origin, approval.request, signature);
+      const signature = await sign(tried.secret, approval.request as SignRequest);
+      await logSignature(approval.origin, approval.request as SignRequest, signature);
       finish(String(message.id), signature);
       return { ok: true };
+    }
+    case "approval:send": {
+      const id = String(message.id);
+      const approval = approvals.get(id);
+      const request = approval?.request as SendRequest | undefined;
+      if (!approval || approval.kind !== "send" || !request) return { expired: true };
+      if (request.blocked || !request.fee) return { error: request.blocked ?? "Can't send this." };
+      if (!accountsFor((await load()).sites, approval.origin).length) {
+        finish(id, undefined, rpcError(ERRORS.unauthorized, "The site was disconnected."));
+        return { expired: true };
+      }
+      const tried = await tryPassword(String(message.password ?? ""));
+      if (!tried.ok) return { error: tried.error };
+      const outcome = await send(tried.secret, approval.origin, request);
+      if (outcome.hash) finish(id, outcome.hash);
+      else finish(id, undefined, outcome.error);
+      return outcome.hash ? { ok: true } : { error: outcome.error?.message };
     }
     case "approval:reject":
       finish(String(message.id), undefined, rpcError(ERRORS.rejected, "The request was declined."));
@@ -415,6 +478,184 @@ async function logSignature(origin: string, request: SignRequest, signature: str
         },
   );
   await chrome.storage.local.set({ signatures: append(signatures, entry) });
+}
+
+// -------------------------------------------------------- transactions ----
+
+// Everything about sending goes to the network's own node, never the rotation:
+// the nonce, the simulation, the broadcast and the receipt have to agree.
+async function node(method: string, params: unknown[]) {
+  const response = await fetch(RPC, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method, params }),
+    signal: AbortSignal.timeout(15_000),
+  });
+  if (!response.ok) throw new Error(`Robinhood Chain answered HTTP ${response.status}.`);
+  const body = await response.json();
+  if (body.error) throw Object.assign(new Error(body.error.message), body.error);
+  return body.result;
+}
+
+// A revert's reason, when the contract gave one (Error(string)).
+function revertReason(error: { message?: string; data?: unknown }) {
+  const data = typeof error.data === "string" ? error.data : "";
+  if (data.startsWith("0x08c379a0") && data.length >= 138) {
+    try {
+      const length = Number(BigInt(`0x${data.slice(74, 138)}`));
+      const bytes = data.slice(138, 138 + length * 2).match(/../g) || [];
+      return new TextDecoder().decode(Uint8Array.from(bytes, (b) => parseInt(b, 16)));
+    } catch {
+      // Fall through to the node's message.
+    }
+  }
+  return (
+    String(error.message || "it reverted").replace(/^execution reverted:?\s*/i, "") || "it reverted"
+  );
+}
+
+const loadSent = async () =>
+  ((await chrome.storage.local.get("transactions")).transactions as Sent[] | undefined) ?? [];
+const saveSent = (list: Sent[]) => chrome.storage.local.set({ transactions: list.slice(0, 50) });
+
+/** Check the chain once and describe the transaction for the approval window. */
+async function prepare(tx: Tx): Promise<SendRequest> {
+  const paid = (await loadSent()).map((sent) => sent.recipient);
+  const described = describe(tx, { tokens: TOKENS, spenders: SPENDERS, paid });
+  const call = { from: tx.from, to: tx.to, value: tx.value, data: tx.data };
+  let balance: bigint;
+  try {
+    balance = BigInt(await node("eth_getBalance", [tx.from, "latest"]));
+  } catch (error) {
+    return {
+      tx,
+      described,
+      blocked: `Couldn't reach Robinhood Chain (${String((error as Error).message || error)}).`,
+    };
+  }
+  if (BigInt(tx.value) > balance)
+    return {
+      tx,
+      described,
+      blocked: `Not enough ETH. This sends ${formatEth(BigInt(tx.value))} ETH and the wallet has ${formatEth(balance)}.`,
+    };
+  // A transaction that would fail costs its fee and does nothing, so it's
+  // simulated first and not offered if it reverts.
+  try {
+    await node("eth_call", [call, "latest"]);
+  } catch (error) {
+    return {
+      tx,
+      described,
+      blocked: `This transaction would fail: ${revertReason(error as Error)}.`,
+    };
+  }
+  try {
+    const [gasHex, block, tipHex] = await Promise.all([
+      node("eth_estimateGas", [call]),
+      node("eth_getBlockByNumber", ["latest", false]),
+      node("eth_maxPriorityFeePerGas", []).catch(() => "0x0"),
+    ]);
+    const gas = BigInt(gasHex);
+    const tip = BigInt(tipHex);
+    // As viem estimates fees for the app: the base fee with 20% headroom, plus the tip.
+    const maxFeePerGas = (BigInt(block.baseFeePerGas ?? "0x0") * 12n) / 10n + tip;
+    const checked = feeCheck({ gas, maxFeePerGas, balance, value: BigInt(tx.value) });
+    const fee = {
+      gas: gas.toString(),
+      maxFeePerGas: maxFeePerGas.toString(),
+      maxPriorityFeePerGas: tip.toString(),
+      maxFee: formatEth(checked.maxFee),
+    };
+    return { tx, described, fee, blocked: checked.error };
+  } catch (error) {
+    return {
+      tx,
+      described,
+      blocked: `Couldn't work out the network fee (${String((error as Error).message || error)}). Try again in a moment.`,
+    };
+  }
+}
+
+/** Sign, record, broadcast once. Never retried: a node may have accepted it. */
+async function send(
+  secret: string,
+  origin: string,
+  request: SendRequest,
+): Promise<{ hash?: string; error?: RpcErr }> {
+  const { tx, fee, described } = request;
+  if (!fee) return { error: rpcError(ERRORS.internal, "No fee was prepared.") };
+  const nonce = Number(BigInt(await node("eth_getTransactionCount", [tx.from, "pending"])));
+  const serialized = await signer(secret).signTransaction({
+    type: "eip1559",
+    chainId: CHAIN_ID,
+    nonce,
+    to: tx.to as `0x${string}`,
+    value: BigInt(tx.value),
+    data: tx.data as `0x${string}`,
+    gas: BigInt(fee.gas),
+    maxFeePerGas: BigInt(fee.maxFeePerGas),
+    maxPriorityFeePerGas: BigInt(fee.maxPriorityFeePerGas),
+  });
+  const hash = keccak256(serialized);
+  const recipient = described.rows.find(([label]) => label === "To")?.[1] ?? tx.to;
+  // The hash is written down before the broadcast, so an uncertain send can
+  // always be checked rather than guessed at.
+  const entry: Sent = {
+    hash,
+    at: Date.now(),
+    site: origin,
+    title: described.title,
+    recipient,
+    status: "broadcasting",
+  };
+  await saveSent([entry, ...(await loadSent())]);
+  const mark = async (status: Sent["status"]) =>
+    saveSent((await loadSent()).map((sent) => (sent.hash === hash ? { ...sent, status } : sent)));
+  try {
+    await node("eth_sendRawTransaction", [serialized]);
+  } catch (error) {
+    const e = error as { code?: number; message?: string };
+    // The node said no outright: nothing was sent.
+    if (typeof e.code === "number") {
+      await mark("failed");
+      return { error: rpcError(ERRORS.internal, `Robinhood Chain refused it: ${e.message}`) };
+    }
+    // No clear answer: it may or may not have gone. Say so; don't retry.
+    await mark("unknown");
+    return {
+      error: {
+        code: ERRORS.internal,
+        message:
+          "Tera couldn't confirm the network received this. Check Recent transactions in Tera before trying again.",
+        data: { hash },
+      },
+    };
+  }
+  await mark("pending");
+  return { hash };
+}
+
+/** Recent transactions, with any that were pending checked against the chain. */
+async function refreshSent() {
+  const list = await loadSent();
+  const open = list.filter((sent) => sent.status === "pending" || sent.status === "unknown");
+  if (!open.length) return list;
+  const receipts = await Promise.all(
+    open.map((sent) => node("eth_getTransactionReceipt", [sent.hash]).catch(() => null)),
+  );
+  const status = new Map(
+    open.map((sent, i) => [
+      sent.hash,
+      receipts[i] ? (receipts[i].status === "0x1" ? "confirmed" : "failed") : sent.status,
+    ]),
+  );
+  const next = list.map((sent) => ({
+    ...sent,
+    status: (status.get(sent.hash) ?? sent.status) as Sent["status"],
+  }));
+  await saveSent(next);
+  return next;
 }
 
 // ---------------------------------------------------------------- reads ----

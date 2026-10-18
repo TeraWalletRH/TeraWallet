@@ -50,7 +50,7 @@ export function refusal(method) {
     );
   return rpcError(
     ERRORS.unsupported,
-    "Sending transactions isn't in this version of the Tera extension yet.",
+    "Tera sends transactions through eth_sendTransaction only, so it can show you what each one does first.",
   );
 }
 

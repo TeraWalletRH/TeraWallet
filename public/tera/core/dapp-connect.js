@@ -18,9 +18,8 @@
 //   eth_accounts is empty. After, it gets the one address it was given.
 //   Disconnecting takes the address back immediately.
 //
-//   Signing messages and typed data has its own rules (core/dapp-sign.js).
-//   Sending transactions is not in this version: it is refused with the
-//   standard "unsupported" error rather than pretended.
+//   Signing messages and typed data has its own rules (core/dapp-sign.js),
+//   and so does sending transactions (core/dapp-send.js).
 //
 //   Tera is a Robinhood Chain wallet. Switching to it succeeds; switching to
 //   anything else is refused with the standard "unrecognized chain" error,
@@ -108,6 +107,7 @@ const OWN = {
   eth_chainId: "chain",
   wallet_switchEthereumChain: "switch",
   wallet_addEthereumChain: "add",
+  eth_sendTransaction: "send",
 };
 
 /** What kind of request this is, which decides who answers it. */
