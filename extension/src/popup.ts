@@ -21,6 +21,13 @@ import {
   plainUnits,
   toUnits,
 } from "../../public/tera/core/wallet-send.js";
+import {
+  SLIPPAGE_CHOICES,
+  DEFAULT_SLIPPAGE_BPS,
+  slippageLabel,
+} from "../../public/tera/core/slippage.js";
+import { FIXED_TERMS, fixedReward } from "../../public/tera/core/staking.js";
+import { swapPair, tradable } from "../../public/tera/core/wallet-swap.js";
 import { originLabel } from "./shared";
 import { ask, errorBox, h, header, setupForm, short } from "./ui";
 
@@ -41,7 +48,7 @@ type State = {
   signatures: Signed[];
   transactions: Sent[];
 };
-type Asset = { symbol: string; name: string; address: string; decimals: number };
+type Asset = { symbol: string; name: string; address: string; decimals: number; priceAs?: string };
 type Balances = {
   error?: string;
   address: string;
@@ -52,26 +59,63 @@ type Balances = {
   maxFeePerGas: string | null;
 };
 type Row = Asset & { balance: string | null; amount: string | null; value: number | null };
-type View = "home" | "send" | "receive" | "activity" | "settings";
+type View = "home" | "send" | "receive" | "swap" | "stake" | "activity" | "settings";
 type Draft = { asset?: string; to?: string; amount?: string };
+type SwapDraft = { asset?: string; side?: "BUY" | "SELL"; amount?: string; slippageBps?: number };
+type Staking = {
+  error?: string;
+  positions: {
+    epoch_id: string;
+    active_stake: string;
+    claimable_rewards?: string;
+    is_locked?: boolean;
+    lock_tier?: string;
+    remaining_lock_seconds?: number;
+  }[];
+  locks: {
+    id: string;
+    term_days: number;
+    principal_amount: string;
+    reward_amount: string;
+    unlocks_at: string;
+    status: string;
+    isMatured: boolean;
+  }[];
+  payouts: {
+    kind: string;
+    principal_amount: string;
+    reward_amount: string;
+    status: string;
+    created_at: string;
+  }[];
+  epoch: { ends_at: string } | null;
+  flexibleApr: number | null;
+  configured: boolean;
+  balance: string | null;
+  pending: { kind: string; termDays?: number; amount: string; txHash: string; at: number }[];
+};
 
 let state: State;
 let wallet: Balances | null = null;
 let view: View = "home";
 let draft: Draft = {};
+let swapDraft: SwapDraft = {};
+let stakeState: Staking | null = null;
 
 // ------------------------------------------------------------- session ----
 
 async function restore() {
   try {
-    const saved = await chrome.storage.session.get(["view", "draft"]);
+    const saved = await chrome.storage.session.get(["view", "draft", "swapDraft"]);
+    if (saved.swapDraft && typeof saved.swapDraft === "object")
+      swapDraft = saved.swapDraft as SwapDraft;
     if (typeof saved.view === "string") view = saved.view as View;
     if (saved.draft && typeof saved.draft === "object") draft = saved.draft as Draft;
   } catch {
     // No session storage: start on Home.
   }
 }
-const remember = () => chrome.storage.session.set({ view, draft }).catch(() => {});
+const remember = () => chrome.storage.session.set({ view, draft, swapDraft }).catch(() => {});
 
 function go(next: View) {
   view = next;
@@ -89,20 +133,35 @@ async function render() {
   }
   draw();
   wallet = await ask<Balances>({ type: "wallet:balances" });
-  if (view === "home" || view === "send") draw();
+  if (view === "home" || view === "send" || view === "swap") draw();
+}
+
+/** Balances again, after something was sent or on coming back to the wallet. */
+async function refreshWallet() {
+  wallet = await ask<Balances>({ type: "wallet:balances" });
+  if (view === "home" || view === "send" || view === "swap") draw();
+}
+
+async function loadStaking() {
+  stakeState = await ask<Staking>({ type: "wallet:staking" });
+  if (view === "stake") draw();
 }
 
 function draw() {
   const body =
     view === "send"
       ? sendView()
-      : view === "receive"
-        ? receiveView()
-        : view === "activity"
-          ? activityView()
-          : view === "settings"
-            ? settingsView()
-            : homeView();
+      : view === "swap"
+        ? swapView()
+        : view === "stake"
+          ? stakeView()
+          : view === "receive"
+            ? receiveView()
+            : view === "activity"
+              ? activityView()
+              : view === "settings"
+                ? settingsView()
+                : homeView();
   root.replaceChildren(header(), tabs(), ...body);
 }
 
@@ -113,9 +172,14 @@ function tabs() {
       {
         type: "button",
         class:
-          view === name || (name === "home" && (view === "send" || view === "receive")) ? "on" : "",
+          view === name || (name === "home" && ["send", "receive", "swap", "stake"].includes(view))
+            ? "on"
+            : "",
         "aria-current": view === name ? "page" : undefined,
-        onclick: () => go(name),
+        onclick: () => {
+          go(name);
+          if (name === "home") void refreshWallet();
+        },
       },
       label,
     );
@@ -146,7 +210,7 @@ function copyButton(text: string) {
 function homeView() {
   const list = rows();
   const total = totalValue(
-    list.map((row) => ({ symbol: row.symbol, amount: row.amount ?? "" })),
+    list.map((row) => ({ symbol: row.priceAs ?? row.symbol, amount: row.amount ?? "" })),
     wallet?.prices ?? {},
   );
   const reading = !wallet;
@@ -175,6 +239,22 @@ function homeView() {
         { class: "actions" },
         h("button", { class: "primary", type: "button", onclick: () => go("send") }, "Send"),
         h("button", { type: "button", onclick: () => go("receive") }, "Receive"),
+      ),
+      h(
+        "div",
+        { class: "actions" },
+        h("button", { type: "button", onclick: () => go("swap") }, "Swap"),
+        h(
+          "button",
+          {
+            type: "button",
+            onclick: () => {
+              stakeState = null;
+              go("stake");
+            },
+          },
+          "Stake",
+        ),
       ),
     ),
     h(
@@ -288,7 +368,7 @@ function sendView() {
     const units = toUnits(amount.value, row.decimals);
     const dollars = units.error
       ? null
-      : dollarsForTokens(units.units, wallet!.prices[row.symbol], row.decimals);
+      : dollarsForTokens(units.units, wallet!.prices[row.priceAs ?? row.symbol], row.decimals);
     amountNote.textContent = dollars ? `≈ $${dollars}` : "";
   };
 
@@ -353,6 +433,7 @@ function sendView() {
         draft = {};
         view = "home";
         await remember();
+        void refreshWallet();
         status.append(
           h("p", { class: "note" }, "Review and confirm it in the Tera window that just opened."),
         );
@@ -382,6 +463,426 @@ function sendView() {
       "Robinhood Chain only. You'll see exactly what's sent, and the fee, before you confirm with your password.",
     ),
   ];
+}
+
+// ---------------------------------------------------------------- swap ----
+
+function swapView() {
+  const back = h("button", { class: "link", type: "button", onclick: () => go("home") }, "← Back");
+  if (!wallet) return [back, h("p", { class: "muted" }, "Reading your balances…")];
+  if (wallet.error) return [back, errorBox(wallet.error)];
+  const choices = tradable(wallet.assets) as Asset[];
+  if (!choices.length)
+    return [back, errorBox("Tera's asset list couldn't be read. Try again shortly.")];
+
+  let side: "BUY" | "SELL" = swapDraft.side === "SELL" ? "SELL" : "BUY";
+  const select = h(
+    "select",
+    { "aria-label": "Asset" },
+    ...choices.map((asset) =>
+      h("option", { value: asset.address }, `${asset.symbol} · ${asset.name}`),
+    ),
+  ) as HTMLSelectElement;
+  select.value = choices.some((a) => a.address === swapDraft.asset)
+    ? swapDraft.asset!
+    : choices[0].address;
+  const amount = h("input", {
+    inputmode: "decimal",
+    autocomplete: "off",
+    placeholder: "0.0",
+    value: swapDraft.amount ?? "",
+  }) as HTMLInputElement;
+  const slippage = h(
+    "select",
+    { "aria-label": "Slippage limit" },
+    ...SLIPPAGE_CHOICES.map((bps: number) =>
+      h("option", { value: String(bps) }, slippageLabel(bps)),
+    ),
+  ) as HTMLSelectElement;
+  slippage.value = String(swapDraft.slippageBps ?? DEFAULT_SLIPPAGE_BPS);
+  const payLabel = h("span", { class: "grow" });
+  const have = h("span", { class: "muted small" });
+  const estimate = h("span", { class: "muted small" });
+  const status = h("div");
+  const review = h(
+    "button",
+    { class: "primary", type: "submit" },
+    "Get a quote",
+  ) as HTMLButtonElement;
+  const buy = h("button", { type: "button" }, "Buy") as HTMLButtonElement;
+  const sell = h("button", { type: "button" }, "Sell") as HTMLButtonElement;
+
+  const pair = () =>
+    swapPair(
+      choices.find((a) => a.address === select.value),
+      side,
+      wallet!.assets,
+    );
+  const balanceOf = (asset: Asset) => wallet!.balances[asset.address] ?? null;
+  const update = () => {
+    swapDraft = {
+      asset: select.value,
+      side,
+      amount: amount.value,
+      slippageBps: Number(slippage.value),
+    };
+    void remember();
+    buy.className = side === "BUY" ? "on" : "";
+    sell.className = side === "SELL" ? "on" : "";
+    const p = pair();
+    if (!p) return;
+    payLabel.textContent = `You pay (${p.pay.symbol})`;
+    const held = balanceOf(p.pay);
+    have.textContent =
+      held === null
+        ? "Balance unknown"
+        : `You have ${formatUnits(held, p.pay.decimals)} ${p.pay.symbol}`;
+    const typed = toUnits(amount.value, p.pay.decimals);
+    const payPrice = Number(wallet!.prices[p.pay.priceAs ?? p.pay.symbol]);
+    const getPrice = Number(wallet!.prices[p.receive.priceAs ?? p.receive.symbol]);
+    estimate.textContent =
+      !typed.error && payPrice > 0 && getPrice > 0
+        ? `≈ ${(((Number(typed.units) / 10 ** p.pay.decimals) * payPrice) / getPrice).toPrecision(6)} ${p.receive.symbol} at today's prices, before the quote`
+        : "";
+  };
+  buy.addEventListener("click", () => ((side = "BUY"), update()));
+  sell.addEventListener("click", () => ((side = "SELL"), update()));
+  select.addEventListener("change", update);
+  amount.addEventListener("input", update);
+  slippage.addEventListener("change", update);
+  const max = h(
+    "button",
+    {
+      class: "small",
+      type: "button",
+      onclick: () => {
+        const p = pair();
+        const held = p && balanceOf(p.pay);
+        if (!p || held === null || held === undefined) return;
+        const reserve = feeReserve(25_200 * 3, wallet!.maxFeePerGas ?? 0);
+        amount.value = plainUnits(
+          BigInt(maxSendable({ balance: held, native: p.pay.address === NATIVE, reserve })),
+          p.pay.decimals,
+        );
+        update();
+      },
+    },
+    "Max",
+  );
+
+  const form = h(
+    "form",
+    {
+      class: "card",
+      onsubmit: async (event: Event) => {
+        event.preventDefault();
+        status.replaceChildren();
+        const p = pair();
+        if (!p) return status.append(errorBox("This swap isn't offered."));
+        const typed = toUnits(amount.value, p.pay.decimals);
+        if (typed.error) return status.append(errorBox(typed.error));
+        const short = checkAmount({
+          units: typed.units,
+          balance: balanceOf(p.pay),
+          symbol: p.pay.symbol,
+          decimals: p.pay.decimals,
+        });
+        if (short) return status.append(errorBox(short));
+        review.disabled = true;
+        review.textContent = "Getting a quote…";
+        const answer = await ask({
+          type: "wallet:swap",
+          asset: select.value,
+          side,
+          amount: amount.value.trim(),
+          slippageBps: Number(slippage.value),
+        });
+        review.disabled = false;
+        review.textContent = "Get a quote";
+        if (answer?.error) return status.append(errorBox(answer.error));
+        swapDraft = { asset: select.value, side, slippageBps: Number(slippage.value) };
+        view = "home";
+        await remember();
+        void refreshWallet();
+        status.append(
+          h(
+            "p",
+            { class: "note" },
+            "Review and confirm the swap in the Tera window that just opened.",
+          ),
+        );
+      },
+    },
+    h("div", { class: "seg" }, buy, sell),
+    h("label", {}, "Asset", select),
+    h("label", {}, h("span", { class: "row" }, payLabel, max), amount),
+    have,
+    estimate,
+    h("label", {}, "Slippage limit", slippage),
+    status,
+    review,
+  );
+  queueMicrotask(update);
+  return [
+    back,
+    h("h1", {}, "Swap"),
+    form,
+    h(
+      "p",
+      { class: "muted small" },
+      "Tera trades each asset against USDG (TERA against ETH). The quote is checked on this computer, byte for byte, before you see it.",
+    ),
+  ];
+}
+
+// --------------------------------------------------------------- stake ----
+
+const tera = (units: string | bigint) => `${formatUnits(units, 18)} TERA`;
+
+function stakeView() {
+  const back = h("button", { class: "link", type: "button", onclick: () => go("home") }, "← Back");
+  if (!stakeState) {
+    void loadStaking();
+    return [back, h("h1", {}, "Stake TERA"), h("p", { class: "muted" }, "Reading your staking…")];
+  }
+  if (stakeState.error) return [back, h("h1", {}, "Stake TERA"), errorBox(stakeState.error)];
+  const st = stakeState;
+  const status = h("div");
+
+  const request = async (body: Record<string, unknown>) => {
+    status.replaceChildren();
+    const answer = await ask({ type: "wallet:stake-sign", ...body });
+    if (answer?.error) return status.append(errorBox(answer.error));
+    status.append(
+      h("p", { class: "note" }, "Review and sign it in the Tera window that just opened."),
+    );
+  };
+
+  const positions = st.positions.filter(
+    (p) => BigInt(p.active_stake || "0") > 0n || BigInt(p.claimable_rewards || "0") > 0n,
+  );
+  const locks = st.locks.filter((l) => l.status !== "claimed");
+
+  const amount = h("input", {
+    inputmode: "decimal",
+    autocomplete: "off",
+    placeholder: "0.0",
+  }) as HTMLInputElement;
+  const term = h(
+    "select",
+    { "aria-label": "Type" },
+    h(
+      "option",
+      { value: "flexible" },
+      `Flexible · ${st.flexibleApr === null ? "variable rate" : `≈ ${st.flexibleApr.toFixed(2)}% a year, variable`}`,
+    ),
+    ...Object.values(FIXED_TERMS).map((t: { days: number; apyBps: number }) =>
+      h(
+        "option",
+        { value: String(t.days) },
+        `${t.days}-day lock · ${t.apyBps / 100}% a year, guaranteed`,
+      ),
+    ),
+  ) as HTMLSelectElement;
+  const projection = h("span", { class: "muted small" });
+  const project = () => {
+    const typed = toUnits(amount.value, 18);
+    projection.textContent =
+      term.value === "flexible" || typed.error
+        ? term.value === "flexible"
+          ? "Unstake any time. The rate falls as others stake."
+          : ""
+        : `Reward at the end: ${tera(fixedReward(typed.units, Number(term.value)))}`;
+  };
+  amount.addEventListener("input", project);
+  term.addEventListener("change", project);
+  const go2 = h("button", { class: "primary", type: "submit" }, "Review") as HTMLButtonElement;
+  const form = h(
+    "form",
+    {
+      class: "card",
+      onsubmit: async (event: Event) => {
+        event.preventDefault();
+        status.replaceChildren();
+        const typed = toUnits(amount.value, 18);
+        if (typed.error) return status.append(errorBox(typed.error));
+        const short = checkAmount({
+          units: typed.units,
+          balance: st.balance,
+          symbol: "TERA",
+          decimals: 18,
+        });
+        if (short) return status.append(errorBox(short));
+        go2.disabled = true;
+        go2.textContent = "Checking…";
+        const answer = await ask({
+          type: "wallet:stake",
+          amount: amount.value.trim(),
+          term: term.value,
+        });
+        go2.disabled = false;
+        go2.textContent = "Review";
+        if (answer?.error) return status.append(errorBox(answer.error));
+        status.append(
+          h("p", { class: "note" }, "Review and confirm it in the Tera window that just opened."),
+        );
+      },
+    },
+    h("strong", {}, "Stake more"),
+    h(
+      "label",
+      {},
+      h(
+        "span",
+        { class: "row" },
+        h("span", { class: "grow" }, "Amount (TERA)"),
+        h(
+          "button",
+          {
+            class: "small",
+            type: "button",
+            onclick: () => {
+              if (st.balance === null) return;
+              amount.value = plainUnits(BigInt(st.balance), 18);
+              project();
+            },
+          },
+          "Max",
+        ),
+      ),
+      amount,
+    ),
+    h(
+      "span",
+      { class: "muted small" },
+      st.balance === null ? "Balance unknown" : `You have ${tera(st.balance)}`,
+    ),
+    h("label", {}, "Type", term),
+    projection,
+    go2,
+  );
+  queueMicrotask(project);
+
+  return [
+    back,
+    h("h1", {}, "Stake TERA"),
+    st.configured ? null : errorBox("Staking is unavailable right now."),
+    status,
+    ...st.pending.map((p) =>
+      h(
+        "p",
+        { class: "note" },
+        `Waiting to be credited: ${tera(p.amount)} ${p.kind === "fixed" ? `(${p.termDays}-day lock)` : "(flexible)"}. Tera credits it after a few confirmations; keep Tera open or come back later.`,
+      ),
+    ),
+    ...positions.map((p) => {
+      const staked = BigInt(p.active_stake || "0");
+      const claimable = BigInt(p.claimable_rewards || "0");
+      return h(
+        "section",
+        { class: "card" },
+        h(
+          "strong",
+          {},
+          p.lock_tier && p.lock_tier !== "flexible" ? `Staked · ${p.lock_tier}` : "Flexible stake",
+        ),
+        h(
+          "dl",
+          { class: "rows" },
+          h("dt", {}, "Staked"),
+          h("dd", {}, tera(staked)),
+          h("dt", {}, "Rewards to claim"),
+          h("dd", {}, tera(claimable)),
+        ),
+        p.is_locked
+          ? h(
+              "p",
+              { class: "muted small" },
+              `Locked for another ${Math.ceil(Number(p.remaining_lock_seconds || 0) / 86400)} days. Rewards can still be claimed.`,
+            )
+          : null,
+        h(
+          "div",
+          { class: "actions" },
+          h(
+            "button",
+            {
+              class: "primary",
+              type: "button",
+              disabled: claimable <= 0n,
+              onclick: () => request({ kind: "claim", epochId: p.epoch_id }),
+            },
+            "Claim",
+          ),
+          h(
+            "button",
+            {
+              type: "button",
+              disabled: staked <= 0n || Boolean(p.is_locked),
+              onclick: () => request({ kind: "unstake", epochId: p.epoch_id }),
+            },
+            "Unstake all",
+          ),
+        ),
+      );
+    }),
+    ...locks.map((l) =>
+      h(
+        "section",
+        { class: "card" },
+        h("strong", {}, `${l.term_days}-day lock`),
+        h(
+          "dl",
+          { class: "rows" },
+          h("dt", {}, "Locked"),
+          h("dd", {}, tera(l.principal_amount)),
+          h("dt", {}, "Reward"),
+          h("dd", {}, tera(l.reward_amount)),
+          h("dt", {}, l.isMatured ? "Ended" : "Unlocks"),
+          h("dd", {}, new Date(l.unlocks_at).toLocaleDateString()),
+        ),
+        l.isMatured
+          ? h(
+              "button",
+              {
+                class: "primary",
+                type: "button",
+                onclick: () => request({ kind: "unlock", lockId: l.id }),
+              },
+              "Unlock and collect",
+            )
+          : null,
+      ),
+    ),
+    form,
+    st.payouts.length
+      ? h(
+          "section",
+          { class: "card" },
+          h("strong", {}, "Recent payouts"),
+          h(
+            "ul",
+            { class: "signed" },
+            ...st.payouts.map((p) =>
+              h(
+                "li",
+                {},
+                h(
+                  "span",
+                  { class: "title" },
+                  `${p.kind === "claim" ? "Rewards" : p.kind === "unstake" ? "Unstake" : "Payout"} · ${tera(BigInt(p.principal_amount || "0") + BigInt(p.reward_amount || "0"))}`,
+                ),
+                h(
+                  "span",
+                  { class: "muted small" },
+                  `${p.status} · ${when(Date.parse(p.created_at))}`,
+                ),
+              ),
+            ),
+          ),
+        )
+      : null,
+  ].filter((part): part is HTMLElement => part !== null);
 }
 
 // ------------------------------------------------------------- receive ----

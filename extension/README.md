@@ -4,7 +4,8 @@ The Tera wallet as a browser extension: a wallet in the toolbar, and one
 that sites on Robinhood Chain can find (`window.ethereum` and EIP-6963) and
 ask to connect, with the owner deciding.
 
-**This version (0.4) is the wallet in the popup.** Click the toolbar icon:
+**This version (0.5) is the wallet in the popup, with swaps and staking.**
+Click the toolbar icon:
 
 - **Wallet**: the total value, and what the wallet holds (ETH, USDG, and any
   asset from Tera's registry with a balance), each with its dollar value.
@@ -18,6 +19,23 @@ ask to connect, with the owner deciding.
   site's request does, with the same simulation, fee cap and plain-words
   description, and a note when you've never sent to that address before.
   An unfinished send survives the popup closing.
+- **Swap**: buy or sell any asset in Tera's registry for USDG (TERA trades
+  against ETH), as in the app. The quote comes from Tera's API under Tera's
+  signed policy, and the app's own check (`android/src/proposals.ts`)
+  rebuilds every byte of every step on this computer; a quote that differs
+  is refused. The review shows what you pay, what you should get, the least
+  you can get after your slippage limit, the price impact (refused past 15%,
+  ticked past 5%), and each step by name. Approvals are for the exact
+  amount, never unlimited. Steps go out one at a time, each simulated just
+  before it's sent, and the next waits for the one before to confirm. A
+  quote over 90 seconds old is fetched again and shown before anything is
+  signed.
+- **Stake**: TERA, flexible or locked for 30, 45 or 90 days. The deposit is
+  checked to be exactly a TERA transfer of that amount to Tera's pool
+  (`core/staking.js`), and is remembered until Tera's service credits it.
+  Claiming, unstaking and unlocking sign a request that Tera's treasury then
+  pays out; the text is rebuilt here and anything else is refused unsigned
+  (`core/wallet-swap.js`).
 - **Receive**: the address and its QR code.
 - **Activity**: recent transactions with their status, and every signature.
 - **Settings**: connected sites, and removing the wallet.
@@ -25,8 +43,6 @@ ask to connect, with the owner deciding.
 Tera never stays unlocked, so there's nothing to lock on blur or after a
 timeout: every send and signature asks for the password, and the key is
 opened only for that one step.
-
-Swapping and staking come next.
 
 **Sites.** A connected site gets the wallet's address, can read the chain
 through it, and can ask for:
@@ -85,8 +101,9 @@ The rules are in `public/tera/core/dapp-connect.js` (which sites may connect,
 what each request is, wrong-password waits) and `public/tera/core/dapp-sign.js`
 (what a signature request asks and how risky it is) and
 `public/tera/core/dapp-send.js` (what a transaction does, and whether the
-wallet can pay for it) and `public/tera/core/wallet-send.js` (the popup's
-assets, amounts and recipients), each with its own test file in
+wallet can pay for it), `public/tera/core/wallet-send.js` (the popup's
+assets, amounts and recipients) and `public/tera/core/wallet-swap.js`
+(swap reviews and staking requests), each with its own test file in
 `tests/frontend/`.
 
 - The wallet is sealed with the owner's password exactly as the web app seals

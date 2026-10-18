@@ -122,3 +122,15 @@ test("a send is built as the review window will describe it", () => {
   assert.equal(described.title, "Send 5 USDG");
   assert.equal(described.rows.find(([label]) => label === "To")[1], BOB.toLowerCase());
 });
+
+test("an asset the registry says tracks ETH is priced as ETH", () => {
+  const WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73";
+  const assets = cleanRegistry(
+    [{ symbol: "WETH", name: "Wrapped Ether", address: WETH, decimals: 18, currency: "ETH" }],
+    pinned,
+  );
+  const [row] = holdings(assets, { [WETH]: "500000000000000000" }, { ETH: 2000 }).filter(
+    (r) => r.symbol === "WETH",
+  );
+  assert.equal(row.value, 1000);
+});

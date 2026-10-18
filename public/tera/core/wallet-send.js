@@ -11,7 +11,8 @@
 //   registry can't relabel USDG or ETH.
 //
 //   ETH and USDG are always listed; any other asset only once it has a
-//   balance. Holdings are sorted by dollar value, then by name.
+//   balance. Holdings are sorted by dollar value, then by name. An asset the
+//   registry says tracks ETH (WETH) is priced as ETH.
 //
 //   An amount is a plain decimal in the asset's own units, never more
 //   decimals than the asset has, never zero, never more than the balance.
@@ -43,6 +44,8 @@ export function cleanRegistry(entries, pinned = []) {
       name: typeof entry.name === "string" ? entry.name.slice(0, 60) : entry.symbol,
       address: lower(entry.address),
       decimals: entry.decimals,
+      // Priced as ETH when the registry says it tracks ETH (WETH).
+      ...(entry.currency === "ETH" ? { priceAs: "ETH" } : {}),
     };
     if (taken(asset)) continue;
     assets.push(asset);
@@ -62,7 +65,7 @@ export function holdings(assets, balances = {}, prices = {}) {
       const raw = balances[asset.address];
       const balance = raw === null || raw === undefined ? null : BigInt(raw);
       const amount = balance === null ? null : plainUnits(balance, asset.decimals);
-      const price = Number(prices[asset.symbol]);
+      const price = Number(prices[asset.priceAs ?? asset.symbol]);
       const value =
         amount !== null && Number.isFinite(price) && price >= 0 ? Number(amount) * price : null;
       return { ...asset, balance: balance === null ? null : balance.toString(), amount, value };
