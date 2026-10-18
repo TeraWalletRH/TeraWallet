@@ -74,6 +74,12 @@ for (const file of ["manifest.json", "popup.html", "approve.html", "popup.css", 
   await cp(join(src, file), join(out, file), { recursive: true });
 
 const manifest = JSON.parse(await readFile(join(src, "manifest.json"), "utf8"));
+// A test build says so wherever Chrome shows its name, and CI refuses to
+// package one (.github/workflows/extension.yml).
+if (process.env.TERA_EXTENSION_RPC) {
+  manifest.name = "Tera Wallet (TEST BUILD)";
+  await writeFile(join(out, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+}
 await writeFile(join(out, "VERSION"), `${manifest.version}\n`);
 console.log(
   `dist-extension/ built (Tera Wallet ${manifest.version})${process.env.TERA_EXTENSION_RPC ? ` TEST BUILD against ${process.env.TERA_EXTENSION_RPC}` : ""}`,

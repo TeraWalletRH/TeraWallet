@@ -51,6 +51,8 @@ type SendRequest = {
   tx: Tx;
   described: ReturnType<typeof describe>;
   fee?: { gas: string; maxFeePerGas: string; maxPriorityFeePerGas: string; maxFee: string };
+  // When the chain was read: a fee worked out minutes ago is worked out again.
+  preparedAt: number;
   // Set when the transaction can't go ahead: it would fail, or can't be paid for.
   blocked?: string;
 };
@@ -60,7 +62,11 @@ type Sent = {
   site: string;
   title: string;
   recipient: string;
-  status: "broadcasting" | "pending" | "confirmed" | "failed" | "unknown";
+  // Who sent it and with which nonce: a later transaction mined with the same
+  // nonce means this one never will be. Missing on entries from 0.3.0.
+  from?: string;
+  nonce?: number;
+  status: "broadcasting" | "pending" | "confirmed" | "failed" | "unknown" | "dropped";
 };
 
 // What typed-data explanations name: the tokens and contracts Tera knows.
@@ -187,8 +193,18 @@ async function handle(origin: string, request: { method: string; params?: unknow
     case "send": {
       const read = readTransaction(params, { accounts: accountsFor(sites, origin) });
       if (read.error) throw read.error;
+      cooling(origin);
       oneAtATime(origin);
-      return ask("send", origin, await prepare(read.tx as Tx));
+      // The site's place is held while the chain is read, so requests fired
+      // together can't all slip past oneAtATime and open a window each.
+      preparing.add(origin);
+      let prepared: SendRequest;
+      try {
+        prepared = await prepare(read.tx as Tx);
+      } finally {
+        preparing.delete(origin);
+      }
+      return ask("send", origin, prepared);
     }
     default:
       throw rpcError(ERRORS.unsupported, `Tera Wallet doesn't support ${method}.`);
@@ -205,8 +221,26 @@ type Approval = {
   reject: (error: RpcErr) => void;
   promise: Promise<unknown>;
   windowId?: number;
+  // Set while an approved request is being signed or sent, so closing the
+  // window then doesn't tell the site "declined" about something that went
+  // out, and a second Confirm can't send it twice.
+  busy?: boolean;
+  closed?: boolean;
 };
 const approvals = new Map<string, Approval>();
+const preparing = new Set<string>();
+// When each site was last declined. A site that asks again at once gets an
+// error, not another window in the owner's face.
+const declinedAt = new Map<string, number>();
+const COOL_DOWN = 10_000;
+
+function cooling(origin: string) {
+  if (Date.now() - (declinedAt.get(origin) ?? 0) < COOL_DOWN)
+    throw rpcError(
+      ERRORS.rejected,
+      "You just declined this site. It can ask again in a few seconds.",
+    );
+}
 
 function ask(kind: Approval["kind"], origin: string, request?: SignRequest | SendRequest) {
   const id = crypto.randomUUID();
@@ -231,18 +265,22 @@ function askToConnect(origin: string) {
   for (const approval of approvals.values())
     if (approval.kind === "connect" && approval.origin === origin)
       return approval.promise as Promise<string[]>;
+  cooling(origin);
   return ask("connect", origin) as Promise<string[]>;
 }
 
 // One signature or transaction at a time per site, so a page can't bury the
 // owner in windows.
 function oneAtATime(origin: string) {
+  if (preparing.has(origin))
+    throw rpcError(ERRORS.pending, "A request from this site is already open in Tera.");
   for (const approval of approvals.values())
     if (approval.kind !== "connect" && approval.origin === origin)
       throw rpcError(ERRORS.pending, "A request from this site is already open in Tera.");
 }
 
 function askToSign(origin: string, request: SignRequest) {
+  cooling(origin);
   oneAtATime(origin);
   return ask("sign", origin, request);
 }
@@ -280,6 +318,7 @@ function finish(id: string, result: unknown, error?: RpcErr) {
   const approval = approvals.get(id);
   if (!approval) return;
   approvals.delete(id);
+  if (error?.code === ERRORS.rejected) declinedAt.set(approval.origin, Date.now());
   if (error) approval.reject(error);
   else approval.resolve(result);
   if (approval.windowId !== undefined) chrome.windows.remove(approval.windowId).catch(() => {});
@@ -289,9 +328,24 @@ chrome.windows.onRemoved.addListener((windowId) => {
   for (const [id, approval] of approvals)
     if (approval.windowId === windowId) {
       approval.windowId = undefined;
-      finish(id, undefined, rpcError(ERRORS.rejected, "The request was declined."));
+      if (approval.busy) approval.closed = true;
+      else finish(id, undefined, rpcError(ERRORS.rejected, "The request was declined."));
     }
 });
+
+/** Runs an approved request once at a time; see Approval.busy. */
+async function exclusively<T>(id: string, approval: Approval, work: () => Promise<T>) {
+  if (approval.busy) return { error: "Tera is already working on this." };
+  approval.busy = true;
+  try {
+    return await work();
+  } finally {
+    approval.busy = false;
+    // The window was closed meanwhile and nothing finished the request.
+    if (approval.closed && approvals.has(id))
+      finish(id, undefined, rpcError(ERRORS.rejected, "The request was declined."));
+  }
+}
 
 // ----------------------------------------------------------- passwords ----
 
@@ -390,7 +444,7 @@ async function page(message: PageMessage) {
     }
     case "approval:connect": {
       const approval = approvals.get(String(message.id));
-      if (!approval) return { expired: true };
+      if (!approval || approval.kind !== "connect") return { expired: true };
       const tried = await tryPassword(String(message.password ?? ""));
       if (!tried.ok) return { error: tried.error };
       const accounts = [tried.vault.address];
@@ -401,40 +455,55 @@ async function page(message: PageMessage) {
       return { ok: true };
     }
     case "approval:sign": {
-      const approval = approvals.get(String(message.id));
-      if (!approval?.request) return { expired: true };
-      // The site may have been disconnected while the window was open.
-      if (!accountsFor((await load()).sites, approval.origin).length) {
-        finish(
-          String(message.id),
-          undefined,
-          rpcError(ERRORS.unauthorized, "The site was disconnected."),
-        );
-        return { expired: true };
-      }
-      const tried = await tryPassword(String(message.password ?? ""));
-      if (!tried.ok) return { error: tried.error };
-      const signature = await sign(tried.secret, approval.request as SignRequest);
-      await logSignature(approval.origin, approval.request as SignRequest, signature);
-      finish(String(message.id), signature);
-      return { ok: true };
+      const id = String(message.id);
+      const approval = approvals.get(id);
+      if (!approval || approval.kind !== "sign" || !approval.request) return { expired: true };
+      return exclusively(id, approval, async () => {
+        // The site may have been disconnected while the window was open.
+        if (!accountsFor((await load()).sites, approval.origin).length) {
+          finish(id, undefined, rpcError(ERRORS.unauthorized, "The site was disconnected."));
+          return { expired: true };
+        }
+        const tried = await tryPassword(String(message.password ?? ""));
+        if (!tried.ok) return { error: tried.error };
+        const request = approval.request as SignRequest;
+        const signature = await sign(tried.secret, request);
+        await logSignature(approval.origin, request, signature);
+        finish(id, signature);
+        return { ok: true };
+      });
     }
     case "approval:send": {
       const id = String(message.id);
       const approval = approvals.get(id);
-      const request = approval?.request as SendRequest | undefined;
-      if (!approval || approval.kind !== "send" || !request) return { expired: true };
-      if (request.blocked || !request.fee) return { error: request.blocked ?? "Can't send this." };
-      if (!accountsFor((await load()).sites, approval.origin).length) {
-        finish(id, undefined, rpcError(ERRORS.unauthorized, "The site was disconnected."));
-        return { expired: true };
-      }
-      const tried = await tryPassword(String(message.password ?? ""));
-      if (!tried.ok) return { error: tried.error };
-      const outcome = await send(tried.secret, approval.origin, request);
-      if (outcome.hash) finish(id, outcome.hash);
-      else finish(id, undefined, outcome.error);
-      return outcome.hash ? { ok: true } : { error: outcome.error?.message };
+      if (!approval || approval.kind !== "send" || !approval.request) return { expired: true };
+      return exclusively(id, approval, async () => {
+        let request = approval.request as SendRequest;
+        if (request.blocked || !request.fee)
+          return { error: request.blocked ?? "Can't send this." };
+        if (!accountsFor((await load()).sites, approval.origin).length) {
+          finish(id, undefined, rpcError(ERRORS.unauthorized, "The site was disconnected."));
+          return { expired: true };
+        }
+        // Open for over a minute: the fee and the simulation are redone. If
+        // it can't go ahead now, or would cost more, the owner sees why.
+        if (Date.now() - request.preparedAt > 60_000) {
+          const fresh = await prepare(request.tx);
+          approval.request = fresh;
+          if (fresh.blocked || !fresh.fee || maxFee(fresh) > maxFee(request))
+            return {
+              refreshed: true,
+              error: "Things changed while this was open. Check the new numbers and confirm again.",
+            };
+          request = fresh;
+        }
+        const tried = await tryPassword(String(message.password ?? ""));
+        if (!tried.ok) return { error: tried.error };
+        const outcome = await send(tried.secret, approval.origin, request);
+        if (outcome.hash) finish(id, outcome.hash);
+        else finish(id, undefined, outcome.error);
+        return outcome.hash ? { ok: true } : { error: outcome.error?.message };
+      });
     }
     case "approval:reject":
       finish(String(message.id), undefined, rpcError(ERRORS.rejected, "The request was declined."));
@@ -493,7 +562,10 @@ async function node(method: string, params: unknown[]) {
   });
   if (!response.ok) throw new Error(`Robinhood Chain answered HTTP ${response.status}.`);
   const body = await response.json();
-  if (body.error) throw Object.assign(new Error(body.error.message), body.error);
+  // Marked as the node's own answer, unlike a timeout or a dropped connection
+  // (a timeout's DOMException has a numeric code too).
+  if (body.error)
+    throw Object.assign(new Error(body.error.message), body.error, { fromNode: true });
   return body.result;
 }
 
@@ -518,10 +590,26 @@ const loadSent = async () =>
   ((await chrome.storage.local.get("transactions")).transactions as Sent[] | undefined) ?? [];
 const saveSent = (list: Sent[]) => chrome.storage.local.set({ transactions: list.slice(0, 50) });
 
+// ERC-721 contracts answer supportsInterface(0x80ac58cd) with true. Tokens
+// without ERC-165 revert, which reads as "not an NFT".
+async function isNft(contract: string) {
+  try {
+    const answer = await node("eth_call", [
+      { to: contract, data: "0x01ffc9a7" + "80ac58cd".padEnd(64, "0") },
+      "latest",
+    ]);
+    return typeof answer === "string" && answer.length >= 66 && BigInt(answer.slice(0, 66)) === 1n;
+  } catch {
+    return false;
+  }
+}
+
 /** Check the chain once and describe the transaction for the approval window. */
 async function prepare(tx: Tx): Promise<SendRequest> {
   const paid = (await loadSent()).map((sent) => sent.recipient);
-  const described = describe(tx, { tokens: TOKENS, spenders: SPENDERS, paid });
+  const nft = tx.data.startsWith("0x095ea7b3") && (await isNft(tx.to));
+  const described = describe(tx, { tokens: TOKENS, spenders: SPENDERS, paid, nft });
+  const preparedAt = Date.now();
   const call = { from: tx.from, to: tx.to, value: tx.value, data: tx.data };
   let balance: bigint;
   try {
@@ -530,6 +618,7 @@ async function prepare(tx: Tx): Promise<SendRequest> {
     return {
       tx,
       described,
+      preparedAt,
       blocked: `Couldn't reach Robinhood Chain (${String((error as Error).message || error)}).`,
     };
   }
@@ -537,6 +626,7 @@ async function prepare(tx: Tx): Promise<SendRequest> {
     return {
       tx,
       described,
+      preparedAt,
       blocked: `Not enough ETH. This sends ${formatEth(BigInt(tx.value))} ETH and the wallet has ${formatEth(balance)}.`,
     };
   // A transaction that would fail costs its fee and does nothing, so it's
@@ -547,6 +637,7 @@ async function prepare(tx: Tx): Promise<SendRequest> {
     return {
       tx,
       described,
+      preparedAt,
       blocked: `This transaction would fail: ${revertReason(error as Error)}.`,
     };
   }
@@ -556,7 +647,9 @@ async function prepare(tx: Tx): Promise<SendRequest> {
       node("eth_getBlockByNumber", ["latest", false]),
       node("eth_maxPriorityFeePerGas", []).catch(() => "0x0"),
     ]);
-    const gas = BigInt(gasHex);
+    // 20% headroom: the chain's L1 share of the cost moves between estimate
+    // and inclusion. Unused gas is refunded; the fee cap counts all of it.
+    const gas = (BigInt(gasHex) * 12n) / 10n;
     const tip = BigInt(tipHex);
     // As viem estimates fees for the app: the base fee with 20% headroom, plus the tip.
     const maxFeePerGas = (BigInt(block.baseFeePerGas ?? "0x0") * 12n) / 10n + tip;
@@ -567,15 +660,19 @@ async function prepare(tx: Tx): Promise<SendRequest> {
       maxPriorityFeePerGas: tip.toString(),
       maxFee: formatEth(checked.maxFee),
     };
-    return { tx, described, fee, blocked: checked.error };
+    return { tx, described, preparedAt, fee, blocked: checked.error };
   } catch (error) {
     return {
       tx,
       described,
+      preparedAt,
       blocked: `Couldn't work out the network fee (${String((error as Error).message || error)}). Try again in a moment.`,
     };
   }
 }
+
+const maxFee = (request: SendRequest) =>
+  request.fee ? BigInt(request.fee.gas) * BigInt(request.fee.maxFeePerGas) : 0n;
 
 /** Sign, record, broadcast once. Never retried: a node may have accepted it. */
 async function send(
@@ -607,6 +704,8 @@ async function send(
     site: origin,
     title: described.title,
     recipient,
+    from: tx.from,
+    nonce,
     status: "broadcasting",
   };
   await saveSent([entry, ...(await loadSent())]);
@@ -615,9 +714,9 @@ async function send(
   try {
     await node("eth_sendRawTransaction", [serialized]);
   } catch (error) {
-    const e = error as { code?: number; message?: string };
+    const e = error as { fromNode?: boolean; message?: string };
     // The node said no outright: nothing was sent.
-    if (typeof e.code === "number") {
+    if (e.fromNode) {
       await mark("failed");
       return { error: rpcError(ERRORS.internal, `Robinhood Chain refused it: ${e.message}`) };
     }
@@ -636,24 +735,48 @@ async function send(
   return { hash };
 }
 
-/** Recent transactions, with any that were pending checked against the chain. */
+const OPEN: Sent["status"][] = ["broadcasting", "pending", "unknown"];
+
+/** Recent transactions, with any still open checked against the chain. */
 async function refreshSent() {
   const list = await loadSent();
-  const open = list.filter((sent) => sent.status === "pending" || sent.status === "unknown");
+  const open = list.filter((sent) => OPEN.includes(sent.status));
   if (!open.length) return list;
-  const receipts = await Promise.all(
-    open.map((sent) => node("eth_getTransactionReceipt", [sent.hash]).catch(() => null)),
+  const senders = [...new Set(open.flatMap((sent) => (sent.from ? [sent.from] : [])))];
+  const [receipts, counts] = await Promise.all([
+    Promise.all(
+      open.map((sent) => node("eth_getTransactionReceipt", [sent.hash]).catch(() => null)),
+    ),
+    Promise.all(
+      senders.map((address) =>
+        node("eth_getTransactionCount", [address, "latest"])
+          .then((count) => Number(BigInt(count)))
+          .catch(() => null),
+      ),
+    ),
+  ]);
+  const mined = new Map(senders.map((address, i) => [address, counts[i]]));
+  const changed = new Map<string, Sent["status"]>();
+  open.forEach((sent, i) => {
+    const receipt = receipts[i];
+    const count = sent.from ? mined.get(sent.from) : null;
+    const status: Sent["status"] = receipt
+      ? receipt.status === "0x1"
+        ? "confirmed"
+        : "failed"
+      : sent.nonce !== undefined && typeof count === "number" && count > sent.nonce
+        ? "dropped" // another transaction took its nonce
+        : sent.status === "broadcasting" && Date.now() - sent.at > 120_000
+          ? "unknown" // the worker stopped mid-broadcast
+          : sent.status;
+    if (status !== sent.status) changed.set(sent.hash, status);
+  });
+  if (!changed.size) return list;
+  // Read again and change only these entries: a send may have updated the
+  // list while the chain was being asked.
+  const next = (await loadSent()).map((sent) =>
+    changed.has(sent.hash) ? { ...sent, status: changed.get(sent.hash)! } : sent,
   );
-  const status = new Map(
-    open.map((sent, i) => [
-      sent.hash,
-      receipts[i] ? (receipts[i].status === "0x1" ? "confirmed" : "failed") : sent.status,
-    ]),
-  );
-  const next = list.map((sent) => ({
-    ...sent,
-    status: (status.get(sent.hash) ?? sent.status) as Sent["status"],
-  }));
   await saveSent(next);
   return next;
 }

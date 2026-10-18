@@ -156,3 +156,46 @@ test("raw-hash signing and transactions are refused with reasons", () => {
   assert.match(refusal("eth_signTransaction").message, /eth_sendTransaction only/);
   assert.equal(signRequest("eth_sign", [ME, "0x00"], site).error.code, ERRORS.unsupported);
 });
+
+test("typed data whose EIP712Domain type leaves out part of the domain is refused", () => {
+  const fields = permit.types.EIP712Domain;
+  for (const dropped of ["chainId", "verifyingContract"]) {
+    const sneaky = {
+      ...permit,
+      types: { ...permit.types, EIP712Domain: fields.filter((f) => f.name !== dropped) },
+    };
+    const r = signRequest("eth_signTypedData_v4", [ME, sneaky], site);
+    assert.equal(r.error.code, ERRORS.invalidParams);
+    assert.match(r.error.message, new RegExp(dropped));
+  }
+  const broken = { ...permit, types: { ...permit.types, EIP712Domain: "name" } };
+  assert.equal(
+    signRequest("eth_signTypedData_v4", [ME, broken], site).error.code,
+    ERRORS.invalidParams,
+  );
+});
+
+test("typed data tied to no chain is never low risk", () => {
+  const { chainId, ...domain } = permit.domain;
+  void chainId;
+  const unbound = {
+    types: { Note: [{ name: "text", type: "string" }] },
+    primaryType: "Note",
+    domain,
+    message: { text: "hello" },
+  };
+  const r = signRequest("eth_signTypedData_v4", [ME, unbound], site);
+  assert.notEqual(r.danger, "low");
+  assert.ok(r.warnings.some((w) => /isn't tied to any network/.test(w)));
+});
+
+test("text with characters that reverse or hide it isn't treated as readable", () => {
+  for (const hidden of ["‮", "​", "⁦", "﻿"]) {
+    const text = `Sign in to app.example${hidden}moc.live`;
+    assert.equal(readMessage(text).readable, false);
+    assert.equal(readMessage(hex(text)).readable, false);
+    const r = signRequest("personal_sign", [text, ME], site);
+    assert.equal(r.danger, "unknown");
+  }
+  assert.equal(readMessage("Line one\nLine two\ttabbed").readable, true);
+});

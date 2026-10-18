@@ -48,6 +48,8 @@ jobs:
         run: bun run build:extension
       - name: Package
         run: |
+          # Never package a test build (TERA_EXTENSION_RPC): it talks to one test node.
+          grep -q '"name": "Tera Wallet",' dist-extension/manifest.json
           version=$(cat dist-extension/VERSION)
           (cd dist-extension && zip -qr "../tera-wallet-$version.extension.zip" .)
           echo "VERSION=$version" >> "$GITHUB_ENV"

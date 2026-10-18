@@ -20,7 +20,9 @@
 //
 //   Typed data (eth_signTypedData_v3/v4) is explained by core/typed-data.js:
 //   permits in red, anything unrecognised as unknown, never as safe. A
-//   request for another chain is refused outright, not just flagged.
+//   request for another chain is refused outright, not just flagged, and so
+//   is one whose EIP712Domain type leaves out part of the domain shown. One
+//   tied to no chain at all is unknown.
 //
 //   Raw-hash signing (eth_sign) is refused: nothing about it can be shown.
 //
@@ -60,19 +62,24 @@ export function refusal(method) {
  */
 export function readMessage(message) {
   const value = String(message ?? "");
-  if (!HEX.test(value) || value === "0x") return { text: value, sign: value, readable: true };
+  if (!HEX.test(value) || value === "0x")
+    return { text: value, sign: value, readable: plain(value) };
   const bytes = Uint8Array.from(value.slice(2).match(/../g) || [], (b) => parseInt(b, 16));
   try {
     const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-    // Control characters other than line breaks and tabs mean it isn't text.
-
-    if (!/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(text))
-      return { text, sign: { raw: value }, readable: true };
+    if (plain(text)) return { text, sign: { raw: value }, readable: true };
   } catch {
     // Not UTF-8: shown as hex below.
   }
   return { text: value, sign: { raw: value }, readable: false };
 }
+
+// Control characters other than line breaks and tabs, and characters that
+// reverse or hide text, mean it isn't plainly readable: what's shown could
+// read differently from what's signed.
+const HIDDEN =
+  /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/;
+const plain = (text) => !HIDDEN.test(text);
 
 /** The fields of a Sign-In with Ethereum (EIP-4361) message, or null when it isn't one. */
 export function signIn(text) {
@@ -195,15 +202,38 @@ export function signRequest(method, params, context) {
         ),
       };
   }
+  // A site's own EIP712Domain type decides what of the domain is signed. A
+  // field it leaves out is shown but not signed: drop chainId and the
+  // signature works on every chain.
+  const declared = typed.types.EIP712Domain;
+  if (declared !== undefined) {
+    if (!Array.isArray(declared))
+      return { error: rpcError(ERRORS.invalidParams, "EIP712Domain must be a list of fields.") };
+    const named = new Set(declared.map((field) => field?.name));
+    const left = Object.keys(typed.domain ?? {}).filter((key) => !named.has(key));
+    if (left.length)
+      return {
+        error: rpcError(
+          ERRORS.invalidParams,
+          `This request leaves ${left.join(", ")} out of what actually gets signed, so the signature wouldn't match what Tera shows you.`,
+        ),
+      };
+  }
   const explained = explain(typed, { chainId: CHAIN_ID, owner: signer, tokens, spenders });
+  const unbound = domainChain === undefined || domainChain === null;
   return {
     kind: "typed",
     address: accounts.find((a) => lower(a) === lower(signer)),
     typed,
     explained,
-    danger: explained.danger,
+    danger: unbound && explained.danger === "low" ? "unknown" : explained.danger,
     title: explained.title,
-    warnings: explained.warnings,
+    warnings: unbound
+      ? [
+          ...explained.warnings,
+          "This signature isn't tied to any network, so it could be used on other chains too.",
+        ]
+      : explained.warnings,
   };
 }
 
