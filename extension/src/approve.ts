@@ -42,7 +42,7 @@ const id = new URLSearchParams(location.search).get("id") || "";
 // keeps it awake so the site's request isn't dropped.
 setInterval(() => void ask({ type: "ping" }), 20_000);
 
-async function render() {
+async function render(notice?: string) {
   const approval = await ask<Approval>({ type: "approval:get", id });
   if (approval.expired) {
     root.replaceChildren(
@@ -58,7 +58,7 @@ async function render() {
     return;
   }
   if (approval.kind === "send" && approval.request)
-    return renderSend(approval.origin!, approval.request as SendRequest);
+    return renderSend(approval.origin!, approval.request as SendRequest, notice);
   if (approval.kind === "sign" && approval.request)
     return renderSign(approval.origin!, approval.request as SignRequest);
   const origin = approval.origin!;
@@ -129,6 +129,8 @@ function decide(label: string, type: string, gate?: HTMLInputElement) {
         const answer = await ask({ type, id, password: password.value });
         go.disabled = false;
         if (answer?.expired) return render();
+        // The chain was read again and the numbers changed: shown afresh.
+        if (answer?.refreshed) return render(answer.error);
         if (answer?.error) {
           password.select();
           return status.append(errorBox(answer.error));
@@ -250,14 +252,14 @@ function renderSign(origin: string, request: SignRequest) {
 
 const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
 
-function renderSend(origin: string, request: SendRequest) {
+function renderSend(origin: string, request: SendRequest, notice?: string) {
   const { described, fee, blocked, tx } = request;
   const tone =
     described.danger === "high"
       ? h(
           "p",
           { class: "danger", role: "alert" },
-          described.kind === "approve-all" || described.kind === "approve"
+          ["approve", "approve-all", "approve-nft"].includes(described.kind)
             ? "Gives away spending power"
             : "High risk",
         )
@@ -305,6 +307,7 @@ function renderSend(origin: string, request: SendRequest) {
       ),
     ),
   ];
+  if (notice) head.push(errorBox(notice));
   if (blocked) {
     root.replaceChildren(
       ...head,

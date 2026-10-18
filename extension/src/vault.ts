@@ -14,7 +14,7 @@ const hex = (bytes: Uint8Array) =>
   Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 const unhex = (text: string) => Uint8Array.from(text.match(/../g) || [], (b) => parseInt(b, 16));
 
-export const MIN_PASSWORD = 6;
+export const MIN_PASSWORD = 8;
 
 /** Seal `secret` under `password`. Throws with a readable message if either is unusable. */
 export async function createVault(secret: string, password: string): Promise<Vault> {

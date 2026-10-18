@@ -28,7 +28,10 @@ test("only a connected site, from its address, on Robinhood Chain", () => {
     readTransaction([{ to: BOB, chainId: "0x1" }], { accounts: [ME] }).error.code,
     ERRORS.invalidParams,
   );
-  assert.equal(readTransaction([{ to: BOB, chainId: "0x1237" }], { accounts: [ME] }).tx.to, BOB);
+  assert.equal(
+    readTransaction([{ to: BOB, chainId: "0x1237" }], { accounts: [ME] }).tx.to,
+    BOB.toLowerCase(),
+  );
 });
 
 test("contract creation and malformed fields are refused", () => {
@@ -64,7 +67,12 @@ test("the site's gas and fee suggestions are dropped; from defaults to the conne
     ],
     { accounts: [ME] },
   );
-  assert.deepEqual(read, { from: ME, to: BOB, value: "0xde0b6b3a7640000", data: "0xabcd" });
+  assert.deepEqual(read, {
+    from: ME,
+    to: BOB.toLowerCase(),
+    value: "0xde0b6b3a7640000",
+    data: "0xabcd",
+  });
 });
 
 test("ETH amounts read plainly", () => {
@@ -156,4 +164,24 @@ test("fees: capped at 0.001 ETH, and the wallet must cover amount plus fee", () 
       .error,
     /Not enough ETH/,
   );
+});
+
+test("the recipient is lowercased, so a bad checksum can't fail after the password", () => {
+  const read = readTransaction([{ to: "0x5FC5360D0400a0fd4f2af552add042d716f1d168" }], {
+    accounts: [ME],
+  });
+  assert.equal(read.tx.to, USDG);
+});
+
+test("approving one NFT is red; approving the zero address is the NFT revoke", () => {
+  const nftTx = (spender) => tx({ to: USDG, data: call("0x095ea7b3", spender, "0x0") });
+  const handOver = describe(nftTx(BOB), { nft: true });
+  assert.equal(handOver.kind, "approve-nft");
+  assert.equal(handOver.danger, "high");
+  assert.match(handOver.title, /item #0/);
+  const removed = describe(nftTx("0x" + "0".repeat(40)), { nft: true });
+  assert.equal(removed.kind, "revoke");
+  assert.equal(removed.danger, "low");
+  // The same bytes on a token are the ERC-20 revoke.
+  assert.equal(describe(nftTx(BOB), { tokens }).kind, "revoke");
 });

@@ -104,7 +104,9 @@ export function readTransaction(params, { accounts = [] } = {}) {
   return {
     tx: {
       from: accounts.find((a) => lower(a) === lower(from)),
-      to: request.to,
+      // Lowercase: viem refuses a mixed-case address with a bad checksum,
+      // which would only show up after the owner typed their password.
+      to: lower(request.to),
       value: `0x${BigInt(value).toString(16)}`,
       data: lower(data),
     },
@@ -117,7 +119,8 @@ const wordNumber = (data, index) => BigInt(`0x${word(data, index) || "0"}`);
 
 /**
  * What a transaction does, in words.
- * context: { owner, tokens: {address: {symbol, decimals}}, spenders: {address: name}, paid: [address] }
+ * context: { owner, tokens: {address: {symbol, decimals}}, spenders: {address: name}, paid: [address],
+ *            nft (true when tx.to says it's an ERC-721 collection) }
  * Returns { kind, danger: "low" | "unknown" | "high", title, rows: [[label, value]], warnings }.
  */
 export function describe(tx, context = {}) {
@@ -168,6 +171,18 @@ export function describe(tx, context = {}) {
         `${short(tx.to)} isn't a token Tera knows, so the amount is shown in base units.`,
       );
     return done("transfer", token ? "low" : "unknown", `Send ${amountOf(amount)}`);
+  }
+  // ERC-721 shares approve's selector, with an item instead of an amount:
+  // approve(spender, 0) hands over item #0, it doesn't revoke anything.
+  if (selector === SELECTORS.approve && context.nft && words >= 2) {
+    const spender = wordAddress(data, 0);
+    const item = wordNumber(data, 1);
+    rows.push(["Spender", who(spender)], ["Item", `#${item}`], ["Collection", short(tx.to)]);
+    // For NFTs, revoking is approving the zero address.
+    if (/^0x0{40}$/.test(spender))
+      return done("revoke", "low", `Remove the permission on item #${item}`);
+    warnings.push(`This lets ${who(spender)} take item #${item} from this collection.`);
+    return done("approve-nft", "high", `This lets ${who(spender)} take item #${item}`);
   }
   if ((selector === SELECTORS.approve || selector === SELECTORS.increaseAllowance) && words >= 2) {
     const spender = wordAddress(data, 0);

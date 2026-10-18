@@ -21,6 +21,7 @@ const STATUS: Record<string, string> = {
   confirmed: "Confirmed",
   failed: "Failed",
   unknown: "Not confirmed: check before retrying",
+  dropped: "Dropped: never confirmed",
 };
 
 function sentList(transactions: Sent[]) {

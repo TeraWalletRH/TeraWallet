@@ -331,7 +331,8 @@ a.tx:hover .title {
   text-decoration: underline;
 }
 .status-failed,
-.status-unknown {
+.status-unknown,
+.status-dropped {
   color: var(--danger);
 }
 .status-confirmed {

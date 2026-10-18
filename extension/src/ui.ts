@@ -83,7 +83,7 @@ export function setupForm(done: () => void) {
       },
     },
     h("label", {}, "Recovery phrase or private key", secret),
-    h("label", {}, "Password for this browser (6+ characters)", password),
+    h("label", {}, "Password for this browser (8+ characters)", password),
     h("label", {}, "Password again", repeat),
     status,
     submit,

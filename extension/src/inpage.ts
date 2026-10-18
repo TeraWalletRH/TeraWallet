@@ -155,7 +155,8 @@ if (!("ethereum" in window)) {
   Object.defineProperty(window, "ethereum", {
     value: provider,
     configurable: true,
-    writable: false,
+    // Writable, so a wallet whose script runs after Tera's can still take it.
+    writable: true,
   });
   window.dispatchEvent(new Event("ethereum#initialized"));
 }
