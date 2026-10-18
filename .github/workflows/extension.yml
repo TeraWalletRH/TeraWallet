@@ -8,6 +8,10 @@ on:
       - "android/src/crypto.ts"
       - "android/src/kdf.web.ts"
       - "android/src/config.ts"
+      - "android/src/policy.ts"
+      - "android/src/proposals.ts"
+      - "android/src/validation.ts"
+      - "android/src/core.ts"
       - "scripts/build-extension.ts"
       - ".github/workflows/extension.yml"
   pull_request:
@@ -41,7 +45,7 @@ jobs:
       - run: bun install --frozen-lockfile
         working-directory: android
       - name: Rules
-        run: node --test tests/frontend/dapp-connect.test.js tests/frontend/dapp-sign.test.js tests/frontend/dapp-send.test.js tests/frontend/wallet-send.test.js tests/frontend/max-amount.test.js tests/frontend/poisoning.test.js tests/frontend/typed-data.test.js tests/frontend/signature-log.test.js tests/frontend/rpc-rotation.test.js
+        run: node --test tests/frontend/dapp-connect.test.js tests/frontend/dapp-sign.test.js tests/frontend/dapp-send.test.js tests/frontend/wallet-send.test.js tests/frontend/wallet-swap.test.js tests/frontend/staking.test.js tests/frontend/price-impact.test.js tests/frontend/max-amount.test.js tests/frontend/poisoning.test.js tests/frontend/typed-data.test.js tests/frontend/signature-log.test.js tests/frontend/rpc-rotation.test.js
       - name: Types
         run: bunx tsc --noEmit -p extension
       - name: Build

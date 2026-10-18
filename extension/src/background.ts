@@ -32,6 +32,7 @@ import {
   describe,
   feeCheck,
   formatEth,
+  formatUnits,
   readTransaction,
 } from "../../public/tera/core/dapp-send.js";
 import { keccak256 } from "viem";
@@ -47,6 +48,28 @@ import {
   toUnits,
 } from "../../public/tera/core/wallet-send.js";
 import { API, PUBLIC_RPCS, RPC, sources } from "../../android/src/config";
+import {
+  PERMIT2,
+  stakingSignature,
+  stepLabel,
+  swapPair,
+  swapReview,
+  tradable,
+} from "../../public/tera/core/wallet-swap.js";
+import {
+  activeEpoch,
+  addPending,
+  creditOutcome,
+  creditRequest,
+  depositIssue,
+  fixedReward,
+  flexibleApr,
+  pendingFor,
+  resolvePending,
+} from "../../public/tera/core/staking.js";
+import { isSlippageBps } from "../../public/tera/core/slippage.js";
+import { policyFor } from "../../android/src/policy";
+import { proposalVerdicts, verifyProposal } from "../../android/src/proposals";
 import { createVault, openSecret, signer, type Vault } from "./vault";
 import { OWN } from "./shared";
 
@@ -64,7 +87,32 @@ type SendRequest = {
   preparedAt: number;
   // Set when the transaction can't go ahead: it would fail, or can't be paid for.
   blocked?: string;
+  // A stake: remembered once sent, until Tera's service credits it.
+  stake?: { kind: "fixed" | "flexible"; termDays?: number; epochId?: string; amount: string };
 };
+// A swap as the review window shows it: Tera's proposal, checked on this
+// device by android/src/proposals.ts, and the steps it comes down to.
+type SwapRequest = {
+  params: { asset: string; side: "BUY" | "SELL"; amount: string; slippageBps: number };
+  proposal: unknown;
+  steps: { to: string; data: string; value: string }[];
+  labels: string[];
+  review: ReturnType<typeof swapReview>;
+  checks: string;
+  preparedAt: number;
+  // Set while the steps go out, for the window to show.
+  progress?: string;
+  blocked?: string;
+};
+// A claim, unstake or unlock: text Tera's service has the wallet sign,
+// checked against the text expected for it, and where the signature goes.
+type StakeSignRequest = {
+  title: string;
+  rows: [string, string][];
+  message: string;
+  submit: { path: string; body: Record<string, unknown> };
+};
+type AnyRequest = SignRequest | SendRequest | SwapRequest | StakeSignRequest;
 type Sent = {
   hash: string;
   at: number;
@@ -80,7 +128,7 @@ type Sent = {
 
 // What explanations name: the tokens and contracts Tera knows. Tokens are
 // the wallet's own (USDG, ETH) plus Tera's registry once it has been read.
-type Asset = { symbol: string; name: string; address: string; decimals: number };
+type Asset = { symbol: string; name: string; address: string; decimals: number; priceAs?: string };
 const PINNED: Asset[] = sources.map((s) => ({
   symbol: s.symbol,
   name: s.symbol === "ETH" ? "Ether" : "Global Dollar",
@@ -237,9 +285,9 @@ async function handle(origin: string, request: { method: string; params?: unknow
 // ------------------------------------------------------------ approvals ----
 
 type Approval = {
-  kind: "connect" | "sign" | "send";
+  kind: "connect" | "sign" | "send" | "swap" | "stake-sign";
   origin: string;
-  request?: SignRequest | SendRequest;
+  request?: AnyRequest;
   resolve: (value: unknown) => void;
   reject: (error: RpcErr) => void;
   promise: Promise<unknown>;
@@ -265,7 +313,7 @@ function cooling(origin: string) {
     );
 }
 
-function ask(kind: Approval["kind"], origin: string, request?: SignRequest | SendRequest) {
+function ask(kind: Approval["kind"], origin: string, request?: AnyRequest) {
   const id = crypto.randomUUID();
   let resolve!: Approval["resolve"];
   let reject!: Approval["reject"];
@@ -419,6 +467,13 @@ type PageMessage = {
   asset?: unknown;
   to?: unknown;
   amount?: unknown;
+  side?: unknown;
+  slippageBps?: unknown;
+  term?: unknown;
+  kind?: unknown;
+  epochId?: unknown;
+  lockId?: unknown;
+  consent?: unknown;
 };
 
 async function page(message: PageMessage) {
@@ -466,6 +521,39 @@ async function page(message: PageMessage) {
       return balances();
     case "wallet:send":
       return walletSend(message);
+    case "wallet:swap":
+      return walletSwap(message);
+    case "wallet:staking":
+      return staking();
+    case "wallet:stake":
+      return walletStake(message);
+    case "wallet:stake-sign":
+      return walletStakeSign(message);
+    case "approval:swap": {
+      const id = String(message.id);
+      const approval = approvals.get(id);
+      if (!approval || approval.kind !== "swap" || !approval.request) return { expired: true };
+      return exclusively(id, approval, () => runSwap(id, approval, message));
+    }
+    case "approval:stake-sign": {
+      const id = String(message.id);
+      const approval = approvals.get(id);
+      if (!approval || approval.kind !== "stake-sign" || !approval.request)
+        return { expired: true };
+      return exclusively(id, approval, async () => {
+        const request = approval.request as StakeSignRequest;
+        const tried = await tryPassword(String(message.password ?? ""));
+        if (!tried.ok) return { error: tried.error };
+        const signature = await signer(tried.secret).signMessage({ message: request.message });
+        try {
+          await api(request.submit.path, { ...request.submit.body, signature });
+        } catch (error) {
+          return { error: String((error as Error).message || error) };
+        }
+        finish(id, signature);
+        return { ok: true };
+      });
+    }
     case "approval:get": {
       const approval = approvals.get(String(message.id));
       if (!approval) return { expired: true };
@@ -536,6 +624,7 @@ async function page(message: PageMessage) {
         const tried = await tryPassword(String(message.password ?? ""));
         if (!tried.ok) return { error: tried.error };
         const outcome = await send(tried.secret, approval.origin, request);
+        if (outcome.hash && request.stake) await rememberStake(request.stake, outcome.hash);
         if (outcome.hash) finish(id, outcome.hash);
         else finish(id, undefined, outcome.error);
         return outcome.hash ? { ok: true } : { error: outcome.error?.message };
@@ -821,13 +910,20 @@ async function refreshSent() {
 
 // Tera's asset registry and prices, from the same API the app uses. Neither
 // request says which wallet is asking; balances come from the chain.
-async function api(path: string) {
+async function api(path: string, body?: unknown) {
   if (!API.startsWith("https://")) throw new Error("HTTPS is required.");
-  const response = await fetch(`${API}${path}`, { signal: AbortSignal.timeout(10_000) });
-  const body = await response.json();
-  if (!response.ok || body.success === false)
-    throw new Error(`Tera answered HTTP ${response.status}.`);
-  return body;
+  const response = await fetch(`${API}${path}`, {
+    method: body === undefined ? "GET" : "POST",
+    headers: body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    signal: AbortSignal.timeout(25_000),
+  });
+  const answer = await response.json().catch(() => ({}));
+  if (!response.ok || answer.success === false)
+    throw new Error(
+      typeof answer.error === "string" ? answer.error : `Tera answered HTTP ${response.status}.`,
+    );
+  return answer;
 }
 
 const HOUR = 3_600_000;
@@ -945,6 +1041,460 @@ async function walletSend(message: PageMessage) {
   // The review window decides; the popup has usually closed by then.
   ask("send", OWN, prepared).catch(() => {});
   return { ok: true };
+}
+
+// ----------------------------------------------------------------- swap ----
+
+const units = (text: unknown, decimals: number) => toUnits(text, decimals);
+
+/** Ask Tera for a swap, check it on this device, and describe it. */
+async function prepareSwap(owner: string, params: SwapRequest["params"]): Promise<SwapRequest> {
+  const assets = await registry();
+  const asset = tradable(assets).find((a: Asset) => a.address === params.asset);
+  if (!asset) throw new Error("Pick an asset to swap.");
+  const pair = swapPair(asset, params.side, assets);
+  if (!pair) throw new Error("This swap isn't offered.");
+  const amount = units(params.amount, pair.pay.decimals);
+  if (amount.error) throw new Error(amount.error);
+  const intent = {
+    ownerAddress: owner,
+    accountAddress: owner,
+    assetAddress: asset.address,
+    actionType: params.side,
+    amount: amount.units!.toString(),
+    slippageBps: params.slippageBps,
+  };
+  // Tera's signed policy, checked on this device (android/src/policy.ts).
+  const checked = await policyFor(intent);
+  const result = await api("/api/intent/prepare", checked);
+  const proposal = { ...result, intent: checked, createdAt: Date.now() };
+  // Every step rebuilt and compared here; a proposal that differs is refused.
+  const steps = verifyProposal(proposal, owner);
+  const quote = proposal.preparedTransaction.quote;
+  const price = (await prices()).prices[pair.pay.priceAs ?? pair.pay.symbol];
+  const payUsd =
+    typeof price === "number" ? (Number(amount.units) / 10 ** pair.pay.decimals) * price : null;
+  const review = swapReview({
+    units: amount.units!,
+    quote,
+    pay: pair.pay,
+    receive: pair.receive,
+    slippageBps: params.slippageBps,
+    payUsd,
+  });
+  const balance = await balanceOf(pair.pay, owner);
+  const short = checkAmount({
+    units: amount.units,
+    balance,
+    symbol: pair.pay.symbol,
+    decimals: pair.pay.decimals,
+  });
+  // The first step is simulated now; later ones need the step before them on
+  // chain first, so each is simulated just before it's sent.
+  let blocked = review.blocked ?? short ?? undefined;
+  if (!blocked) {
+    const first = steps[0];
+    try {
+      await node("eth_call", [
+        {
+          from: owner,
+          to: first.to,
+          data: first.data,
+          value: `0x${BigInt(first.value).toString(16)}`,
+        },
+        "latest",
+      ]);
+    } catch (error) {
+      blocked = `This swap would fail: ${revertReason(error as Error)}.`;
+    }
+  }
+  return {
+    params,
+    proposal,
+    steps: steps.map((step) => ({ to: step.to, data: step.data, value: String(step.value) })),
+    labels: steps.map((step) =>
+      stepLabel(step, { pay: pair.pay, spenders: { ...SPENDERS, [PERMIT2]: "Permit2" } }),
+    ),
+    review,
+    checks: proposalVerdicts(proposal, owner).summary.line,
+    preparedAt: Date.now(),
+    ...(blocked ? { blocked } : {}),
+  };
+}
+
+async function walletSwap(message: PageMessage) {
+  const { vault } = await load();
+  if (!vault) return { error: "There's no wallet in this browser yet." };
+  const side = message.side === "SELL" ? "SELL" : message.side === "BUY" ? "BUY" : null;
+  const slippageBps = Number(message.slippageBps);
+  if (!side) return { error: "Choose Buy or Sell." };
+  if (!isSlippageBps(slippageBps)) return { error: "Pick a slippage limit from 0.1% to 5%." };
+  oneAtATime(OWN);
+  preparing.add(OWN);
+  let request: SwapRequest;
+  try {
+    request = await prepareSwap(vault.address, {
+      asset: String(message.asset ?? "").toLowerCase(),
+      side,
+      amount: String(message.amount ?? "").trim(),
+      slippageBps,
+    });
+  } catch (error) {
+    return { error: String((error as Error).message || error) };
+  } finally {
+    preparing.delete(OWN);
+  }
+  ask("swap", OWN, request).catch(() => {});
+  return { ok: true };
+}
+
+const QUOTE_LIFE = 90_000;
+
+/** Wait for a step to be mined, keeping the worker awake meanwhile. */
+async function receiptOf(hash: string, timeout = 90_000) {
+  const until = Date.now() + timeout;
+  while (Date.now() < until) {
+    const receipt = await node("eth_getTransactionReceipt", [hash]).catch(() => null);
+    if (receipt) return receipt;
+    // An extension call resets Chrome's idle timer for this worker.
+    await chrome.runtime.getPlatformInfo();
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+  }
+  return null;
+}
+
+/** The approved swap: each step checked, simulated, signed and sent in turn. */
+async function runSwap(id: string, approval: Approval, message: PageMessage) {
+  let request = approval.request as SwapRequest;
+  if (request.blocked) return { error: request.blocked };
+  if (request.review.consent && message.consent !== true)
+    return { error: "Tick that you accept the price impact first." };
+  const { vault } = await load();
+  if (!vault) return { error: "There's no wallet in this browser yet." };
+  // A quote over 90 seconds old is fetched again and shown before anything is signed.
+  if (Date.now() - request.preparedAt > QUOTE_LIFE) {
+    try {
+      approval.request = await prepareSwap(vault.address, request.params);
+    } catch (error) {
+      return { error: String((error as Error).message || error) };
+    }
+    return {
+      refreshed: true,
+      error: "The quote expired, so here's a fresh one. Check the numbers and confirm again.",
+    };
+  }
+  const tried = await tryPassword(String(message.password ?? ""));
+  if (!tried.ok) return { error: tried.error };
+  // Checked again at the moment of signing: the quote's age and every byte.
+  try {
+    verifyProposal(request.proposal, vault.address);
+  } catch (error) {
+    return { error: String((error as Error).message || error) };
+  }
+  let hash = "";
+  for (let index = 0; index < request.steps.length; index++) {
+    const step = request.steps[index];
+    const last = index === request.steps.length - 1;
+    request = {
+      ...request,
+      progress: `Step ${index + 1} of ${request.steps.length}: ${request.labels[index]}…`,
+    };
+    approval.request = request;
+    const prepared = await prepare({
+      from: vault.address,
+      to: step.to.toLowerCase(),
+      value: `0x${BigInt(step.value).toString(16)}`,
+      data: step.data.toLowerCase(),
+    });
+    if (prepared.blocked) {
+      approval.request = { ...request, progress: undefined };
+      return {
+        error: index
+          ? `Step ${index + 1} stopped before sending: ${prepared.blocked} The approval before it went through; nothing else was sent.`
+          : prepared.blocked,
+      };
+    }
+    prepared.described = {
+      ...prepared.described,
+      title: last ? request.review.title : `Approval for swap: ${request.labels[index]}`,
+    };
+    const outcome = await send(tried.secret, OWN, prepared);
+    if (!outcome.hash) {
+      approval.request = { ...request, progress: undefined };
+      finish(id, undefined, outcome.error);
+      return { error: outcome.error?.message };
+    }
+    hash = outcome.hash;
+    if (!last) {
+      const receipt = await receiptOf(hash);
+      if (!receipt || receipt.status !== "0x1") {
+        const error = receipt
+          ? "The approval failed on chain, so the swap wasn't sent."
+          : "The approval hasn't confirmed yet, so the swap wasn't sent. Check Activity, then swap again.";
+        finish(id, undefined, rpcError(ERRORS.internal, error));
+        return { error };
+      }
+    }
+  }
+  finish(id, hash);
+  return { ok: true };
+}
+
+// -------------------------------------------------------------- staking ----
+
+/** This wallet's staking: positions, fixed locks, payouts, the epoch, and deposits waiting to be credited. */
+async function staking() {
+  const { vault } = await load();
+  if (!vault) return { error: "There's no wallet in this browser yet." };
+  const owner = vault.address;
+  void creditAll();
+  try {
+    const [positions, locks, payouts, epochs, config] = await Promise.all([
+      api(`/api/staking/position/${owner}`),
+      api(`/api/staking/locks/${owner}`).catch(() => ({ locks: [] })),
+      api(`/api/staking/payouts/${owner}`).catch(() => ({ payouts: [] })),
+      api("/api/staking/epochs").catch(() => ({ epochs: [] })),
+      api("/api/staking/config").catch(() => null),
+    ]);
+    const epoch = activeEpoch(epochs.epochs);
+    const tera = (await registry()).find((a) => a.symbol === "TERA");
+    return {
+      positions: positions.positions ?? [],
+      locks: locks.locks ?? [],
+      payouts: (payouts.payouts ?? []).slice(0, 10),
+      epoch,
+      flexibleApr: flexibleApr(epoch),
+      configured: Boolean(config?.poolAddress && config?.tokenAddress),
+      balance: tera ? await balanceOf(tera, owner) : null,
+      pending: pendingFor((await chrome.storage.local.get("stakingPending")).stakingPending, owner),
+    };
+  } catch (error) {
+    return { error: String((error as Error).message || error) };
+  }
+}
+
+async function rememberStake(stake: NonNullable<SendRequest["stake"]>, hash: string) {
+  const { vault } = await load();
+  const { stakingPending } = await chrome.storage.local.get("stakingPending");
+  await chrome.storage.local.set({
+    stakingPending: addPending(stakingPending, { ...stake, txHash: hash, owner: vault?.address }),
+  });
+  void creditAll(20);
+}
+
+let crediting = false;
+/** Ask Tera's service to credit every deposit still waiting, a few times over. */
+async function creditAll(rounds = 1) {
+  if (crediting) return;
+  crediting = true;
+  try {
+    for (let round = 0; round < rounds; round++) {
+      const { vault } = await load();
+      const { stakingPending } = await chrome.storage.local.get("stakingPending");
+      const waiting = pendingFor(stakingPending, vault?.address);
+      if (!waiting.length) return;
+      for (const entry of waiting) {
+        const request = creditRequest(entry);
+        const outcome = creditOutcome(await api(request.path, request.body).catch(() => null));
+        if (outcome === "credited") {
+          const now = (await chrome.storage.local.get("stakingPending")).stakingPending;
+          await chrome.storage.local.set({ stakingPending: resolvePending(now, entry.txHash) });
+        }
+      }
+      if (round < rounds - 1) {
+        await chrome.runtime.getPlatformInfo();
+        await new Promise((resolve) => setTimeout(resolve, 12_000));
+      }
+    }
+  } finally {
+    crediting = false;
+  }
+}
+
+async function walletStake(message: PageMessage) {
+  const { vault } = await load();
+  if (!vault) return { error: "There's no wallet in this browser yet." };
+  const owner = vault.address;
+  const term = String(message.term ?? "flexible");
+  const fixed = term !== "flexible";
+  if (fixed && !["30", "45", "90"].includes(term)) return { error: "Pick a lock term." };
+  const amount = units(message.amount, 18);
+  if (amount.error) return { error: amount.error };
+  oneAtATime(OWN);
+  preparing.add(OWN);
+  try {
+    const [config, epochs] = await Promise.all([
+      api("/api/staking/config"),
+      api("/api/staking/epochs").catch(() => ({ epochs: [] })),
+    ]);
+    if (!config?.poolAddress || !config?.tokenAddress)
+      return { error: "Staking is unavailable right now." };
+    const tera = (await registry()).find(
+      (a) => a.address === String(config.tokenAddress).toLowerCase(),
+    );
+    if (!tera) return { error: "TERA isn't in Tera's asset list right now." };
+    const short = checkAmount({
+      units: amount.units,
+      balance: await balanceOf(tera, owner),
+      symbol: "TERA",
+      decimals: 18,
+    });
+    if (short) return { error: short };
+    const epoch = activeEpoch(epochs.epochs);
+    if (!fixed && !epoch) return { error: "There's no staking epoch to join right now." };
+    const preparedDeposit = await api("/api/staking/prepare-deposit", {
+      amount: amount.units!.toString(),
+      ...(fixed ? { termDays: Number(term) } : {}),
+    });
+    const tx = preparedDeposit.preparedTransaction;
+    // The transfer is checked here: TERA, to the pool, for exactly this amount.
+    const issue = depositIssue(tx, {
+      token: config.tokenAddress,
+      pool: config.poolAddress,
+      amount: amount.units,
+      chainId: CHAIN_ID,
+    });
+    if (issue) return { error: issue };
+    if (
+      String(preparedDeposit.poolAddress).toLowerCase() !== String(config.poolAddress).toLowerCase()
+    )
+      return { error: "The staking pool changed. Try again." };
+    const prepared = await prepare({
+      from: owner,
+      to: String(tx.to).toLowerCase(),
+      value: "0x0",
+      data: String(tx.data).toLowerCase(),
+    });
+    const shown = `${formatUnits(amount.units, 18)} TERA`;
+    const reward = fixed ? fixedReward(amount.units, Number(term)) : 0n;
+    const apr = fixed ? null : flexibleApr(epoch, amount.units);
+    prepared.described = {
+      ...prepared.described,
+      kind: "stake",
+      danger: "low",
+      title: `Stake ${shown}`,
+      rows: [
+        ["Amount", shown],
+        ["Type", fixed ? `Fixed ${term}-day lock` : "Flexible: unstake any time"],
+        fixed
+          ? ["Guaranteed reward", `${formatUnits(reward, 18)} TERA`]
+          : ["Current rate (variable)", apr === null ? "—" : `≈ ${apr.toFixed(2)}% a year`],
+        ...(fixed
+          ? [
+              [
+                "Unlocks",
+                new Date(Date.now() + Number(term) * 86_400_000).toLocaleDateString(),
+              ] as [string, string],
+            ]
+          : []),
+        ["Staking pool", String(config.poolAddress)],
+      ],
+      warnings: fixed
+        ? [
+            `Locked TERA can't be withdrawn for ${term} days. Rewards are paid with it when the lock ends.`,
+          ]
+        : [],
+    };
+    prepared.stake = fixed
+      ? { kind: "fixed", termDays: Number(term), amount: amount.units!.toString() }
+      : { kind: "flexible", epochId: epoch.id, amount: amount.units!.toString() };
+    ask("send", OWN, prepared).catch(() => {});
+    return { ok: true };
+  } catch (error) {
+    return { error: String((error as Error).message || error) };
+  } finally {
+    preparing.delete(OWN);
+  }
+}
+
+async function walletStakeSign(message: PageMessage) {
+  const { vault } = await load();
+  if (!vault) return { error: "There's no wallet in this browser yet." };
+  const owner = vault.address;
+  const kind = message.kind;
+  if (kind !== "claim" && kind !== "unstake" && kind !== "unlock")
+    return { error: "Unknown staking request." };
+  oneAtATime(OWN);
+  try {
+    const state = await staking();
+    if ("error" in state) return { error: state.error };
+    const key = crypto.randomUUID();
+    let request: StakeSignRequest;
+    if (kind === "unlock") {
+      const lock = state.locks.find((l: { id: string }) => l.id === String(message.lockId));
+      if (!lock || !lock.isMatured) return { error: "That lock hasn't ended yet." };
+      const total = (BigInt(lock.principal_amount) + BigInt(lock.reward_amount)).toString();
+      const body = { walletAddress: owner, lockId: lock.id, idempotencyKey: key };
+      const auth = await api("/api/staking/locks/unlock-authorization", body);
+      const checked = stakingSignature(
+        "unlock",
+        { wallet: owner, lockId: lock.id, amount: total, key },
+        auth.message,
+      );
+      if (checked.error) return { error: checked.error };
+      request = {
+        title: `Unlock ${formatUnits(total, 18)} TERA`,
+        rows: [
+          ["Principal", `${formatUnits(lock.principal_amount, 18)} TERA`],
+          ["Reward", `${formatUnits(lock.reward_amount, 18)} TERA`],
+          ["Paid to", owner],
+        ],
+        message: checked.message!,
+        submit: { path: "/api/staking/locks/unlock", body },
+      };
+    } else {
+      const position = state.positions.find(
+        (p: { epoch_id: string }) => p.epoch_id === String(message.epochId),
+      );
+      if (!position) return { error: "That staking position wasn't found." };
+      const staked = BigInt(position.active_stake || "0");
+      const claimable = BigInt(position.claimable_rewards || "0");
+      if (kind === "claim" && claimable <= 0n)
+        return { error: "There are no rewards to claim yet." };
+      if (kind === "unstake" && (staked <= 0n || position.is_locked))
+        return {
+          error: position.is_locked ? "This stake is still locked." : "Nothing is staked here.",
+        };
+      const amount = kind === "unstake" ? staked.toString() : "0";
+      const body = {
+        kind,
+        walletAddress: owner,
+        epochId: position.epoch_id,
+        amount,
+        idempotencyKey: key,
+      };
+      const auth = await api("/api/staking/payout-authorization", body);
+      const checked = stakingSignature(
+        kind,
+        { wallet: owner, epochId: position.epoch_id, amount, key },
+        auth.message,
+      );
+      if (checked.error) return { error: checked.error };
+      request = {
+        title:
+          kind === "claim"
+            ? `Claim ${formatUnits(claimable, 18)} TERA in rewards`
+            : `Unstake ${formatUnits(staked, 18)} TERA`,
+        rows:
+          kind === "claim"
+            ? [
+                ["Rewards", `${formatUnits(claimable, 18)} TERA`],
+                ["Paid to", owner],
+              ]
+            : [
+                ["Staked", `${formatUnits(staked, 18)} TERA`],
+                ["Unclaimed rewards", `${formatUnits(claimable, 18)} TERA`],
+                ["Paid to", owner],
+              ],
+        message: checked.message!,
+        submit: { path: "/api/staking/payouts", body },
+      };
+    }
+    ask("stake-sign", OWN, request).catch(() => {});
+    return { ok: true };
+  } catch (error) {
+    return { error: String((error as Error).message || error) };
+  }
 }
 
 // ---------------------------------------------------------------- reads ----

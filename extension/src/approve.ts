@@ -1,6 +1,7 @@
-// The window that opens when a site asks to connect or to sign. The owner
-// sees which site is asking and exactly what it gets or what the signature
-// does, in words, and approves with their password.
+// The window that opens when a site asks to connect, sign or send, and for
+// the owner's own sends, swaps and staking requests from the popup. The owner
+// sees who is asking and exactly what it does, in words, and approves with
+// their password.
 
 import { ask, errorBox, h, header, setupForm, short } from "./ui";
 import { originLabel } from "./shared";
@@ -28,12 +29,26 @@ type SendRequest = {
   fee?: { maxFee: string };
   blocked?: string;
 };
+type SwapRequest = {
+  labels: string[];
+  review: {
+    title: string;
+    rows: [string, string][];
+    warnings: string[];
+    impact: { level: string; pct: number | null; costUsd: number | null };
+    consent?: boolean;
+  };
+  checks: string;
+  progress?: string;
+  blocked?: string;
+};
+type StakeSignRequest = { title: string; rows: [string, string][]; message: string };
 type Approval = {
   expired?: boolean;
-  kind?: "connect" | "sign" | "send";
+  kind?: "connect" | "sign" | "send" | "swap" | "stake-sign";
   origin?: string;
   address?: string | null;
-  request?: SignRequest | SendRequest;
+  request?: SignRequest | SendRequest | SwapRequest | StakeSignRequest;
 };
 
 const root = document.getElementById("root")!;
@@ -62,6 +77,10 @@ async function render(notice?: string) {
     return renderSend(approval.origin!, approval.request as SendRequest, notice);
   if (approval.kind === "sign" && approval.request)
     return renderSign(approval.origin!, approval.request as SignRequest);
+  if (approval.kind === "swap" && approval.request)
+    return renderSwap(approval.request as SwapRequest, notice);
+  if (approval.kind === "stake-sign" && approval.request)
+    return renderStakeSign(approval.request as StakeSignRequest);
   const origin = approval.origin!;
   const { form, password } = decide("Connect", "approval:connect");
   const local = origin.startsWith("http://");
@@ -107,7 +126,12 @@ async function render(notice?: string) {
 }
 
 /** The password, Cancel and the action button, shared by both kinds of request. */
-function decide(label: string, type: string, gate?: HTMLInputElement) {
+function decide(
+  label: string,
+  type: string,
+  gate?: HTMLInputElement,
+  options: { extra?: () => Record<string, unknown>; progress?: HTMLElement } = {},
+) {
   const password = h("input", {
     type: "password",
     autocomplete: "current-password",
@@ -127,7 +151,18 @@ function decide(label: string, type: string, gate?: HTMLInputElement) {
         if (gate && !gate.checked) return;
         status.replaceChildren();
         go.disabled = true;
-        const answer = await ask({ type, id, password: password.value });
+        // A swap's steps take a while; the window shows which one is going out.
+        const { progress } = options;
+        const watch = progress
+          ? setInterval(async () => {
+              const now = await ask<Approval>({ type: "approval:get", id });
+              const step = (now.request as SwapRequest | undefined)?.progress;
+              if (step) progress.replaceChildren(h("p", { class: "note" }, step));
+            }, 700)
+          : undefined;
+        const answer = await ask({ type, id, password: password.value, ...options.extra?.() });
+        if (watch) clearInterval(watch);
+        progress?.replaceChildren();
         go.disabled = false;
         if (answer?.expired) return render();
         // The chain was read again and the numbers changed: shown afresh.
@@ -355,3 +390,126 @@ function renderSend(origin: string, request: SendRequest, notice?: string) {
 }
 
 render();
+
+function renderSwap(request: SwapRequest, notice?: string) {
+  const { review } = request;
+  const head = [
+    header(),
+    h("h1", {}, review.title),
+    h(
+      "section",
+      { class: "card" },
+      h(
+        "div",
+        { class: "row" },
+        h("span", { class: "muted small grow" }, "Asked by"),
+        h("span", { class: "site" }, "You, from Tera"),
+      ),
+    ),
+    notice ? errorBox(notice) : null,
+  ];
+  const facts = h(
+    "section",
+    { class: "card" },
+    h(
+      "dl",
+      { class: "rows" },
+      ...review.rows.flatMap(([label, value]) => [h("dt", {}, label), h("dd", {}, value)]),
+      h("dt", {}, "Network fee"),
+      h("dd", {}, `Up to 0.001 ETH a step`),
+    ),
+    h(
+      "strong",
+      { class: "small" },
+      `${request.labels.length === 1 ? "One step" : `${request.labels.length} steps, in order`}`,
+    ),
+    h("ol", { class: "steps" }, ...request.labels.map((label) => h("li", {}, label))),
+    h("p", { class: "muted small" }, request.checks),
+  );
+  const keep = (parts: (HTMLElement | null)[]) =>
+    root.replaceChildren(...parts.filter((part): part is HTMLElement => part !== null));
+  if (request.blocked) {
+    keep([
+      ...head,
+      errorBox(request.blocked),
+      facts,
+      h(
+        "button",
+        {
+          class: "primary",
+          onclick: async () => {
+            await ask({ type: "approval:reject", id });
+            window.close();
+          },
+        },
+        "Close",
+      ),
+    ]);
+    return;
+  }
+  const gate = review.consent ? (h("input", { type: "checkbox" }) as HTMLInputElement) : undefined;
+  const progress = h("div");
+  const { form, password } = decide("Swap", "approval:swap", gate, {
+    extra: () => ({ consent: gate?.checked === true }),
+    progress,
+  });
+  keep([
+    ...head,
+    review.impact.level === "confirm"
+      ? h("p", { class: "danger", role: "alert" }, "High price impact")
+      : null,
+    review.warnings.length
+      ? h("ul", { class: "warnings" }, ...review.warnings.map((w) => h("li", {}, w)))
+      : null,
+    facts,
+    gate
+      ? h(
+          "label",
+          { class: "check" },
+          gate,
+          `I accept losing about ${review.impact.pct?.toFixed(1)}% to price impact`,
+        )
+      : null,
+    progress,
+    form,
+    h(
+      "p",
+      { class: "muted small" },
+      "Each step is checked again and simulated just before it's sent. Keep this window open until it's done.",
+    ),
+  ]);
+  password.focus();
+}
+
+function renderStakeSign(request: StakeSignRequest) {
+  const { form, password } = decide("Sign", "approval:stake-sign");
+  root.replaceChildren(
+    header(),
+    h("h1", {}, request.title),
+    h(
+      "section",
+      { class: "card" },
+      h(
+        "dl",
+        { class: "rows" },
+        ...request.rows.flatMap(([label, value]) => [
+          h("dt", {}, label),
+          h("dd", { class: /^0x[0-9a-fA-F]{40}$/.test(value) ? "mono" : "" }, value),
+        ]),
+      ),
+    ),
+    h(
+      "section",
+      { class: "card" },
+      h("span", { class: "muted small" }, "You're signing this request"),
+      h("pre", { class: "message" }, request.message),
+      h(
+        "p",
+        { class: "muted small" },
+        "Tera checked this is exactly the request for your staking, and nothing else. Signing moves nothing by itself: Tera's staking treasury sends the TERA to you.",
+      ),
+    ),
+    form,
+  );
+  password.focus();
+}
