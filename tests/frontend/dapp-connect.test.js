@@ -40,7 +40,8 @@ test("requests are sorted by who answers them", () => {
   assert.equal(classify("eth_getBalance"), "read");
   assert.equal(classify("eth_call"), "read");
   assert.equal(classify("personal_sign"), "signing");
-  assert.equal(classify("eth_sendTransaction"), "signing");
+  assert.equal(classify("eth_sendTransaction"), "send");
+  assert.equal(classify("eth_signTransaction"), "signing");
   assert.equal(classify("eth_signTypedData_v4"), "signing");
   assert.equal(classify("wallet_switchEthereumChain"), "switch");
   assert.equal(classify("toString"), "unsupported");

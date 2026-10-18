@@ -51,8 +51,17 @@ for (const [name, format] of entries) {
     plugins: [webKdf],
     define: {
       __TERA_ICON__: JSON.stringify(icon),
-      // config.ts reads EXPO_PUBLIC_* overrides; the extension ships the defaults.
-      "process.env": "{}",
+      // config.ts reads EXPO_PUBLIC_* overrides; the extension ships the
+      // defaults. TERA_EXTENSION_RPC points a test build at one node (a local
+      // chain), for both reads and sending; never set it for a release.
+      "process.env": JSON.stringify(
+        process.env.TERA_EXTENSION_RPC
+          ? {
+              EXPO_PUBLIC_RPC_URL: process.env.TERA_EXTENSION_RPC,
+              EXPO_PUBLIC_RPC_POOL: process.env.TERA_EXTENSION_RPC,
+            }
+          : {},
+      ),
     },
   });
   if (!result.success) {
@@ -66,4 +75,6 @@ for (const file of ["manifest.json", "popup.html", "approve.html", "popup.css", 
 
 const manifest = JSON.parse(await readFile(join(src, "manifest.json"), "utf8"));
 await writeFile(join(out, "VERSION"), `${manifest.version}\n`);
-console.log(`dist-extension/ built (Tera Wallet ${manifest.version})`);
+console.log(
+  `dist-extension/ built (Tera Wallet ${manifest.version})${process.env.TERA_EXTENSION_RPC ? ` TEST BUILD against ${process.env.TERA_EXTENSION_RPC}` : ""}`,
+);

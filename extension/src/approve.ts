@@ -15,12 +15,24 @@ type SignRequest = {
   typed?: unknown;
   explained?: { rows: [string, string][] };
 };
+type SendRequest = {
+  tx: { from: string; to: string; value: string; data: string };
+  described: {
+    kind: string;
+    danger: "low" | "unknown" | "high";
+    title: string;
+    rows: [string, string][];
+    warnings: string[];
+  };
+  fee?: { maxFee: string };
+  blocked?: string;
+};
 type Approval = {
   expired?: boolean;
-  kind?: "connect" | "sign";
+  kind?: "connect" | "sign" | "send";
   origin?: string;
   address?: string | null;
-  request?: SignRequest;
+  request?: SignRequest | SendRequest;
 };
 
 const root = document.getElementById("root")!;
@@ -45,8 +57,10 @@ async function render() {
     root.replaceChildren(header(), setupForm(render));
     return;
   }
+  if (approval.kind === "send" && approval.request)
+    return renderSend(approval.origin!, approval.request as SendRequest);
   if (approval.kind === "sign" && approval.request)
-    return renderSign(approval.origin!, approval.request);
+    return renderSign(approval.origin!, approval.request as SignRequest);
   const origin = approval.origin!;
   const { form, password } = decide("Connect", "approval:connect");
   const local = origin.startsWith("http://");
@@ -71,7 +85,11 @@ async function render() {
         { class: "facts" },
         h("li", {}, "See your address ", h("span", { class: "mono" }, short(approval.address))),
         h("li", {}, "See your balances and activity on Robinhood Chain (public anyway)"),
-        h("li", {}, "Ask you to sign messages. Nothing is signed without your OK."),
+        h(
+          "li",
+          {},
+          "Ask you to sign messages and send transactions. Nothing happens without your OK.",
+        ),
       ),
       h("strong", {}, "It won't be able to"),
       h("ul", { class: "facts" }, h("li", {}, "Move funds or sign anything on its own")),
@@ -222,6 +240,108 @@ function renderSign(origin: string, request: SignRequest) {
           request.danger === "high"
             ? "I understand what this signature allows"
             : "I know what this is and want to sign it",
+        )
+      : null,
+    form,
+  ];
+  root.replaceChildren(...parts.filter((part): part is HTMLElement => part !== null));
+  password.focus();
+}
+
+const ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+
+function renderSend(origin: string, request: SendRequest) {
+  const { described, fee, blocked, tx } = request;
+  const tone =
+    described.danger === "high"
+      ? h(
+          "p",
+          { class: "danger", role: "alert" },
+          described.kind === "approve-all" || described.kind === "approve"
+            ? "Gives away spending power"
+            : "High risk",
+        )
+      : described.danger === "unknown"
+        ? h("p", { class: "note" }, "Tera can't fully read this. Don't confirm unless you're sure.")
+        : null;
+  const facts = h(
+    "section",
+    { class: "card" },
+    h(
+      "dl",
+      { class: "rows" },
+      ...described.rows.flatMap(([label, value]) => [
+        h("dt", {}, label),
+        h("dd", { class: ADDRESS.test(value) ? "mono" : "" }, value),
+      ]),
+      ...(fee ? [h("dt", {}, "Network fee"), h("dd", {}, `Up to ${fee.maxFee} ETH`)] : []),
+    ),
+    tx.data !== "0x"
+      ? h(
+          "details",
+          {},
+          h("summary", { class: "small" }, "Show the raw data"),
+          h("pre", { class: "message" }, tx.data),
+        )
+      : null,
+  );
+  const head = [
+    header(),
+    h("h1", {}, described.title),
+    h(
+      "section",
+      { class: "card" },
+      h(
+        "div",
+        { class: "row" },
+        h("span", { class: "muted small grow" }, "Asked by"),
+        h("span", { class: "site" }, origin.replace(/^https:\/\//, "")),
+      ),
+      h(
+        "div",
+        { class: "row" },
+        h("span", { class: "muted small grow" }, "From"),
+        h("span", { class: "mono" }, short(tx.from)),
+      ),
+    ),
+  ];
+  if (blocked) {
+    root.replaceChildren(
+      ...head,
+      errorBox(blocked),
+      facts,
+      h(
+        "button",
+        {
+          class: "primary",
+          onclick: async () => {
+            await ask({ type: "approval:reject", id });
+            window.close();
+          },
+        },
+        "Close",
+      ),
+    );
+    return;
+  }
+  const gate =
+    described.danger === "low" ? undefined : (h("input", { type: "checkbox" }) as HTMLInputElement);
+  const { form, password } = decide("Confirm", "approval:send", gate);
+  const parts: (HTMLElement | null)[] = [
+    ...head,
+    tone,
+    described.warnings.length
+      ? h("ul", { class: "warnings" }, ...described.warnings.map((w) => h("li", {}, w)))
+      : null,
+    facts,
+    gate
+      ? h(
+          "label",
+          { class: "check" },
+          gate,
+          described.danger === "high"
+            ? "I understand what this transaction allows"
+            : "I know what this is and want to send it",
         )
       : null,
     form,

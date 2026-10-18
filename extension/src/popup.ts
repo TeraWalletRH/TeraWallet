@@ -11,7 +11,47 @@ type State = {
   address: string | null;
   sites: { origin: string; connectedAt: number }[];
   signatures: Signed[];
+  transactions: Sent[];
 };
+type Sent = { hash: string; at: number; site: string; title: string; status: string };
+
+const STATUS: Record<string, string> = {
+  broadcasting: "Sending",
+  pending: "Pending",
+  confirmed: "Confirmed",
+  failed: "Failed",
+  unknown: "Not confirmed: check before retrying",
+};
+
+function sentList(transactions: Sent[]) {
+  if (!transactions.length)
+    return h("p", { class: "muted small" }, "Nothing sent from this browser yet.");
+  return h(
+    "ul",
+    { class: "signed" },
+    ...transactions.map((sent) =>
+      h(
+        "li",
+        {},
+        h(
+          "a",
+          {
+            class: "tx",
+            href: `https://robinhoodchain.blockscout.com/tx/${sent.hash}`,
+            target: "_blank",
+            rel: "noreferrer",
+          },
+          h("span", { class: "title" }, sent.title),
+          h(
+            "span",
+            { class: `muted small status-${sent.status}` },
+            `${STATUS[sent.status] ?? sent.status} · ${host(sent.site)} · ${when(sent.at)}`,
+          ),
+        ),
+      ),
+    ),
+  );
+}
 
 const host = (origin: string) => origin.replace(/^https:\/\//, "");
 const when = (at: number) =>
@@ -58,7 +98,7 @@ async function render() {
   root.replaceChildren(header(), ...(state.address ? wallet(state) : [setupForm(render)]));
 }
 
-function wallet({ address, sites, signatures }: State) {
+function wallet({ address, sites, signatures, transactions }: State) {
   const copy = h("button", { class: "small", type: "button" }, "Copy") as HTMLButtonElement;
   copy.addEventListener("click", async () => {
     await navigator.clipboard.writeText(address!);
@@ -109,11 +149,12 @@ function wallet({ address, sites, signatures }: State) {
       h("strong", {}, `Connected sites${sites.length ? ` (${sites.length})` : ""}`),
       list,
     ),
+    h("section", { class: "card" }, h("strong", {}, "Recent transactions"), sentList(transactions)),
     h("section", { class: "card" }, h("strong", {}, "Recent signatures"), signedList(signatures)),
     h(
       "p",
       { class: "note" },
-      "This version connects to sites and signs messages. Approving transactions comes in the next update.",
+      "Every transaction and signature needs your password. Nothing is sent without your OK.",
     ),
     removeSection(address!),
   ];

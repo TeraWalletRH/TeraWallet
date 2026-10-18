@@ -320,3 +320,20 @@ ul.signed details[open] {
   flex-direction: column;
   gap: 6px;
 }
+a.tx {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: inherit;
+  text-decoration: none;
+}
+a.tx:hover .title {
+  text-decoration: underline;
+}
+.status-failed,
+.status-unknown {
+  color: var(--danger);
+}
+.status-confirmed {
+  color: var(--green);
+}
