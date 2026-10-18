@@ -338,3 +338,90 @@ a.tx:hover .title {
 .status-confirmed {
   color: var(--green);
 }
+nav.tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--wash);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px;
+}
+nav.tabs button {
+  flex: 1;
+  border: 0;
+  padding: 6px 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+nav.tabs button.on {
+  background: var(--raised);
+  color: var(--ink);
+}
+.hero .total {
+  font-size: 30px;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+}
+ul.assets {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+ul.assets li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--line);
+}
+ul.assets li:first-child {
+  border-top: 0;
+}
+ul.assets .grow,
+ul.assets .right {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+ul.assets .grow {
+  flex: 1;
+}
+ul.assets .grow span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+ul.assets .right {
+  align-items: flex-end;
+  text-align: right;
+}
+select {
+  font: inherit;
+  color: var(--ink);
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px 12px;
+  width: 100%;
+}
+select:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 2px;
+}
+.card.center {
+  align-items: center;
+  text-align: center;
+}
+svg.qr {
+  width: 200px;
+  height: 200px;
+  border-radius: 10px;
+}
+label .row {
+  width: 100%;
+}
+main > button.link {
+  align-self: flex-start;
+}
