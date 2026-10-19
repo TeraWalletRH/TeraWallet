@@ -965,7 +965,10 @@ function Wallet() {
     [notice, setNotice] = useState<null | {
       title: string;
       body: string;
-      tone?: "success" | "error";
+      // "neutral" is informational — neither a confirmation nor a problem
+      // (e.g. "scheduled, recoverable for 30 days") — and renders like
+      // "success" but triggers no haptic (see forTone in core/haptics.js).
+      tone?: "success" | "error" | "neutral";
     }>(null);
   const [assets, setAssets] = useState<Asset[]>(sources),
     [listedSymbols, setListedSymbols] = useState<string[]>([]),
