@@ -32,10 +32,16 @@ import { nameKey, normaliseAddress, parseName, saveContact, searchContacts } fro
 import { tokensForDollars } from "./max-amount.js";
 import { parseTag } from "./tags.js";
 
-export const SEND = "send";
+/** @typedef {{ symbol: string, address: string, decimals: number, priceAs?: string }} GoAsset */
+/** @typedef {{ kind: "address", address: string } | { kind: "contact", name: string, address: string } | { kind: "tag", tag: string }} GoRecipient */
+/** @typedef {{ kind: "send", asset: GoAsset, amount?: string, usd?: string, to: GoRecipient }} GoSend */
+/** @typedef {{ kind: "save", target: { kind: "last" } | { kind: "address", address: string }, name: string }} GoSave */
+/** @typedef {{ kind: "unknown", reason: string, examples: string[] }} GoUnknown */
+
+export const SEND = /** @type {"send"} */ ("send");
 export const MAX_LENGTH = 200;
-export const SAVE = "save";
-export const UNKNOWN = "unknown";
+export const SAVE = /** @type {"save"} */ ("save");
+export const UNKNOWN = /** @type {"unknown"} */ ("unknown");
 
 /** What to show when a sentence isn't understood. */
 export const EXAMPLES = [
@@ -68,7 +74,8 @@ const LAST =
   /^(?:it|this|that|them|(?:this|that|the|my last|last)\s+(?:wallet|address|recipient|one|contact))$/i;
 const WALLET = /^(?:wallet|address|recipient)$/i;
 
-const unknown = (reason) => ({ kind: UNKNOWN, reason, examples: EXAMPLES });
+/** @returns {GoUnknown} */
+const unknown = (/** @type {string} */ reason) => ({ kind: UNKNOWN, reason, examples: EXAMPLES });
 const tidy = (text) =>
   String(text ?? "")
     .normalize("NFKC")
@@ -87,6 +94,10 @@ const tidy = (text) =>
  *   { kind: "send", asset, amount?: "10", usd?: "2", to: { kind: "address" | "contact" | "tag", address?, name?, tag? } }
  *   { kind: "save", target: { kind: "last" } | { kind: "address", address }, name }
  *   { kind: "unknown", reason, examples }
+ *
+ * @param {unknown} text
+ * @param {{ assets?: GoAsset[], book?: { address: string, name: string }[], owner?: string }} [context]
+ * @returns {GoSend | GoSave | GoUnknown}
  */
 export function read(text, { assets = [], book = [], owner = "" } = {}) {
   const sentence = tidy(text);
@@ -141,7 +152,8 @@ export function read(text, { assets = [], book = [], owner = "" } = {}) {
     : { kind: SEND, asset, amount: plain(amount), to };
 }
 
-function readSave(targetText, nameText) {
+/** @returns {GoSave | GoUnknown} */
+function readSave(/** @type {string} */ targetText, /** @type {string} */ nameText) {
   const target = tidy(targetText);
   const named = parseName(tidy(nameText));
   if (!named.ok) return unknown(named.reason);
@@ -156,7 +168,13 @@ function readSave(targetText, nameText) {
   );
 }
 
-/** Who a payment is for: an address, a tag, or a saved contact, never a guess. */
+/**
+ * Who a payment is for: an address, a tag, or a saved contact, never a guess.
+ *
+ * @param {unknown} text
+ * @param {{ book?: { address: string, name: string }[], owner?: string }} [context]
+ * @returns {GoRecipient | { error: string }}
+ */
 export function recipient(text, { book = [], owner = "" } = {}) {
   const who = tidy(text).replace(/^to\s+/i, "");
   if (!who) return { error: "Say who it's for." };
@@ -201,6 +219,10 @@ const shown = (units, decimals) => {
 /**
  * The amount of a send in the asset's base units, using the live price when
  * it was given in dollars. Returns { units, amount, usd? } or { error }.
+ *
+ * @param {{ asset: GoAsset, amount?: string, usd?: string }} send
+ * @param {{ prices?: Record<string, number> }} [context]
+ * @returns {{ units?: bigint, amount?: string, usd?: string, error?: string }}
  */
 export function amountFor(send, { prices = {} } = {}) {
   const { asset } = send;
@@ -229,6 +251,9 @@ export function amountFor(send, { prices = {} } = {}) {
 /**
  * Carry out a save: name the last address paid, or the one given.
  * Returns core/contacts.js's { ok, book, contact, reason }.
+ *
+ * @param {GoSave} save
+ * @param {{ book?: { address: string, name: string }[], lastPayee?: string, owner?: string, now?: number }} [context]
  */
 export function applySave(save, { book = [], lastPayee = "", owner = "", now = Date.now() } = {}) {
   const address = save.target.kind === "last" ? normaliseAddress(lastPayee) : save.target.address;

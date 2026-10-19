@@ -56,6 +56,8 @@ export * as motion from "../../public/tera/core/motion.js";
 export * as textSize from "../../public/tera/core/text-size.js";
 // The Max button on Send, and dollars ⇄ tokens.
 export * as maxAmount from "../../public/tera/core/max-amount.js";
+// Tera Go: payments typed in plain English, read into a draft for the review.
+export * as teraGo from "../../public/tera/core/tera-go.js";
 // "Updated 12s ago" on Home and Activity.
 export * as freshness from "../../public/tera/core/freshness.js";
 // One distinct vibration per event: tap, confirm, success, error, lookalike.
