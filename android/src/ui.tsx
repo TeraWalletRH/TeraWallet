@@ -370,17 +370,25 @@ export function Button({
   primary = false,
   danger = false,
   disabled = false,
+  small = false,
 }: {
   children: React.ReactNode;
   onPress: () => void;
   primary?: boolean;
   danger?: boolean;
   disabled?: boolean;
+  // A compact variant for sitting inline as a ListRow's trailing action
+  // (e.g. "Restore" next to a pending deletion), rather than the full-width
+  // button every other call site uses.
+  small?: boolean;
 }) {
+  const smallButton = small && { minHeight: 36, paddingVertical: 8, paddingHorizontal: 14 };
+  const smallText = small && { fontSize: 13 };
   const label = (
     <Text
       style={[
         styles.buttonText,
+        smallText,
         primary && { color: colors.paper },
         danger && { color: colors.danger },
       ]}
@@ -404,7 +412,7 @@ export function Button({
           colors={[colors.lime, colors.copper]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
-          style={[styles.button, { borderWidth: 0, overflow: "hidden" }]}
+          style={[styles.button, smallButton, { borderWidth: 0, overflow: "hidden" }]}
         >
           {label}
         </LinearGradient>
@@ -418,6 +426,7 @@ export function Button({
       disabled={disabled}
       style={({ pressed }) => [
         styles.button,
+        smallButton,
         danger && { backgroundColor: colors.dangerTint, borderColor: colors.danger },
         !danger && pressed && { backgroundColor: colors.raised },
         { opacity: disabled ? 0.4 : danger && pressed ? 0.7 : 1 },
