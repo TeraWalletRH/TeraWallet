@@ -82,6 +82,7 @@ import {
   motion as motionCore,
   textSize as textSizeCore,
   maxAmount as maxAmountCore,
+  teraGo as teraGoCore,
   freshness,
   haptics as hapticsCore,
 } from "./src/core";
@@ -841,6 +842,9 @@ function Wallet() {
   const holdProgress = useRef(new Animated.Value(0)).current;
   const [balance, setBalance] = useState<Record<string, string> | null>(null),
     [prices, setPrices] = useState<Record<string, number>>({ USDG: 1 }),
+    // Tera Go: the sentence being typed on the home screen, and why it wasn't understood.
+    [goText, setGoText] = useState(""),
+    [goError, setGoError] = useState(""),
     [priceChanges, setPriceChanges] = useState<Record<string, number>>({}),
     // Same-day trend lines for the token list, keyed by symbol. Only ever
     // populated for symbols with a real external market (see the backend
@@ -3459,6 +3463,42 @@ function Wallet() {
     const destination =
       recipientKind === "tag" ? (await resolveName(recipient)).address : recipient.trim();
     guard();
+    const run = scheduleRun?.kind === "payment" ? scheduleRun : null;
+    await proposeTransfer(guard, {
+      asset: selectedAsset,
+      destination,
+      amount: units(amount, selectedAsset.decimals),
+      note: notesCore.cleanNote(payNote) || undefined,
+      ...(run
+        ? {
+            afterSubmitted: async (hash: string) => {
+              await settleScheduled(run.id, run.date, "paid", hash).catch(() => {});
+            },
+          }
+        : {}),
+    });
+  }
+  /**
+   * Prepare a transfer and open its review: the one path both the Send screen
+   * and Tera Go take, so a typed payment gets exactly the checks a tapped one
+   * does (trusted-only mode, spending limits, Tera's policy, the review).
+   */
+  async function proposeTransfer(
+    guard: () => void,
+    {
+      asset,
+      destination,
+      amount: amountUnits,
+      note,
+      afterSubmitted,
+    }: {
+      asset: { symbol: string; address: string; decimals: number };
+      destination: string;
+      amount: string;
+      note?: string;
+      afterSubmitted?: (hash: string) => Promise<void>;
+    },
+  ) {
     if (dataRef.current.trustedOnlyMode) {
       check(
         isTrustedRecipient(destination, book),
@@ -3471,12 +3511,12 @@ function Wallet() {
     const input = {
       ownerAddress: owner,
       accountAddress: owner,
-      assetAddress: selectedAsset.address,
+      assetAddress: asset.address,
       actionType: "TRANSFER",
       recipient: destination,
-      amount: units(amount, selectedAsset.decimals),
+      amount: amountUnits,
     };
-    enforceLimits(paymentUsd(selectedAsset.symbol, input.amount, selectedAsset.decimals));
+    enforceLimits(paymentUsd(asset.symbol, input.amount, asset.decimals));
     transferTx(input.assetAddress as Address, input.recipient as Address, input.amount);
     const checked = await policyFor(input);
     guard();
@@ -3485,17 +3525,63 @@ function Wallet() {
     const proposal = { ...result, intent: checked, createdAt: Date.now() };
     await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, proposal] });
     guard();
-    const run = scheduleRun?.kind === "payment" ? scheduleRun : null;
     showProposal(proposal, {
-      note: notesCore.cleanNote(payNote) || undefined,
-      ...(run
-        ? {
-            afterSubmitted: async (hash: string) => {
-              await settleScheduled(run.id, run.date, "paid", hash).catch(() => {});
-            },
-          }
-        : {}),
+      ...(note ? { note } : {}),
+      ...(afterSubmitted ? { afterSubmitted } : {}),
     });
+  }
+  /**
+   * Tera Go: one typed sentence (core/tera-go.js). A payment opens the same
+   * review as the Send screen; "save wallet as mom" names the last wallet
+   * paid. Nothing is sent from here.
+   */
+  async function teraGoNow(guard: () => void) {
+    setGoError("");
+    const saved = contactsCore.cleanBook(dataRef.current.contacts);
+    const read = teraGoCore.read(goText, { assets, book: saved, owner });
+    if (read.kind === teraGoCore.UNKNOWN) {
+      setGoError(read.reason);
+      return;
+    }
+    if (read.kind === teraGoCore.SAVE) {
+      const last =
+        contactsCore.recentPayees(dataRef.current.history, saved, { owner, limit: 1 })[0]?.address ?? "";
+      const result = teraGoCore.applySave(read, { book: saved, lastPayee: last, owner });
+      if (!result.ok || !result.contact) {
+        setGoError(result.reason);
+        return;
+      }
+      await store({ ...dataRef.current, contacts: result.book });
+      setGoText("");
+      setNotice({
+        title: t("Contact saved", "联系人已保存"),
+        body: t(
+          `${result.contact.name} is saved for ${result.contact.address} on this device only. Try "send $5 to ${result.contact.name}".`,
+          `已在本设备保存 ${result.contact.name}（${result.contact.address}）。`,
+        ),
+        tone: "success",
+      });
+      return;
+    }
+    // A tag is resolved now, against the registry, like the Send screen does.
+    const destination =
+      read.to.kind === "tag" ? (await resolveName(read.to.tag)).address : (read.to.address as string);
+    guard();
+    const price = usablePrice(read.asset.symbol);
+    const amount = teraGoCore.amountFor(read, {
+      prices: price ? { [read.asset.symbol]: price } : {},
+    });
+    if (amount.error) {
+      setGoError(amount.error);
+      return;
+    }
+    await proposeTransfer(guard, {
+      asset: read.asset,
+      destination,
+      amount: amount.units!.toString(),
+    });
+    guard();
+    setGoText("");
   }
   /**
    * Claim a name for this wallet.
@@ -6759,6 +6845,82 @@ function Wallet() {
                   </Pressable>
                 ))}
               </View>
+              {/* Tera Go, on the web first; the app follows (update 2b). */}
+              {Platform.OS === "web" ? (
+                <View style={[s.panel, { gap: 10 }]}>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                    <Icon name="lightning-bolt-outline" color={colors.lime} size={20} />
+                    <Text style={[s.text, { fontWeight: "700" }]}>Tera Go</Text>
+                    <Text style={[s.small, { marginLeft: "auto" }]}>
+                      {t("Type a payment in plain English", "用日常语言输入付款")}
+                    </Text>
+                  </View>
+                  <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
+                    <TextInput
+                      accessibilityLabel="Tera Go"
+                      value={goText}
+                      onChangeText={(value) => {
+                        setGoText(value);
+                        if (goError) setGoError("");
+                      }}
+                      onSubmitEditing={() => {
+                        if (goText.trim()) void run(teraGoNow);
+                      }}
+                      placeholder={t('Try "send $5 to mom"', '试试 "send $5 to mom"')}
+                      placeholderTextColor={colors.faint}
+                      selectionColor={colors.green}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      returnKeyType="go"
+                      maxLength={teraGoCore.MAX_LENGTH}
+                      style={[s.input, { flex: 1 }, !!goError && { borderColor: colors.danger }]}
+                    />
+                    <Button primary disabled={busy || !goText.trim()} onPress={() => void run(teraGoNow)}>
+                      {t("Go", "执行")}
+                    </Button>
+                  </View>
+                  {goError ? (
+                    <View style={{ gap: 4 }}>
+                      <Text style={[s.small, { color: colors.danger }]}>{goError}</Text>
+                      <Text style={s.small}>
+                        {t("Try: ", "试试：")}
+                        {teraGoCore.EXAMPLES.join(" · ")}
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={s.small}>
+                      {vault.biometricsSupported
+                        ? t(
+                            "You'll see the full payment before anything is sent, and approve it with your PIN, face or fingerprint.",
+                            "发送前你会看到完整的付款信息，并用 PIN、面容或指纹确认。",
+                          )
+                        : t(
+                            "You'll see the full payment before anything is sent, and approve it with your PIN.",
+                            "发送前你会看到完整的付款信息，并用 PIN 确认。",
+                          )}
+                    </Text>
+                  )}
+                  {!limitsCore.hasAny(data.limits) ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {
+                        setPage("settings");
+                        setLimitFields(limitsCore.toDollars(data.limits) as Record<string, string>);
+                        setLimitError("");
+                        setSettingsSection("limits");
+                      }}
+                    >
+                      <Text style={s.small}>
+                        {t(
+                          "Tip: set a spending limit, so a typed payment can never go over it. ",
+                          "提示：设置消费限额，输入的付款就永远不会超过它。",
+                        )}
+                        <Text style={{ color: colors.green, fontWeight: "600" }}>{t("Set one", "设置")}</Text>
+                      </Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              ) : null}
               {balance && allHeld.length ? (
                 <View style={[s.panel, { gap: 10 }]}>
                   <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
@@ -12721,7 +12883,6 @@ function Wallet() {
                       disabled={busy}
                       right={
                         <Button
-                          small
                           disabled={busy}
                           onPress={() =>
                             confirm(
@@ -13988,7 +14149,6 @@ function Wallet() {
                   )}
                 </Text>
                 <Button
-                  small
                   disabled={busy}
                   onPress={() =>
                     confirm(
@@ -14038,7 +14198,7 @@ function Wallet() {
                             "You have 30 days to recover your account if you change your mind.",
                             "若改变主意，你可以在 30 天内恢复账户。",
                           ),
-                          tone: "neutral",
+                          tone: "success",
                         });
                       }),
                   )
@@ -14996,7 +15156,7 @@ function Wallet() {
                                   "You can restore it within 30 days from the Wallet Switcher.",
                                   "你可以在 30 天内从钱包切换器中恢复它。",
                                 ),
-                                tone: "neutral",
+                                tone: "success",
                               });
                             }),
                         );
