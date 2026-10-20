@@ -12,7 +12,17 @@ import {
 import { chain, PUBLIC_RPCS, RPC, RPCS, sources, type Tx } from "./config";
 import { currentAccount, notePending, sessionVersion } from "./storage";
 import { txCheck } from "./validation";
-import { networkSpeed as speedCore, rpcRotation } from "./core";
+import { networkSpeed as speedCore, revert as revertCore, rpcRotation } from "./core";
+
+/**
+ * A refusal in words when the error carries a token's error code
+ * (core/revert.js); otherwise the error as it was. viem alone says "unknown
+ * reason" for most tokens' codes, USDG's empty-wallet InsufficientFunds() among them.
+ */
+function readable(error: unknown) {
+  const said = revertCore.explainRevert(error);
+  return said ? new Error(said) : error;
+}
 // retryCount: 0 stays on the wallet transport used for sending a
 // transaction (below) — retrying a broadcast is a real idempotency risk.
 // Reading a balance has no such risk, and no retries here means a single
@@ -146,7 +156,7 @@ export async function execute(
         if (code.status === "rejected") throw code.reason;
         if (!code.value) throw new Error("Contract unavailable. / 合约不可用。");
       }
-      if (simulated.status === "rejected") throw simulated.reason;
+      if (simulated.status === "rejected") throw readable(simulated.reason);
       const simulation = simulated.value;
       if (
         (tx.data.startsWith("0xa9059cbb") || tx.data.startsWith("0x095ea7b3")) &&
@@ -162,12 +172,16 @@ export async function execute(
       // the step before is how a transaction gets stuck.
       const [nonce, gas, fees] = await Promise.all([
         txClient.getTransactionCount({ address: owner, blockTag: "pending" }),
-        txClient.estimateGas({
-          account: owner,
-          to: tx.to,
-          data: tx.data,
-          value: BigInt(tx.value),
-        }),
+        txClient
+          .estimateGas({
+            account: owner,
+            to: tx.to,
+            data: tx.data,
+            value: BigInt(tx.value),
+          })
+          .catch((error) => {
+            throw readable(error);
+          }),
         txClient.estimateFeesPerGas(),
       ]);
       const request = await wallet.prepareTransactionRequest({
