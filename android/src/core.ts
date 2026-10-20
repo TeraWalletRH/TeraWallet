@@ -58,6 +58,10 @@ export * as textSize from "../../public/tera/core/text-size.js";
 export * as maxAmount from "../../public/tera/core/max-amount.js";
 // Tera Go: payments typed in plain English, read into a draft for the review.
 export * as teraGo from "../../public/tera/core/tera-go.js";
+// The wallet's balance check before a review, shared with the browser extension.
+export * as walletSend from "../../public/tera/core/wallet-send.js";
+// Why a transaction was refused, in words, when a token gives only an error code.
+export * as revert from "../../public/tera/core/revert.js";
 // "Updated 12s ago" on Home and Activity.
 export * as freshness from "../../public/tera/core/freshness.js";
 // One distinct vibration per event: tap, confirm, success, error, lookalike.

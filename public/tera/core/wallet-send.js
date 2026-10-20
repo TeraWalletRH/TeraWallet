@@ -99,8 +99,10 @@ export function toUnits(text, decimals) {
 export function checkAmount({ units, balance, symbol, decimals }) {
   if (balance === null || balance === undefined)
     return `Couldn't read your ${symbol} balance. Try again in a moment.`;
+  if (BigInt(balance) === 0n && BigInt(units) > 0n)
+    return `You don't have any ${symbol} in this wallet. This needs ${formatUnits(units, decimals)} ${symbol}.`;
   if (BigInt(units) > BigInt(balance))
-    return `That's more than your ${formatUnits(balance, decimals)} ${symbol}.`;
+    return `That's more than your ${formatUnits(balance, decimals)} ${symbol}. This needs ${formatUnits(units, decimals)} ${symbol}.`;
   return null;
 }
 

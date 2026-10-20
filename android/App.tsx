@@ -83,6 +83,7 @@ import {
   textSize as textSizeCore,
   maxAmount as maxAmountCore,
   teraGo as teraGoCore,
+  walletSend as walletSendCore,
   freshness,
   haptics as hapticsCore,
 } from "./src/core";
@@ -3520,6 +3521,28 @@ function Wallet() {
     };
     enforceLimits(paymentUsd(asset.symbol, input.amount, asset.decimals));
     transferTx(input.assetAddress as Address, input.recipient as Address, input.amount);
+    // The balance is read from the chain now, not from the last refresh, so a
+    // payment the wallet can't cover stops here, in words, before the review.
+    // A failed read doesn't stop it: the review's own simulation still runs.
+    const held = await (asset.address === zeroAddress
+      ? client.getBalance({ address: owner as Address })
+      : client.readContract({
+          address: asset.address as Address,
+          abi: erc20Abi,
+          functionName: "balanceOf",
+          args: [owner as Address],
+        })
+    ).catch(() => null);
+    guard();
+    if (held !== null) {
+      const short = walletSendCore.checkAmount({
+        units: BigInt(input.amount),
+        balance: held.toString(),
+        symbol: asset.symbol,
+        decimals: asset.decimals,
+      });
+      check(!short, short ?? "");
+    }
     const checked = await policyFor(input);
     guard();
     const result = await api("/api/intent/prepare", checked);

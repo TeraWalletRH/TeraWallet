@@ -90,6 +90,10 @@ test("never more than the balance, and an unread balance isn't a zero", () => {
     checkAmount({ units: 1n, balance: null, symbol: "ETH", decimals: 18 }),
     /Couldn't read/,
   );
+  assert.equal(
+    checkAmount({ units: 2_000_000n, balance: "0", symbol: "USDG", decimals: 6 }),
+    "You don't have any USDG in this wallet. This needs 2 USDG.",
+  );
 });
 
 test("recipients: valid, not the zero address, not the token's own contract", () => {
