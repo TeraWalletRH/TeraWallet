@@ -7,6 +7,8 @@ import {
   UNKNOWN,
   amountFor,
   applySave,
+  namePrompt,
+  NAME_PROMPT_FOR,
   read,
 } from "../../public/tera/core/tera-go.js";
 
@@ -168,4 +170,41 @@ test("amounts: units exactly, dollars at the live price rounded down", () => {
   // WETH is priced as ETH.
   assert.equal(amountFor(go("send $2 of WETH to mom"), { prices: { ETH: 2000 } }).amount, "0.001");
   assert.match(amountFor(go("send $2 of TERA to mom"), { prices: {} }).error, /no price for TERA/);
+});
+
+test("after paying an unnamed wallet, Tera Go offers to name it for a day", () => {
+  const fresh = "0x15d34aaf54267db7d7c367839aaf71a00a2c6a65";
+  const now = 1_800_000_000_000;
+  const history = [
+    { payee: MOM, createdAt: now - 60_000 },
+    { payee: fresh, createdAt: now - 1_000 },
+    { title: "Swap", createdAt: now },
+  ];
+  assert.deepEqual(namePrompt(history, book, { owner: ME, now }), {
+    address: fresh,
+    sentence: "save wallet as ",
+  });
+  // The newest payment is already named: nothing to offer, even if an older one isn't.
+  assert.equal(
+    namePrompt(
+      [
+        { payee: fresh, createdAt: now - 5_000 },
+        { payee: MOM, createdAt: now },
+      ],
+      book,
+      { owner: ME, now },
+    ),
+    null,
+  );
+  // A day later, or for your own wallet, or with no payments: nothing.
+  assert.equal(namePrompt(history, book, { owner: ME, now: now + NAME_PROMPT_FOR + 1 }), null);
+  assert.equal(namePrompt([{ payee: ME, createdAt: now }], book, { owner: ME, now }), null);
+  assert.equal(namePrompt([], book, { owner: ME, now }), null);
+  // Once named through Tera Go, the offer goes away.
+  const saved = applySave(read("save wallet as Uncle Ben", ctx), {
+    book,
+    lastPayee: fresh,
+    owner: ME,
+  });
+  assert.equal(namePrompt(history, saved.book, { owner: ME, now }), null);
 });

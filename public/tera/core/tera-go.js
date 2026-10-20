@@ -25,10 +25,20 @@
 //   names that address. Names follow core/contacts.js: one name, one address,
 //   nothing that reads as a tag or an address.
 //
+//   After paying an address with no name, Tera Go offers to name it for a
+//   day: the newest payment only, and never your own wallet.
+//
 //   Nothing here sends anything. The result is a draft for the review screen,
 //   which runs every check the wallet already has.
 
-import { nameKey, normaliseAddress, parseName, saveContact, searchContacts } from "./contacts.js";
+import {
+  nameKey,
+  normaliseAddress,
+  parseName,
+  recentPayees,
+  saveContact,
+  searchContacts,
+} from "./contacts.js";
 import { tokensForDollars } from "./max-amount.js";
 import { parseTag } from "./tags.js";
 
@@ -265,4 +275,25 @@ export function applySave(save, { book = [], lastPayee = "", owner = "", now = D
       reason: 'There\'s no recent payment to name. Say "save 0x… as mom" with the address instead.',
     };
   return saveContact(book, { address, name: save.name, owner, now });
+}
+
+export const NAME_PROMPT_FOR = 24 * 60 * 60 * 1000;
+
+/**
+ * The wallet just paid, when it has no name yet: { address, sentence }, or
+ * null. Only the newest payment counts, for a day after it was made.
+ *
+ * history: the wallet's own rows ({ payee, createdAt }), as recentPayees reads them.
+ *
+ * @param {unknown[]} history
+ * @param {{ address: string, name: string }[]} book
+ * @param {{ owner?: string, now?: number }} [context]
+ * @returns {{ address: string, sentence: string } | null}
+ */
+export function namePrompt(history, book, { owner = "", now = Date.now() } = {}) {
+  const [last] = recentPayees(history, book, { owner, limit: 1 });
+  if (!last || last.name) return null;
+  if (!last.lastSentAt || now - last.lastSentAt > NAME_PROMPT_FOR || last.lastSentAt > now + 60_000)
+    return null;
+  return { address: last.address, sentence: "save wallet as " };
 }

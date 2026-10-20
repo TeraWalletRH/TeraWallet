@@ -3491,12 +3491,14 @@ function Wallet() {
       amount: amountUnits,
       note,
       afterSubmitted,
+      returnTo,
     }: {
       asset: { symbol: string; address: string; decimals: number };
       destination: string;
       amount: string;
       note?: string;
       afterSubmitted?: (hash: string) => Promise<void>;
+      returnTo?: Review["returnTo"];
     },
   ) {
     if (dataRef.current.trustedOnlyMode) {
@@ -3528,6 +3530,7 @@ function Wallet() {
     showProposal(proposal, {
       ...(note ? { note } : {}),
       ...(afterSubmitted ? { afterSubmitted } : {}),
+      ...(returnTo ? { returnTo } : {}),
     });
   }
   /**
@@ -3579,6 +3582,8 @@ function Wallet() {
       asset: read.asset,
       destination,
       amount: amount.units!.toString(),
+      // Back to the box afterwards, where it offers to name the wallet just paid.
+      returnTo: "home",
     });
     guard();
     setGoText("");
@@ -6476,6 +6481,8 @@ function Wallet() {
         <Gallery key={owner} owner={owner} t={t} onBack={() => setPage("home")} onSend={sendNft} />
       );
     if (page === "home") {
+      // Tera Go offers to name the wallet just paid, for a day (core/tera-go.js).
+      const goPrompt = teraGoCore.namePrompt(data.history, contactsCore.cleanBook(data.contacts), { owner });
       // Custom Watchlist and Popular tokens
       const watchlistSection = (
         <View style={{ gap: 10 }}>
@@ -6879,6 +6886,17 @@ function Wallet() {
                       {t("Go", "执行")}
                     </Button>
                   </View>
+                  {!goError && !goText && goPrompt ? (
+                    <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
+                      <Text style={[s.small, { flex: 1 }]}>
+                        {t(
+                          `You just paid ${goPrompt.address.slice(0, 6)}…${goPrompt.address.slice(-4)}. Name it, so next time you can just type the name.`,
+                          `你刚向 ${goPrompt.address.slice(0, 6)}…${goPrompt.address.slice(-4)} 付款。给它起个名字，下次直接输入名字即可。`,
+                        )}
+                      </Text>
+                      <Button onPress={() => setGoText(goPrompt.sentence)}>{t("Name it", "命名")}</Button>
+                    </View>
+                  ) : null}
                   {goError ? (
                     <View style={{ gap: 4 }}>
                       <Text style={[s.small, { color: colors.danger }]}>{goError}</Text>
