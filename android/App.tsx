@@ -846,6 +846,7 @@ function Wallet() {
     // Tera Go: the sentence being typed on the home screen, and why it wasn't understood.
     [goText, setGoText] = useState(""),
     [goError, setGoError] = useState(""),
+    [goListening, setGoListening] = useState(false),
     [priceChanges, setPriceChanges] = useState<Record<string, number>>({}),
     // Same-day trend lines for the token list, keyed by symbol. Only ever
     // populated for symbols with a real external market (see the backend
@@ -1474,6 +1475,9 @@ function Wallet() {
   // for Android, which doesn't share iOS's single-presentation restriction
   // as strictly but gets the same safe treatment anyway).
   const pendingVoiceNotice = useRef<null | { title: string; body: string; tone: "error" }>(null);
+  // Which box the speech recognizer is filling: the assistant's message, or
+  // the Tera Go box (one recognizer, so each session says where it's going).
+  const voiceTarget = useRef<"assistant" | "go">("assistant");
   // The spotlight app tour: `tourStep` is null while inactive, else an index
   // into `tourSteps` below. `tourRect` is that step's target measured in
   // screen coordinates — recomputed on every step change, not derived at
@@ -1504,13 +1508,40 @@ function Wallet() {
   // no separate "transcribe, then fill" step.
   useSpeechRecognitionEvent("result", (event) => {
     const transcript = event.results[0]?.transcript;
-    if (transcript !== undefined) {
-      setLiveTranscript(transcript);
-      setMessage(transcript);
+    if (transcript === undefined) return;
+    if (voiceTarget.current === "go") {
+      setGoText(transcript);
+      return;
     }
+    setLiveTranscript(transcript);
+    setMessage(transcript);
   });
-  useSpeechRecognitionEvent("end", () => setVoiceMode(false));
+  useSpeechRecognitionEvent("end", () => {
+    if (voiceTarget.current === "go") {
+      voiceTarget.current = "assistant";
+      setGoListening(false);
+      // Tidied for Tera Go ("five dollars" → "$5"), then left in the box to
+      // read: voice never presses Go.
+      setGoText((said) => teraGoCore.fromSpeech(said));
+      return;
+    }
+    setVoiceMode(false);
+  });
   useSpeechRecognitionEvent("error", (event) => {
+    if (voiceTarget.current === "go") {
+      voiceTarget.current = "assistant";
+      setGoListening(false);
+      if (event.error === "no-speech" || event.error === "speech-timeout" || event.error === "aborted") return;
+      setGoError(
+        event.error === "not-allowed"
+          ? t(
+              "Allow microphone access for this site in your browser to use voice.",
+              "请在浏览器中允许此网站使用麦克风。",
+            )
+          : t("Voice didn't work this time. Try again, or type it.", "语音输入失败，请重试或直接输入。"),
+      );
+      return;
+    }
     setVoiceMode(false);
     // Silence and a deliberate stop aren't failures — nothing to tell the
     // owner beyond the message field simply staying as it was.
@@ -1543,7 +1574,38 @@ function Wallet() {
       pendingVoiceNotice.current = null;
     }
   }, [voiceMode]);
+  /** Whether this browser can turn speech into text (Chrome, Edge, Safari; not Firefox). */
+  const goVoiceAvailable =
+    Platform.OS === "web" &&
+    !!ExpoSpeechRecognitionModule &&
+    typeof window !== "undefined" &&
+    ("webkitSpeechRecognition" in window || "SpeechRecognition" in window);
+  /** Tera Go's mic: start listening into the box, or stop. */
+  async function toggleGoVoice() {
+    if (!ExpoSpeechRecognitionModule) return;
+    if (goListening) {
+      ExpoSpeechRecognitionModule.stop();
+      return;
+    }
+    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!permission.granted) {
+      setGoError(
+        t(
+          "Allow microphone access for this site in your browser to use voice.",
+          "请在浏览器中允许此网站使用麦克风。",
+        ),
+      );
+      return;
+    }
+    voiceTarget.current = "go";
+    setGoError("");
+    setGoText("");
+    // Tera Go reads English sentences, whatever language the wallet shows.
+    ExpoSpeechRecognitionModule.start({ lang: "en-US", interimResults: true, continuous: false });
+    setGoListening(true);
+  }
   async function startVoiceMode() {
+    voiceTarget.current = "assistant";
     if (!ExpoSpeechRecognitionModule) {
       setNotice({
         title: t("Voice input unavailable", "语音输入不可用"),
@@ -6905,10 +6967,39 @@ function Wallet() {
                       maxLength={teraGoCore.MAX_LENGTH}
                       style={[s.input, { flex: 1 }, !!goError && { borderColor: colors.danger }]}
                     />
-                    <Button primary disabled={busy || !goText.trim()} onPress={() => void run(teraGoNow)}>
+                    {goVoiceAvailable ? (
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={goListening ? t("Stop listening", "停止聆听") : t("Say a payment", "说出付款")}
+                        accessibilityState={{ selected: goListening }}
+                        onPress={() => void toggleGoVoice()}
+                        style={({ pressed }) => ({
+                          width: 52,
+                          height: 52,
+                          borderRadius: 26,
+                          alignItems: "center",
+                          justifyContent: "center",
+                          borderWidth: 1,
+                          borderColor: goListening ? colors.danger : colors.line,
+                          backgroundColor: goListening ? colors.danger : colors.wash,
+                          opacity: pressed ? 0.7 : 1,
+                        })}
+                      >
+                        <Icon name="mic" color={goListening ? colors.paper : colors.lime} size={22} />
+                      </Pressable>
+                    ) : null}
+                    <Button primary disabled={busy || goListening || !goText.trim()} onPress={() => void run(teraGoNow)}>
                       {t("Go", "执行")}
                     </Button>
                   </View>
+                  {goListening ? (
+                    <Text style={[s.small, { color: colors.ink }]}>
+                      {t(
+                        'Listening… say something like "send five dollars to mom". Tap the mic to stop. Your browser turns speech into text; Chrome does this on Google\'s servers.',
+                        "正在聆听… 例如说 \"send five dollars to mom\"。点麦克风停止。浏览器会把语音转成文字；Chrome 会在 Google 的服务器上完成。",
+                      )}
+                    </Text>
+                  ) : null}
                   {!goError && !goText && goPrompt ? (
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
                       <Text style={[s.small, { flex: 1 }]}>

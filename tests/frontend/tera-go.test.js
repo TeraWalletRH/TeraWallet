@@ -7,6 +7,7 @@ import {
   UNKNOWN,
   amountFor,
   applySave,
+  fromSpeech,
   namePrompt,
   NAME_PROMPT_FOR,
   read,
@@ -207,4 +208,27 @@ test("after paying an unnamed wallet, Tera Go offers to name it for a day", () =
     owner: ME,
   });
   assert.equal(namePrompt(history, saved.book, { owner: ME, now }), null);
+});
+
+test("spoken payments are tidied into sentences Tera Go reads", () => {
+  assert.equal(fromSpeech("send five dollars to mom"), "send 5 dollars to mom");
+  assert.equal(go(fromSpeech("send five dollars to mom")).amount, "5");
+  assert.equal(fromSpeech("Send $5 dollars to Mom."), "Send $5 to Mom");
+  assert.equal(fromSpeech("pay pascal twenty five u s d g"), "pay pascal 25 USDG");
+  assert.equal(fromSpeech("send one point five USD G to mom"), "send 1.5 USDG to mom");
+  assert.equal(fromSpeech("send a hundred and five terra to big sis"), "send 105 TERA to big sis");
+  assert.equal(fromSpeech("send two thousand five hundred usdg to mom"), "send 2500 USDG to mom");
+  assert.equal(fromSpeech("send zero point zero one eth to mom"), "send 0.01 ETH to mom");
+  assert.equal(fromSpeech("send 3 dollars to at astra"), "send 3 dollars to @astra");
+  assert.equal(fromSpeech("save this wallet as mom"), "save this wallet as mom");
+  for (const said of [
+    "send five dollars to mom",
+    "pay pascal twenty five u s d g",
+    "send one point five USD G to mom",
+    "send 3 dollars to at astra",
+  ])
+    assert.equal(go(fromSpeech(said)).kind, SEND, said);
+  // Words that only look like numbers or assets are left alone.
+  assert.equal(fromSpeech("send a gift to mom"), "send a gift to mom");
+  assert.equal(fromSpeech("meet at noon"), "meet at noon");
 });
