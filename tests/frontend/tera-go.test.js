@@ -4,12 +4,14 @@ import {
   EXAMPLES,
   SAVE,
   SEND,
+  TRADE,
   UNKNOWN,
   amountFor,
   applySave,
   fromSpeech,
   namePrompt,
   NAME_PROMPT_FOR,
+  pairFor,
   read,
 } from "../../public/tera/core/tera-go.js";
 
@@ -231,4 +233,121 @@ test("spoken payments are tidied into sentences Tera Go reads", () => {
   // Words that only look like numbers or assets are left alone.
   assert.equal(fromSpeech("send a gift to mom"), "send a gift to mom");
   assert.equal(fromSpeech("meet at noon"), "meet at noon");
+});
+
+const tsla = {
+  symbol: "TSLA",
+  address: "0x1111111111111111111111111111111111111111",
+  decimals: 18,
+};
+const market = [usdg, eth, tera, weth, tsla];
+const trade = (text, tradable = ["ETH", "TERA", "TSLA"]) =>
+  read(text, { ...ctx, assets: market, tradable });
+
+test("buys say how much to spend: dollars or the pair", () => {
+  for (const text of [
+    "buy $20 of TSLA",
+    "buy $20 worth of tsla",
+    "Buy 20 dollars of TSLA.",
+    "buy TSLA for $20",
+    "purchase TSLA with 20 dollars",
+    "buy 20 USDG of TSLA",
+    "buy TSLA with 20 USDG",
+  ])
+    assert.deepEqual(
+      trade(text),
+      { kind: TRADE, side: "buy", asset: tsla, spend: usdg, amount: "20" },
+      text,
+    );
+  // TERA trades against ETH, so dollars become ETH at its price.
+  assert.deepEqual(trade("buy $5 of TERA"), {
+    kind: TRADE,
+    side: "buy",
+    asset: tera,
+    spend: eth,
+    usd: "5",
+  });
+  assert.deepEqual(trade("buy TERA with 0.01 ETH"), {
+    kind: TRADE,
+    side: "buy",
+    asset: tera,
+    spend: eth,
+    amount: "0.01",
+  });
+  assert.deepEqual(trade("buy $1,250 of ETH"), {
+    kind: TRADE,
+    side: "buy",
+    asset: eth,
+    spend: usdg,
+    amount: "1250",
+  });
+  assert.equal(pairFor("tera"), "ETH");
+  assert.equal(pairFor("TSLA"), "USDG");
+});
+
+test("sells say how much to sell: units, dollars or all", () => {
+  assert.deepEqual(trade("sell 100 TERA"), {
+    kind: TRADE,
+    side: "sell",
+    asset: tera,
+    spend: tera,
+    amount: "100",
+  });
+  assert.deepEqual(trade("sell $20 of TSLA"), {
+    kind: TRADE,
+    side: "sell",
+    asset: tsla,
+    spend: tsla,
+    usd: "20",
+  });
+  for (const text of [
+    "sell all my TERA",
+    "sell all of my tera",
+    "sell everything in TERA",
+    "sell all TERA",
+  ])
+    assert.deepEqual(
+      trade(text),
+      { kind: TRADE, side: "sell", asset: tera, spend: tera, all: true },
+      text,
+    );
+});
+
+test("trades are refused rather than guessed", () => {
+  assert.match(trade("buy 5 TSLA").reason, /Say how much to spend, like "buy \$20 of TSLA"/);
+  assert.match(trade("buy TSLA").reason, /how much to spend/);
+  assert.match(trade("sell TSLA").reason, /how much/);
+  assert.match(trade("sell all my ETH").reason, /network fees/);
+  assert.match(trade("buy $20 of USDG").reason, /dollar side of every trade/);
+  assert.match(trade("sell 5 USDG").reason, /dollar side/);
+  assert.match(trade("buy TERA with 20 USDG").reason, /TERA is bought with ETH/);
+  assert.match(trade("buy 0.01 ETH of TSLA").reason, /TSLA is bought with USDG/);
+  assert.match(trade("buy $20 of DOGE").reason, /doesn't know an asset called DOGE/);
+  assert.match(trade("buy $20 of WETH").reason, /WETH can't be bought or sold in Tera yet/);
+  assert.match(
+    read("buy $5 of TERA", { ...ctx, assets: [usdg, tera] }).reason,
+    /ETH isn't in Tera's asset list/,
+  );
+  // "sell for $20" reads as a price, which Tera Go doesn't take.
+  assert.equal(trade("sell TSLA for $20").kind, UNKNOWN);
+  // A payment is still a payment.
+  assert.equal(trade("send $5 to mom").kind, SEND);
+});
+
+test("a trade's amount is worked out on what it spends", () => {
+  assert.deepEqual(amountFor({ asset: usdg, amount: "20" }), { units: 20_000_000n, amount: "20" });
+  // $5 of TERA spends ETH: at $2,500 that is 0.002 ETH.
+  const r = trade("buy $5 of TERA");
+  assert.deepEqual(amountFor({ asset: r.spend, usd: r.usd }, { prices: { ETH: 2500 } }), {
+    units: 2_000_000_000_000_000n,
+    amount: "0.002",
+    usd: "5",
+  });
+});
+
+test("spoken trades: spelled-out symbols become symbols", () => {
+  assert.equal(fromSpeech("buy twenty dollars of t s l a"), "buy 20 dollars of TSLA");
+  assert.equal(fromSpeech("sell one hundred terra"), "sell 100 TERA");
+  assert.equal(fromSpeech("buy five dollars worth of e t h"), "buy 5 dollars worth of ETH");
+  assert.equal(trade(fromSpeech("buy twenty dollars of t s l a")).kind, TRADE);
 });
