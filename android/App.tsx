@@ -3546,6 +3546,64 @@ function Wallet() {
    * and Tera Go take, so a typed payment gets exactly the checks a tapped one
    * does (trusted-only mode, spending limits, Tera's policy, the review).
    */
+  /** This wallet's balance of an asset, read from the chain now. */
+  function heldNow(asset: { address: string }) {
+    return asset.address === zeroAddress
+      ? client.getBalance({ address: owner as Address })
+      : client.readContract({
+          address: asset.address as Address,
+          abi: erc20Abi,
+          functionName: "balanceOf",
+          args: [owner as Address],
+        });
+  }
+  /**
+   * A buy or sell, straight to the review the Swap screen opens: the live
+   * quote, the slippage limit and the minimum it can get. Tera Go uses it.
+   * `amount` is what leaves the wallet, in base units of `spend`.
+   */
+  async function proposeTrade(
+    guard: () => void,
+    {
+      asset,
+      side,
+      spend,
+      amount: spent,
+    }: {
+      asset: { symbol: string; address: string; decimals: number };
+      side: "buy" | "sell";
+      spend: { symbol: string; address: string; decimals: number };
+      amount: bigint;
+    },
+  ) {
+    const held = await heldNow(spend).catch(() => null);
+    guard();
+    if (held !== null) {
+      const short = walletSendCore.checkAmount({
+        units: spent,
+        balance: held.toString(),
+        symbol: spend.symbol,
+        decimals: spend.decimals,
+      });
+      check(!short, short ?? "");
+    }
+    const input = {
+      ownerAddress: owner,
+      accountAddress: owner,
+      assetAddress: asset.address,
+      actionType: side === "buy" ? "BUY" : "SELL",
+      amount: spent.toString(),
+      slippageBps,
+    };
+    const checked = await policyFor(input);
+    guard();
+    const result = await api("/api/intent/prepare", checked);
+    guard();
+    const proposal = { ...result, intent: checked, createdAt: Date.now() };
+    await store({ ...dataRef.current, drafts: [...dataRef.current.drafts, proposal] });
+    guard();
+    showProposal(proposal, { returnTo: "home" });
+  }
   async function proposeTransfer(
     guard: () => void,
     {
@@ -3586,15 +3644,7 @@ function Wallet() {
     // The balance is read from the chain now, not from the last refresh, so a
     // payment the wallet can't cover stops here, in words, before the review.
     // A failed read doesn't stop it: the review's own simulation still runs.
-    const held = await (asset.address === zeroAddress
-      ? client.getBalance({ address: owner as Address })
-      : client.readContract({
-          address: asset.address as Address,
-          abi: erc20Abi,
-          functionName: "balanceOf",
-          args: [owner as Address],
-        })
-    ).catch(() => null);
+    const held = await heldNow(asset).catch(() => null);
     guard();
     if (held !== null) {
       const short = walletSendCore.checkAmount({
@@ -3620,13 +3670,18 @@ function Wallet() {
   }
   /**
    * Tera Go: one typed sentence (core/tera-go.js). A payment opens the same
-   * review as the Send screen; "save wallet as mom" names the last wallet
-   * paid. Nothing is sent from here.
+   * review as the Send screen, a buy or sell the Swap screen's; "save wallet
+   * as mom" names the last wallet paid. Nothing is sent from here.
    */
   async function teraGoNow(guard: () => void) {
     setGoError("");
     const saved = contactsCore.cleanBook(dataRef.current.contacts);
-    const read = teraGoCore.read(goText, { assets, book: saved, owner });
+    const read = teraGoCore.read(goText, {
+      assets,
+      book: saved,
+      owner,
+      tradable: assets.map((a) => a.symbol).filter(limitTradable),
+    });
     if (read.kind === teraGoCore.UNKNOWN) {
       setGoError(read.reason);
       return;
@@ -3649,6 +3704,34 @@ function Wallet() {
         ),
         tone: "success",
       });
+      return;
+    }
+    if (read.kind === teraGoCore.TRADE) {
+      const { spend } = read;
+      let spent: bigint;
+      if (read.all) {
+        // "Sell all": the balance on the chain now, not the last refresh.
+        spent = await heldNow(spend);
+        guard();
+        if (!spent) {
+          setGoError(t(`You don't have any ${spend.symbol} to sell.`, `你没有可卖出的 ${spend.symbol}。`));
+          return;
+        }
+      } else {
+        const price = usablePrice(spend.symbol);
+        const amount = teraGoCore.amountFor(
+          { asset: spend, amount: read.amount, usd: read.usd },
+          { prices: price ? { [spend.symbol]: price } : {} },
+        );
+        if (amount.error) {
+          setGoError(amount.error);
+          return;
+        }
+        spent = amount.units!;
+      }
+      await proposeTrade(guard, { asset: read.asset, side: read.side, spend, amount: spent });
+      guard();
+      setGoText("");
       return;
     }
     // A tag is resolved now, against the registry, like the Send screen does.
@@ -6944,7 +7027,7 @@ function Wallet() {
                     <Icon name="lightning-bolt-outline" color={colors.lime} size={20} />
                     <Text style={[s.text, { fontWeight: "700" }]}>Tera Go</Text>
                     <Text style={[s.small, { marginLeft: "auto" }]}>
-                      {t("Type a payment in plain English", "用日常语言输入付款")}
+                      {t("Pay, buy or sell in plain English", "用日常语言付款、买入或卖出")}
                     </Text>
                   </View>
                   <View style={{ flexDirection: "row", gap: 8, alignItems: "center" }}>
@@ -6958,7 +7041,7 @@ function Wallet() {
                       onSubmitEditing={() => {
                         if (goText.trim()) void run(teraGoNow);
                       }}
-                      placeholder={t('Try "send $5 to mom"', '试试 "send $5 to mom"')}
+                      placeholder={t('Try "send $5 to mom" or "buy $20 of TSLA"', '试试 "send $5 to mom" 或 "buy $20 of TSLA"')}
                       placeholderTextColor={colors.faint}
                       selectionColor={colors.green}
                       autoCapitalize="none"
@@ -7023,12 +7106,12 @@ function Wallet() {
                     <Text style={s.small}>
                       {vault.biometricsSupported
                         ? t(
-                            "You'll see the full payment before anything is sent, and approve it with your PIN, face or fingerprint.",
-                            "发送前你会看到完整的付款信息，并用 PIN、面容或指纹确认。",
+                            "You'll see the full payment or trade before anything happens, and approve it with your PIN, face or fingerprint.",
+                            "执行前你会看到完整的付款或交易信息，并用 PIN、面容或指纹确认。",
                           )
                         : t(
-                            "You'll see the full payment before anything is sent, and approve it with your PIN.",
-                            "发送前你会看到完整的付款信息，并用 PIN 确认。",
+                            "You'll see the full payment or trade before anything happens, and approve it with your PIN.",
+                            "执行前你会看到完整的付款或交易信息，并用 PIN 确认。",
                           )}
                     </Text>
                   )}

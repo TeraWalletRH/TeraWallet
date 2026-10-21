@@ -1,5 +1,5 @@
 // Tera Go: payments typed in plain English. "Send $2 worth of USDG to mom",
-// "pay pascal 10 USDG", "save wallet as mom". No network access and no model
+// "pay pascal 10 USDG", "save wallet as mom", "buy $20 of TSLA". No network access and no model
 // of its own; the app and the web wallet read the result, fetch a price where
 // one is needed, and open the ordinary review, which the owner approves with
 // their face, fingerprint or password.
@@ -28,9 +28,18 @@
 //   After paying an address with no name, Tera Go offers to name it for a
 //   day: the newest payment only, and never your own wallet.
 //
+//   "Buy $20 of TSLA" and "sell 100 TERA" are trades, reviewed like the Swap
+//   screen's. Every trade is against the asset's pair: USDG, or ETH for TERA.
+//   A buy says how much to spend, in dollars or the pair ("buy TERA with
+//   0.01 ETH"); "buy 5 TSLA" is refused, since a swap spends an exact amount
+//   and only the live quote says what it gets. A sell says how much to sell,
+//   in the asset, in dollars, or "all", which is never offered for ETH, the
+//   fee money. USDG is the dollar side, so it isn't bought or sold itself,
+//   and an asset the wallet can't trade is refused by name.
+//
 //   Spoken payments are tidied before they're read (fromSpeech): number
 //   words become digits ("five dollars" is "$5"), spelled-out or misheard
-//   asset names become symbols ("u s d g" is USDG), and "at astra" becomes
+//   asset names become symbols ("u s d g" is USDG, "t s l a" is TSLA), and "at astra" becomes
 //   @astra. The result goes into the box to be read and confirmed; voice
 //   never presses Go.
 //
@@ -52,12 +61,14 @@ import { parseTag } from "./tags.js";
 /** @typedef {{ kind: "address", address: string } | { kind: "contact", name: string, address: string } | { kind: "tag", tag: string }} GoRecipient */
 /** @typedef {{ kind: "send", asset: GoAsset, amount?: string, usd?: string, to: GoRecipient }} GoSend */
 /** @typedef {{ kind: "save", target: { kind: "last" } | { kind: "address", address: string }, name: string }} GoSave */
+/** @typedef {{ kind: "trade", side: "buy" | "sell", asset: GoAsset, spend: GoAsset, amount?: string, usd?: string, all?: boolean }} GoTrade */
 /** @typedef {{ kind: "unknown", reason: string, examples: string[] }} GoUnknown */
 
 export const SEND = /** @type {"send"} */ ("send");
 export const MAX_LENGTH = 200;
 export const SAVE = /** @type {"save"} */ ("save");
 export const UNKNOWN = /** @type {"unknown"} */ ("unknown");
+export const TRADE = /** @type {"trade"} */ ("trade");
 
 /** What to show when a sentence isn't understood. */
 export const EXAMPLES = [
@@ -66,6 +77,8 @@ export const EXAMPLES = [
   "send 0.01 ETH to 0x5b27…9f05",
   "send $5 to @astra",
   "save wallet as mom",
+  "buy $20 of TSLA",
+  "sell 100 TERA",
 ];
 
 // A number as people type it: 10, 10.5, .5, 1,250 or 1,250.75.
@@ -90,6 +103,30 @@ const LAST =
   /^(?:it|this|that|them|(?:this|that|the|my last|last)\s+(?:wallet|address|recipient|one|contact))$/i;
 const WALLET = /^(?:wallet|address|recipient)$/i;
 
+const BUY = /^(?:please\s+)?(?:buy|purchase)\s+(.+)$/i;
+const SELL = /^(?:please\s+)?sell\s+(.+)$/i;
+// Dollars alone, no asset: "$20", "20$", "20 dollars".
+const DOLLARS = String.raw`(?:\$\s?(${N})|(${N})\s?\$|(${N})\s*(?:dollars?|usd|bucks)\b)`;
+// "$20 of TSLA", "$20 worth of TSLA", "20 dollars TSLA"
+const DOLLARS_OF = new RegExp(String.raw`^${DOLLARS}(?:\s+worth)?(?:\s+of)?\s+(${SYM})$`, "i");
+// "TSLA for $20", "TSLA with 20 dollars"
+const FOR_DOLLARS = new RegExp(String.raw`^(${SYM})\s+(?:for|with)\s+${DOLLARS}$`, "i");
+// "20 USDG of TSLA", "0.01 ETH worth of TERA"
+const UNITS_OF = new RegExp(String.raw`^${UNITS}\s+(?:worth\s+)?of\s+(${SYM})$`, "i");
+// "TERA with 0.01 ETH", "TSLA for 20 USDG"
+const FOR_UNITS = new RegExp(String.raw`^(${SYM})\s+(?:for|with)\s+${UNITS}$`, "i");
+const JUST_UNITS = new RegExp(String.raw`^${UNITS}$`, "i");
+// "all my TERA", "all of my TERA", "all TERA", "everything in TERA"
+const ALL_OF = new RegExp(
+  String.raw`^(?:all|everything)(?:\s+(?:of|in))?(?:\s+(?:my|the))?\s+(${SYM})$`,
+  "i",
+);
+
+/** What an asset trades against in Tera: ETH for TERA, USDG for everything else. */
+export function pairFor(/** @type {string} */ symbol) {
+  return String(symbol).toUpperCase() === "TERA" ? "ETH" : "USDG";
+}
+
 /** @returns {GoUnknown} */
 const unknown = (/** @type {string} */ reason) => ({ kind: UNKNOWN, reason, examples: EXAMPLES });
 const tidy = (text) =>
@@ -105,17 +142,20 @@ const tidy = (text) =>
 /**
  * Read one sentence.
  *
- * context: { assets: [{ symbol, address, decimals }], book (contacts), owner }
+ * context: { assets: [{ symbol, address, decimals }], book (contacts), owner,
+ *            tradable: symbols the wallet can buy and sell (all but USDG when left out) }
  * Returns one of:
  *   { kind: "send", asset, amount?: "10", usd?: "2", to: { kind: "address" | "contact" | "tag", address?, name?, tag? } }
  *   { kind: "save", target: { kind: "last" } | { kind: "address", address }, name }
+ *   { kind: "trade", side: "buy" | "sell", asset, spend, amount?, usd?, all? }
+ *     (spend is what leaves the wallet, and amount, usd or all say how much of it)
  *   { kind: "unknown", reason, examples }
  *
  * @param {unknown} text
- * @param {{ assets?: GoAsset[], book?: { address: string, name: string }[], owner?: string }} [context]
- * @returns {GoSend | GoSave | GoUnknown}
+ * @param {{ assets?: GoAsset[], book?: { address: string, name: string }[], owner?: string, tradable?: string[] }} [context]
+ * @returns {GoSend | GoSave | GoTrade | GoUnknown}
  */
-export function read(text, { assets = [], book = [], owner = "" } = {}) {
+export function read(text, { assets = [], book = [], owner = "", tradable } = {}) {
   const sentence = tidy(text);
   if (!sentence) return unknown("Type what you'd like to do.");
   if (sentence.length > MAX_LENGTH)
@@ -124,8 +164,13 @@ export function read(text, { assets = [], book = [], owner = "" } = {}) {
   const save = SAVE_AS.exec(sentence) || NAME_IT.exec(sentence);
   if (save) return readSave(save[1] ?? "it", save[2]);
 
+  const buy = BUY.exec(sentence);
+  if (buy) return readTrade("buy", buy[1], { assets, tradable });
+  const sell = SELL.exec(sentence);
+  if (sell) return readTrade("sell", sell[1], { assets, tradable });
+
   const verb = VERB.exec(sentence);
-  if (!verb) return unknown("Tera Go can send payments and save contacts.");
+  if (!verb) return unknown("Tera Go can send payments, buy and sell, and save contacts.");
   const rest = verb[1];
 
   const first = AMOUNT_FIRST.exec(rest);
@@ -166,6 +211,79 @@ export function read(text, { assets = [], book = [], owner = "" } = {}) {
   return usd !== undefined
     ? { kind: SEND, asset, usd: plain(usd), to }
     : { kind: SEND, asset, amount: plain(amount), to };
+}
+
+/**
+ * A buy or a sell. Every shape names the asset and how much leaves the wallet.
+ *
+ * @param {"buy" | "sell"} side
+ * @param {string} rest
+ * @param {{ assets: GoAsset[], tradable?: string[] }} context
+ * @returns {GoTrade | GoUnknown}
+ */
+function readTrade(side, rest, { assets, tradable }) {
+  const plain = (/** @type {string} */ value) => value.replace(/,/g, "");
+  const dollars = (/** @type {RegExpExecArray} */ m, /** @type {number} */ at) =>
+    plain(m[at] ?? m[at + 1] ?? m[at + 2]);
+  /** @type {{ symbol: string, usd?: string, amount?: string, unitsOf?: string, all?: boolean } | null} */
+  let said = null;
+  let m;
+  if ((m = DOLLARS_OF.exec(rest))) said = { symbol: m[4], usd: dollars(m, 1) };
+  else if ((m = FOR_DOLLARS.exec(rest)) && side === "buy")
+    said = { symbol: m[1], usd: dollars(m, 2) };
+  else if ((m = UNITS_OF.exec(rest)) && side === "buy")
+    said = { symbol: m[3], amount: plain(m[1]), unitsOf: m[2] };
+  else if ((m = FOR_UNITS.exec(rest)) && side === "buy")
+    said = { symbol: m[1], amount: plain(m[2]), unitsOf: m[3] };
+  else if ((m = ALL_OF.exec(rest)) && side === "sell") said = { symbol: m[1], all: true };
+  else if ((m = JUST_UNITS.exec(rest)) && side === "sell")
+    said = { symbol: m[2], amount: plain(m[1]) };
+  else if ((m = JUST_UNITS.exec(rest)))
+    return unknown(
+      `Say how much to spend, like "buy $20 of ${m[2].toUpperCase()}". A buy spends an exact amount, and the review shows what it gets at the live price.`,
+    );
+  if (!said)
+    return unknown(
+      side === "buy"
+        ? 'Say what to buy and how much to spend, like "buy $20 of TSLA".'
+        : 'Say what to sell and how much, like "sell 100 TERA", "sell $20 of TSLA" or "sell all my TERA".',
+    );
+
+  const find = (/** @type {string} */ symbol) =>
+    assets.find((a) => String(a.symbol).toLowerCase() === symbol.toLowerCase());
+  const asset = find(said.symbol);
+  if (!asset)
+    return unknown(
+      `Tera doesn't know an asset called ${said.symbol.toUpperCase()} on Robinhood Chain.`,
+    );
+  const symbol = String(asset.symbol).toUpperCase();
+  if (symbol === "USDG")
+    return unknown(
+      'USDG is the dollar side of every trade, so it isn\'t bought or sold itself. Try "buy $20 of ETH" or "sell 0.01 ETH".',
+    );
+  const canTrade = tradable ? tradable.some((s) => String(s).toUpperCase() === symbol) : true;
+  if (!canTrade) return unknown(`${asset.symbol} can't be bought or sold in Tera yet.`);
+  const pair = find(pairFor(symbol));
+  if (!pair) return unknown(`${pairFor(symbol)} isn't in Tera's asset list right now.`);
+
+  const spend = side === "buy" ? pair : asset;
+  if (said.unitsOf && said.unitsOf.toUpperCase() !== String(pair.symbol).toUpperCase())
+    return unknown(
+      `${asset.symbol} is bought with ${pair.symbol} in Tera. Say ${pair.symbol} or dollars, like "buy $20 of ${asset.symbol}".`,
+    );
+  if (said.all) {
+    if (symbol === "ETH")
+      return unknown(
+        'Selling all your ETH would leave nothing to pay network fees with. Say an amount, like "sell 0.01 ETH".',
+      );
+    return { kind: TRADE, side, asset, spend, all: true };
+  }
+  // Dollars of USDG are already USDG: one dollar each, no price needed.
+  if (said.usd !== undefined && String(spend.symbol).toUpperCase() === "USDG")
+    return { kind: TRADE, side, asset, spend, amount: said.usd };
+  return said.usd !== undefined
+    ? { kind: TRADE, side, asset, spend, usd: said.usd }
+    : { kind: TRADE, side, asset, spend, amount: said.amount };
 }
 
 /** @returns {GoSave | GoUnknown} */
@@ -426,6 +544,10 @@ export function fromSpeech(text) {
   // "1.5" read back as "1 point 5"
   said = said.replace(/\b(\d+) point (\d+)\b/gi, "$1.$2");
   for (const [pattern, symbol] of SPOKEN_ASSETS) said = said.replace(pattern, symbol);
+  // A symbol spelled out letter by letter: "t s l a" is TSLA.
+  said = said.replace(/\b[a-z]\.?(?:\s+[a-z]\.?(?=\s|$)){1,5}/gi, (letters) =>
+    letters.replace(/[\s.]/g, "").toUpperCase(),
+  );
   // "5 dollars" and "5 bucks" read as dollars already; "$5 dollars" would not.
   said = said.replace(/\$\s?(\d[\d.,]*)\s+(?:dollars?|bucks|usd)\b/gi, "$$$1");
   // "to at astra" is a tag; "at" alone elsewhere is left as it is.
