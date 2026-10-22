@@ -40,6 +40,7 @@ import * as tags from "./src/tags";
 import * as biz from "./src/business";
 import * as payLinks from "./src/paylinks";
 import * as notify from "./src/notify";
+import * as push from "./src/push";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
 import {
@@ -1101,6 +1102,8 @@ function Wallet() {
     // A merchant's payment link being paid: it fixes the amount and the payee.
     [spendLink, setSpendLink] = useState<payLinks.PayLink | null>(null),
     [pendingPay, setPendingPay] = useState<string | null>(null),
+    [pendingOpen, setPendingOpen] = useState<"notifications" | null>(null),
+    [pushOn, setPushOn] = useState(false),
     // Which kind of destination the owner is entering. A tag and an address
     // fail in different ways and are checked differently, so the field asks
     // rather than guessing from what has been typed so far.
@@ -2383,9 +2386,21 @@ function Wallet() {
     void biz.loadTeamsConfig();
     void payLinks.loadPayLinksConfig();
     void notify.loadNotifyConfig();
+    void push.loadPushConfig().then(setPushOn);
     // A payment link opened on the web arrives as ?pay=…. It is taken off the
     // address bar at once and opened on the Spend screen after unlock.
     if (Platform.OS === "web" && typeof window !== "undefined") {
+      // A push tapped while Tera was closed opens it at ?open=notifications.
+      if (new URLSearchParams(window.location.search).get("open") === "notifications") {
+        setPendingOpen("notifications");
+        const url = new URL(window.location.href);
+        url.searchParams.delete("open");
+        window.history.replaceState(null, "", url.toString());
+      }
+      // …and one tapped while it was open says so to this window.
+      navigator.serviceWorker?.addEventListener?.("message", (event: MessageEvent) => {
+        if (event.data?.tera === "open" && event.data.page === "notifications") setPendingOpen("notifications");
+      });
       const id = payLinks.parseLink(window.location.search);
       if (id) {
         setPendingPay(id);
@@ -2395,6 +2410,11 @@ function Wallet() {
       }
     }
   }, []);
+  useEffect(() => {
+    if (!owner || !pendingOpen) return;
+    setPendingOpen(null);
+    setPage(pendingOpen);
+  }, [owner, pendingOpen]);
   useEffect(() => {
     if (!owner || !pendingPay) return;
     const id = pendingPay;
@@ -5403,6 +5423,7 @@ function Wallet() {
                 ),
                 () =>
                   void run(async () => {
+                    await push.forgetBrowser();
                     await vault.eraseWallet();
                     setExists(false);
                     setSetup("import");
@@ -13275,9 +13296,15 @@ function Wallet() {
               label={t("Transaction notifications", "交易通知")}
               detail={t("Payments in and out of this wallet", "此钱包的收款与付款")}
               onPress={() =>
-                void run(() =>
-                  store({ ...dataRef.current, alerts: { ...dataRef.current.alerts, off: on } }),
-                )
+                void run(async () => {
+                  // Off means off: push stops too, and Tera deletes what it kept.
+                  const pushed = dataRef.current.alerts?.push;
+                  if (on && pushed) await push.turnOff(pushed.endpoint, owner);
+                  await store({
+                    ...dataRef.current,
+                    alerts: { ...dataRef.current.alerts, off: on, ...(on ? { push: undefined } : {}) },
+                  });
+                })
               }
               right={<Toggle on={on} />}
             />
@@ -13301,6 +13328,72 @@ function Wallet() {
               />
             ) : null}
           </Group>
+          {on && pushOn && Platform.OS === "web" ? (
+            (() => {
+              const support = push.pushSupport();
+              const current = data.alerts?.push;
+              const setPush = (next: { endpoint: string; detail: "amounts" | "quiet" } | undefined) =>
+                store({ ...dataRef.current, alerts: { ...dataRef.current.alerts, push: next } });
+              const turnOn = (detail: "amounts" | "quiet") =>
+                void run(async () => {
+                  const endpoint = await push.turnOn(detail, language);
+                  await setPush({ endpoint, detail });
+                  if (!current)
+                    setNotice({
+                    title: t("Push notifications on", "推送通知已开启"),
+                    body: t(
+                      "You'll hear about token payments here even with Tera closed.",
+                      "即使 Tera 已关闭，你也会在此收到代币收付款提醒。",
+                    ),
+                    tone: "success",
+                  });
+                });
+              return (
+                <Group title={t("When Tera is closed", "Tera 关闭时")}>
+                  <ListRow
+                    icon="cellphone"
+                    label={t("Push notifications", "推送通知")}
+                    detail={
+                      current
+                        ? t("On for this wallet in this browser", "已为此浏览器中的此钱包开启")
+                        : support === "install"
+                          ? t("On iPhone, add Tera to your Home Screen first, then open it from there", "在 iPhone 上，请先将 Tera 添加到主屏幕，再从主屏幕打开")
+                          : support === "blocked"
+                            ? t("Blocked — allow notifications in your browser's site settings", "已被阻止 — 请在浏览器网站设置中允许通知")
+                            : support === "unsupported"
+                              ? t("This browser can't receive push notifications", "此浏览器无法接收推送通知")
+                              : t("Hear about payments even with Tera closed", "即使 Tera 关闭也能收到付款提醒")
+                    }
+                    onPress={
+                      current
+                        ? () =>
+                            void run(async () => {
+                              await push.turnOff(current.endpoint, owner);
+                              await setPush(undefined);
+                            })
+                        : support === "ready"
+                          ? () => turnOn("amounts")
+                          : undefined
+                    }
+                    right={<Toggle on={!!current} />}
+                  />
+                  {current ? (
+                    <ListRow
+                      icon="eye-outline"
+                      label={t("Show amounts on the lock screen", "在锁屏上显示金额")}
+                      detail={
+                        current.detail === "quiet"
+                          ? t("Off — pushes only say something moved", "已关闭 — 推送只提示有动态")
+                          : t("On — e.g. \"Received 25 USDG\"", "已开启 — 例如“收到 25 USDG”")
+                      }
+                      onPress={() => turnOn(current.detail === "quiet" ? "amounts" : "quiet")}
+                      right={<Toggle on={current.detail !== "quiet"} />}
+                    />
+                  ) : null}
+                </Group>
+              );
+            })()
+          ) : null}
           <View style={[s.panel, { gap: 10 }]}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
               <Icon name="bell-ring-outline" size={18} color={colors.green} />
@@ -13368,16 +13461,29 @@ function Wallet() {
             </Text>
             <Text style={s.small}>
               {t(
-                "To hear about token payments this fast, the app tells Tera which wallet to watch while it is open. Tera keeps nothing: what it reads is dropped after ten minutes. Turning notifications off stops that.",
+                "To hear about token payments this fast, the app tells Tera which wallet to watch while it is open. For this, Tera keeps nothing: what it reads is dropped after ten minutes. Turning notifications off stops that.",
                 "为了即时提醒代币收付款，应用在打开期间会告知 Tera 需要关注的钱包。Tera 不保存任何内容：读取的数据十分钟后丢弃。关闭通知即停止。",
               )}
             </Text>
+            {data.alerts?.push ? (
+              <Text style={s.small}>
+                {t(
+                  "With push on, Tera keeps this wallet's public address and this browser's push address so it can reach you while Tera is closed. Pushes cover tokens Tera lists, never name the other address, and skip tiny incoming amounts, which is how scammers plant lookalike addresses. Money going out is always pushed. Plain ETH moves show when you open Tera. Turning push off deletes what Tera kept.",
+                  "开启推送后，Tera 会保存此钱包的公开地址和此浏览器的推送地址，以便在 Tera 关闭时通知你。推送仅涵盖 Tera 列出的代币，从不显示对方地址，并跳过极小的转入金额（这是骗子植入仿冒地址的常见手法）。转出的资金总会推送。普通 ETH 转账在打开 Tera 后显示。关闭推送即删除 Tera 保存的内容。",
+                )}
+              </Text>
+            ) : null}
             <Text style={s.small}>
               {Platform.OS === "web"
-                ? t(
-                    "Notifications need Tera open in a tab. A closed tab is told nothing.",
-                    "通知需要 Tera 在标签页中保持打开。关闭的标签页不会收到通知。",
-                  )
+                ? data.alerts?.push
+                  ? t(
+                      "Everything else needs Tera open in a tab.",
+                      "其他提醒需要 Tera 在标签页中保持打开。",
+                    )
+                  : t(
+                      "Notifications need Tera open in a tab, unless push is on.",
+                      "除非开启推送，否则通知需要 Tera 在标签页中保持打开。",
+                    )
                 : t(
                     "On this phone they show while Tera is open. A closed app is told nothing until you open it.",
                     "在此手机上，通知仅在 Tera 打开时显示。应用关闭时不会收到提醒，打开后会补充提醒。",
@@ -14825,7 +14931,8 @@ function Wallet() {
                   t("You will need your recovery phrase.", "恢复需要助记词。"),
                   () =>
                     void run(async () => {
-                      await vault.eraseWallet();
+                      await push.forgetBrowser();
+                    await vault.eraseWallet();
                       forget();
                       setExists(false);
                     }),
@@ -15133,6 +15240,7 @@ function Wallet() {
                 ),
                 () =>
                   void run(async () => {
+                    await push.forgetBrowser();
                     await vault.eraseWallet();
                     forget();
                     setExists(false);
@@ -15965,6 +16073,7 @@ function Wallet() {
                           ),
                           () =>
                             void run(async () => {
+                              void push.forgetWallet(entry.address);
                               await vault.deleteAccount(entry.index);
                               syncAccounts();
                               if (entry.active) {

@@ -20,6 +20,7 @@ import businessEmailRouter from "./routes/business-email";
 import teamsRouter from "./routes/teams";
 import payLinksRouter from "./routes/pay-links";
 import notifyRouter from "./routes/notify";
+import pushRouter from "./routes/push";
 import leaderboardRouter from "./routes/leaderboard";
 import adminRouter from "./routes/admin";
 
@@ -63,6 +64,7 @@ app.use(businessEmailRouter);
 app.use(teamsRouter);
 app.use(payLinksRouter);
 app.use(notifyRouter);
+app.use(pushRouter);
 app.use(leaderboardRouter);
 app.use(assetsRouter);
 app.use(intentRouter);

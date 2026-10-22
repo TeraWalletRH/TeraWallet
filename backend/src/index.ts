@@ -4,6 +4,7 @@ import { migrate } from "./db/migrate";
 import { startStakingPayoutExecutor } from "./staking-executor";
 import { startPrivateSendExecutor } from "./private-send";
 import { startPrivateBridgeExecutor } from "./private-bridge";
+import { startPush } from "./push";
 
 const PORT = Number(process.env.PORT) || 3001;
 
@@ -22,6 +23,7 @@ async function bootstrap() {
       startStakingPayoutExecutor();
       startPrivateSendExecutor();
       startPrivateBridgeExecutor();
+      void startPush().catch((error) => console.error("Push failed to start:", error));
     });
   } catch (error) {
     console.error("Failed to start server:", error);

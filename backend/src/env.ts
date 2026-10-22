@@ -81,6 +81,17 @@ export const env = {
   // Transaction notifications. Needs no database, only the chain; off until
   // switched on, because it reads the chain for as long as anyone listens.
   notifyEnabled: process.env.NOTIFY_ENABLED === "true",
+  // Push notifications to a closed app. Unlike the above, this remembers
+  // which wallet a device asked about, so it needs the database too, and the
+  // VAPID key pair that signs each push (generate once: bunx web-push
+  // generate-vapid-keys). Off unless all of them are set.
+  get pushEnabled(): boolean {
+    if (process.env.NODE_ENV === "test") return false;
+    return process.env.PUSH_ENABLED === "true";
+  },
+  vapidPublicKey: process.env.VAPID_PUBLIC_KEY ?? "",
+  vapidPrivateKey: process.env.VAPID_PRIVATE_KEY ?? "",
+  vapidSubject: process.env.VAPID_SUBJECT || "mailto:terawalletrh@outlook.com",
   get privateSendVaultPrivateKey(): string {
     return (
       process.env.PRIVATE_SEND_VAULT_PRIVATE_KEY ||

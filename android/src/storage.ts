@@ -181,6 +181,11 @@ export type LocalData = {
     }[];
     /** When the notifications page was last opened; newer items count as unread. */
     readAt?: number;
+    /**
+     * Push to this browser while Tera is closed (core/push.js): the browser's
+     * push address and what the lock screen may show. Absent when off.
+     */
+    push?: { endpoint: string; detail: "amounts" | "quiet" };
   };
 };
 export const emptyData = (): LocalData => ({
