@@ -280,6 +280,8 @@ export function exportPrivateKey(index: number) {
   }
 }
 export function lock() {
+  staged?.fill(0);
+  staged = null;
   phrase = null;
   indices = [0];
   selected = 0;
@@ -723,7 +725,9 @@ export async function unlock(password: string | null) {
     // than where they left off would be its own kind of surprise, and on a
     // wallet with one account these are the same address anyway.
     return currentAccount().address;
-  } catch {
+  } catch (e) {
+    // A cancelled or unsupported passkey says so, rather than blaming a password nobody typed.
+    if (password === null && e instanceof Error && /passkey/i.test(e.message)) throw e;
     throw new Error(
       "Could not unlock. Check your password or use phrase recovery. / 无法解锁，请检查密码或使用助记词恢复。",
     );
@@ -781,6 +785,37 @@ export async function enableBiometrics(password: string) {
     key.fill(0);
     authenticating = false;
   }
+}
+// The web's passkey setup comes in two taps. Safari only shows a passkey
+// prompt straight from a tap, and checking the PIN takes seconds, so the PIN
+// is checked first and its key held here until the second tap makes the
+// passkey. Locking forgets it.
+let staged: Uint8Array | null = null;
+/** Step one: check the PIN and hold the key the passkey will guard. */
+export async function stageBiometrics(password: string) {
+  await unlock(password);
+  const saved = await envelope();
+  staged?.fill(0);
+  staged = await passwordKey(password, hexToBytes(saved.salt), saved.kdf ?? LEGACY_PASSWORD_ITERATIONS);
+}
+export const biometricsStaged = () => staged !== null;
+/** Step two: make the passkey and seal the held key behind it. */
+export async function finishBiometrics() {
+  if (!staged || !isUnlocked()) throw new Error("Enter your PIN first. / 请先输入 PIN。");
+  try {
+    authenticating = true;
+    await store.secureSet(BIOMETRIC, bytesToHex(staged), "Tera Wallet passkey / Tera 钱包通行密钥");
+    staged.fill(0);
+    staged = null;
+  } finally {
+    authenticating = false;
+  }
+}
+/** Whether this device has biometric (or passkey) unlock set up, as far as it can tell. */
+export const biometricsEnabled = () => store.hasProtected(BIOMETRIC);
+/** Stop unlocking with biometrics or a passkey on this device. The PIN is unchanged. */
+export async function disableBiometrics() {
+  await store.secureDelete(BIOMETRIC);
 }
 export const revealPhrase = () => {
   currentAccount();

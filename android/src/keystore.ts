@@ -32,6 +32,15 @@ export function secureSet(key: string, value: string, prompt?: string) {
   );
 }
 
+/**
+ * Whether `key` holds a biometric-guarded value. The keychain can't say
+ * without asking for biometrics, so the phone answers yes and the unlock
+ * itself reports a missing one, as it always has.
+ */
+export async function hasProtected(_key: string) {
+  return true;
+}
+
 export function secureDelete(key: string) {
   return SecureStore.deleteItemAsync(key, opts);
 }
