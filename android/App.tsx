@@ -1121,8 +1121,28 @@ function Wallet() {
     // renameError near the wallet menu).
     [authError, setAuthError] = useState(""),
     [biometricSheet, setBiometricSheet] = useState(false),
-    [biometricError, setBiometricError] = useState("");
+    [biometricError, setBiometricError] = useState(""),
+    // The web's passkey (update 9): whether this device has one, and whether
+    // the PIN has been checked for the setup's second tap.
+    [passkeyOn, setPasskeyOn] = useState(false),
+    [passkeyStep, setPasskeyStep] = useState(false);
   const pending = useRef(false);
+  const webPasskey = Platform.OS === "web";
+  // On the web the button shows only once a passkey is set up; a phone can't
+  // tell without asking for biometrics, so it shows there as it always has.
+  const bioUsable = vault.biometricsSupported && (!webPasskey || passkeyOn);
+  const bioLabel = webPasskey ? t("Use passkey", "使用通行密钥") : t("Use biometrics", "使用生物识别");
+  useEffect(() => {
+    if (!webPasskey) return;
+    let live = true;
+    vault
+      .biometricsEnabled()
+      .then((on) => live && setPasskeyOn(on))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [owner, biometricSheet, webPasskey]);
   const glassTarget = useRef<View>(null);
   const chatScrollRef = useRef<ScrollView>(null);
   const reviewScrollRef = useRef<ScrollView>(null);
@@ -5004,7 +5024,7 @@ function Wallet() {
               })}
             </>
           )}
-          {vault.biometricsSupported && (
+          {bioUsable && (
             <Pressable
               accessibilityRole="button"
               disabled={busy}
@@ -5026,7 +5046,7 @@ function Wallet() {
             >
               <Icon name="fingerprint" size={17} color={colors.green} />
               <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
-                {t("Use biometrics", "使用生物识别")}
+                {bioLabel}
               </Text>
             </Pressable>
           )}
@@ -7104,7 +7124,7 @@ function Wallet() {
                     </View>
                   ) : (
                     <Text style={s.small}>
-                      {vault.biometricsSupported
+                      {bioUsable
                         ? t(
                             "You'll see the full payment or trade before anything happens, and approve it with your PIN, face or fingerprint.",
                             "执行前你会看到完整的付款或交易信息，并用 PIN、面容或指纹确认。",
@@ -13240,11 +13260,18 @@ function Wallet() {
             {vault.biometricsSupported && (
               <ListRow
                 icon="fingerprint"
-                label={t("Biometric unlock", "生物识别解锁")}
-                detail={t("Unlock with Face ID or a fingerprint", "使用 Face ID 或指纹解锁")}
+                label={webPasskey ? t("Passkey", "通行密钥") : t("Biometric unlock", "生物识别解锁")}
+                detail={
+                  webPasskey
+                    ? passkeyOn
+                      ? t("On · unlock and approve with Face ID, Touch ID or Windows Hello", "已开启 · 使用 Face ID、Touch ID 或 Windows Hello 解锁和确认")
+                      : t("Unlock and approve with Face ID, Touch ID or Windows Hello", "使用 Face ID、Touch ID 或 Windows Hello 解锁和确认")
+                    : t("Unlock with Face ID or a fingerprint", "使用 Face ID 或指纹解锁")
+                }
                 onPress={() => {
                   setPassword("");
                   setBiometricError("");
+                  setPasskeyStep(false);
                   setBiometricSheet(true);
                 }}
               />
@@ -14263,20 +14290,24 @@ function Wallet() {
         >
           {t("Show recovery phrase", "显示助记词")}
         </Button>
-        <Field
-          label={t("Password to enable biometrics", "启用生物识别所需的密码")}
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-        />
-        {action(
-          "Enable biometric unlock",
-          "启用生物识别解锁",
-          async () => {
-            await vault.enableBiometrics(password);
-            setPassword("");
-          },
-          false,
+        {!webPasskey && (
+          <>
+            <Field
+              label={t("Password to enable biometrics", "启用生物识别所需的密码")}
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+            />
+            {action(
+              "Enable biometric unlock",
+              "启用生物识别解锁",
+              async () => {
+                await vault.enableBiometrics(password);
+                setPassword("");
+              },
+              false,
+            )}
+          </>
         )}
         <Button onPress={forget}>{t("Lock now", "立即锁定")}</Button>
         <Text style={s.eyebrow}>{t("DATA & PRIVACY", "数据与隐私")}</Text>
@@ -16036,7 +16067,7 @@ function Wallet() {
                       })}
                     </>
                   )}
-                  {vault.biometricsSupported && (
+                  {bioUsable && (
                     <Pressable
                       accessibilityRole="button"
                       disabled={busy}
@@ -16064,7 +16095,7 @@ function Wallet() {
                     >
                       <Icon name="fingerprint" size={17} color={colors.green} />
                       <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
-                        {t("Use biometrics", "使用生物识别")}
+                        {bioLabel}
                       </Text>
                     </Pressable>
                   )}
@@ -16386,7 +16417,7 @@ function Wallet() {
                 );
               }
             })}
-            {vault.biometricsSupported && (
+            {bioUsable && (
               <Pressable
                 accessibilityRole="button"
                 disabled={busy}
@@ -16414,7 +16445,7 @@ function Wallet() {
               >
                 <Icon name="fingerprint" size={17} color={colors.green} />
                 <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
-                  {t("Use biometrics", "使用生物识别")}
+                  {bioLabel}
                 </Text>
               </Pressable>
             )}
@@ -16440,6 +16471,116 @@ function Wallet() {
         <View
           style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "center", padding: 24 }}
         >
+          {webPasskey ? (
+            <View style={[s.panel, { backgroundColor: colors.sheet, gap: 14 }, dialogFrame]}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
+                <View style={s.iconDisc}>
+                  <Icon name="fingerprint" size={20} color={colors.green} />
+                </View>
+                <Text style={[s.text, { fontWeight: "700", flex: 1 }]}>
+                  {passkeyOn ? t("Passkey is on", "通行密钥已开启") : t("Set up a passkey", "设置通行密钥")}
+                </Text>
+              </View>
+              {passkeyOn ? (
+                <>
+                  <Text style={s.small}>
+                    {t(
+                      "This browser unlocks the wallet and approves payments with your passkey. Your PIN still works. Turning it off removes the passkey's sealed key from this site; the passkey itself stays in your password manager until you delete it there.",
+                      "此浏览器使用你的通行密钥解锁钱包并确认付款，PIN 仍然有效。关闭后，本站会删除通行密钥保管的密钥；通行密钥本身会留在你的密码管理器中，直到你在那里删除。",
+                    )}
+                  </Text>
+                  {action("Turn off passkey", "关闭通行密钥", async () => {
+                    try {
+                      await vault.disableBiometrics();
+                      setPasskeyOn(false);
+                      setBiometricSheet(false);
+                      setNotice({
+                        title: t("Passkey off", "通行密钥已关闭"),
+                        body: t("Unlock and approve with your PIN.", "请使用 PIN 解锁和确认。"),
+                        tone: "success",
+                      });
+                    } catch (e) {
+                      setBiometricError(e instanceof Error ? e.message : t("Couldn't turn that off.", "无法关闭。"));
+                    }
+                  })}
+                </>
+              ) : passkeyStep ? (
+                <>
+                  <Text style={s.small}>
+                    {t(
+                      "PIN checked. Now make the passkey: your browser will ask for your face, fingerprint or device PIN.",
+                      "PIN 已验证。现在创建通行密钥：浏览器会要求你验证面容、指纹或设备 PIN。",
+                    )}
+                  </Text>
+                  {action("Create passkey", "创建通行密钥", async () => {
+                    // Caught here, not left to `run`, like the phone's sheet below.
+                    try {
+                      setBiometricError("");
+                      await vault.finishBiometrics();
+                      setPasskeyStep(false);
+                      setPasskeyOn(true);
+                      setBiometricSheet(false);
+                      setNotice({
+                        title: t("Passkey on", "通行密钥已开启"),
+                        body: t(
+                          "Next time, tap Use passkey to unlock the wallet or approve a payment. Your PIN still works, and your recovery phrase is still the backup.",
+                          "下次点“使用通行密钥”即可解锁钱包或确认付款。PIN 仍然有效，助记词仍是备份。",
+                        ),
+                        tone: "success",
+                      });
+                    } catch (e) {
+                      setBiometricError(
+                        e instanceof Error ? e.message : t("Couldn't make the passkey.", "无法创建通行密钥。"),
+                      );
+                    }
+                  })}
+                </>
+              ) : (
+                <>
+                  <Text style={s.small}>
+                    {t(
+                      "Unlock and approve payments with Face ID, Touch ID or Windows Hello instead of typing your PIN. The passkey seals the key that opens this wallet, so the copy in this browser is useless without it. Your PIN keeps working.",
+                      "使用 Face ID、Touch ID 或 Windows Hello 代替输入 PIN 来解锁和确认付款。通行密钥保管打开此钱包的密钥，没有它，浏览器中的副本毫无用处。PIN 仍然有效。",
+                    )}
+                  </Text>
+                  <Field
+                    label={t("Wallet PIN", "钱包 PIN")}
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry
+                    keyboardType="number-pad"
+                    maxLength={6}
+                  />
+                  {action("Continue", "继续", async () => {
+                    try {
+                      setBiometricError("");
+                      await vault.stageBiometrics(password);
+                      setPassword("");
+                      setPasskeyStep(true);
+                    } catch (e) {
+                      setBiometricError(
+                        e instanceof Error ? e.message : t("Couldn't check that PIN.", "无法验证该 PIN。"),
+                      );
+                    }
+                  })}
+                </>
+              )}
+              {biometricError ? (
+                <Text style={[s.small, { color: colors.danger }]}>{biometricError}</Text>
+              ) : null}
+              <Button
+                disabled={busy}
+                onPress={() => {
+                  setBiometricSheet(false);
+                  setPassword("");
+                  setBiometricError("");
+                  setPasskeyStep(false);
+                }}
+              >
+                {t("Cancel", "取消")}
+              </Button>
+            </View>
+          ) : (
           <View style={[s.panel, { backgroundColor: colors.sheet, gap: 14 }, dialogFrame]}>
             <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
               <View style={s.iconDisc}>
@@ -16491,68 +16632,7 @@ function Wallet() {
               {t("Cancel", "取消")}
             </Button>
           </View>
-        </View>
-      </Modal>
-      <Modal
-        visible={biometricSheet && !!owner}
-        transparent
-        animationType={modalAnimation("fade", reduceMotion)}
-        onRequestClose={() => !busy && setBiometricSheet(false)}
-      >
-        <View
-          style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "center", padding: 24 }}
-        >
-          <View style={[s.panel, { backgroundColor: colors.sheet, gap: 14 }, dialogFrame]}>
-            <View style={{ flexDirection: "row", alignItems: "center", gap: 12 }}>
-              <View style={s.iconDisc}>
-                <Icon name="fingerprint" size={20} color={colors.green} />
-              </View>
-              <Text style={[s.text, { fontWeight: "700", flex: 1 }]}>
-                {t("Enable biometric unlock", "启用生物识别解锁")}
-              </Text>
-            </View>
-            <Field
-              label={t("Password to enable biometrics", "启用生物识别所需的密码")}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-            />
-            {biometricError ? (
-              <Text style={[s.small, { color: colors.danger }]}>{biometricError}</Text>
-            ) : null}
-            {action("Enable biometric unlock", "启用生物识别解锁", async () => {
-              // Caught here, not left to `run`: a thrown error would route
-              // through the global `error` state, which opens the shared
-              // notice Modal on top of this still-open one and hangs iOS.
-              try {
-                await vault.enableBiometrics(password);
-                setPassword("");
-                setBiometricSheet(false);
-                setNotice({
-                  title: t("Biometric unlock enabled", "已启用生物识别解锁"),
-                  body: t(
-                    "Use Face ID or a fingerprint to unlock next time.",
-                    "下次可使用 Face ID 或指纹解锁。",
-                  ),
-                  tone: "success",
-                });
-              } catch (e) {
-                setBiometricError(
-                  e instanceof Error ? e.message : t("Couldn't enable that.", "无法启用该功能。"),
-                );
-              }
-            })}
-            <Button
-              disabled={busy}
-              onPress={() => {
-                setBiometricSheet(false);
-                setPassword("");
-                setBiometricError("");
-              }}
-            >
-              {t("Cancel", "取消")}
-            </Button>
-          </View>
+          )}
         </View>
       </Modal>
       <Modal
