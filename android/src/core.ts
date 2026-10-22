@@ -137,3 +137,6 @@ export * as discretion from "../../public/tera/core/discretion.js";
 
 // A transaction that hasn't confirmed: what happened to it, and whether to send again or cancel.
 export * as stuck from "../../public/tera/core/stuck.js";
+
+// What a transaction does to this wallet's balances, from the chain's own simulation.
+export * as balanceChanges from "../../public/tera/core/balance-changes.js";
