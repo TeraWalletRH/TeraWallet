@@ -7662,8 +7662,6 @@ function Wallet() {
                 </View>
                 <Icon name="chevron-right" size={18} color={colors.muted} />
               </Pressable>
-              {!wide && watchlistSection}
-              {!wide && popular}
               <View ref={tourAssetsRef} collapsable={false} style={{ gap: 10 }}>
                 <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                   <Pressable
@@ -7698,6 +7696,8 @@ function Wallet() {
                   </View>
                 )}
               </View>
+              {!wide && watchlistSection}
+              {!wide && popular}
             </View>
             <View style={wide ? { flex: 5, minWidth: 0, gap: 22 } : { gap: 18 }}>
               {wide && watchlistSection}
