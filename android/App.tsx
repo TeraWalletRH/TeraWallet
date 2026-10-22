@@ -71,6 +71,7 @@ import {
   networkSpeed,
   notes as notesCore,
   stuck as stuckCore,
+  batchSend as batchCore,
   contacts as contactsCore,
   limits as limitsCore,
   spend as spendCore,
@@ -101,7 +102,7 @@ import {
   freshness,
   haptics as hapticsCore,
 } from "./src/core";
-import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, verifyBridge, verifyTransfer } from "./src/validation";
+import { FIAT_RATES, check, checkChecksum, formatFiat, isTrustedRecipient, parseQrAddress, positive, same, transferTx, txCheck, verifyBridge, verifyTransfer } from "./src/validation";
 import * as vault from "./src/storage";
 import { evaluatePriceAlerts, type PriceAlert } from "./src/alerts";
 import { screenOrigin } from "./src/viewport";
@@ -181,6 +182,8 @@ type Review = {
   /** The owner's private note, saved under the transaction's hash once it is signed. */
   note?: string;
   netBalanceDelta?: NetBalanceDelta;
+  /** Send to many: one entry per step, so each payment gets its own Activity row. */
+  batch?: { amount: string; payee: string; counterparty: string; spendUsd: string | null }[];
 };
 type ReviewSnapshot = Pick<Review, "rows" | "steps">;
 const tokenImages: Record<string, any> = {
@@ -939,6 +942,9 @@ function Wallet() {
     [activityDetail, setActivityDetail] = useState<string | null>(null),
     // What the chain said about a stuck transaction (core/stuck.js), by hash.
     [stuckSeen, setStuckSeen] = useState<{ hash: string; state: string; actions: string[] } | null>(null),
+    // Send to many: the pasted list and the one asset it pays in.
+    [batchText, setBatchText] = useState(""),
+    [batchSymbol, setBatchSymbol] = useState("USDG"),
     // What the Activity list is searched and filtered by. Kept while the
     // owner opens a row and comes back.
     [activityQuery, setActivityQuery] = useState(""),
@@ -2462,6 +2468,7 @@ function Wallet() {
       { id: "receive", kind: "action", icon: "arrow-down", label: t("Receive", "收款"), keywords: ["deposit", "address", "qr", "地址"], go: () => openFlow("receive") },
       { id: "swap", kind: "action", icon: "swap-horizontal", label: t("Swap", "兑换"), keywords: ["trade", "exchange", "buy", "sell", "交易"], go: () => openFlow("swap") },
       { id: "bridge", kind: "action", icon: "bridge", label: t("Bridge", "跨链"), keywords: ["base", "ethereum", "move"], go: () => openFlow("bridge") },
+      { id: "batch", kind: "action", icon: "users", label: t("Send to many", "批量发送"), keywords: ["batch", "bulk", "multiple", "payroll", "airdrop", "split", "批量"], go: openBatch },
       { id: "private", kind: "action", icon: "shield-lock-outline", label: t("Private send", "私密发送"), keywords: ["privacy", "shield"], go: () => openFlow("send", "private") },
       { id: "activity", kind: "action", icon: "history", label: t("Activity", "记录"), keywords: ["history", "transactions", "交易记录"], go: () => setPage("activity") },
       { id: "assistant", kind: "action", icon: "message-text-outline", label: t("Assistant", "助手"), keywords: ["ai", "chat", "ask"], go: () => setPage("assistant") },
@@ -4070,6 +4077,130 @@ function Wallet() {
       },
     });
   }
+  function openBatch() {
+    setError("");
+    setPage("batch");
+  }
+  /** The asset a Send to many list pays in: one the wallet knows, USDG when unset. */
+  const batchAsset = assets.find((a) => a.symbol === batchSymbol) || assets.find((a) => a.symbol === "USDG") || sources[0];
+  const batchPrices = () => {
+    const key = (batchAsset as any).priceAs ?? batchAsset.symbol;
+    const price = usablePrice(key);
+    return price ? { [key]: price } : {};
+  };
+  /**
+   * Send to many (core/batch-send.js): every line resolved and checked, then
+   * one review for the whole list, signed once. The payments go out one after
+   * another, each waiting for the last to confirm, so a refused one stops the
+   * rest rather than leaving a gap the owner can't see.
+   */
+  async function prepareBatch(guard: () => void) {
+    const parsed = batchCore.parseBatch(batchText, {
+      asset: batchAsset,
+      book: contactsCore.cleanBook(dataRef.current.contacts),
+      owner,
+      prices: batchPrices(),
+    });
+    check(parsed.ready, parsed.problem || t("Add at least one payment.", "请至少添加一笔付款。"));
+    const short = (address: string) => `${address.slice(0, 6)}…${address.slice(-4)}`;
+    const resolved: { address: string; label: string; units: bigint; amount: string }[] = [];
+    for (const p of parsed.payments) {
+      // Tags are resolved now, against the register, like the Send screen does.
+      const address = p.to.kind === "tag" ? (await resolveName(p.to.tag)).address : (p.to.address as string);
+      guard();
+      resolved.push({
+        address,
+        label: p.to.kind === "contact" ? p.to.name : p.to.kind === "tag" ? `@${p.to.tag}` : short(address),
+        units: p.units as bigint,
+        amount: p.amount as string,
+      });
+    }
+    const twice = batchCore.repeatedAddress(resolved.map((r) => r.address));
+    check(
+      !twice,
+      t(
+        `${short(twice)} is on the list twice (a tag and its address, or two tags for one wallet). Remove one.`,
+        `${short(twice)} 在列表中出现了两次，请删除一个。`,
+      ),
+    );
+    check(
+      !resolved.some((r) => same(r.address, owner)),
+      t("One of these tags is your own wallet.", "其中一个标签是你自己的钱包。"),
+    );
+    if (dataRef.current.trustedOnlyMode)
+      for (const r of resolved)
+        check(
+          isTrustedRecipient(r.address, book),
+          t(
+            `Trusted only mode is active, and ${r.label} isn't a saved contact.`,
+            `受信任模式已启用，${r.label} 不是已保存的联系人。`,
+          ),
+        );
+    const symbol = batchAsset.symbol;
+    const total = resolved.reduce((sum, r) => sum + r.units, 0n);
+    enforceLimits(paymentUsd(symbol, total, batchAsset.decimals));
+    // The whole list against the balance on the chain now, before the review.
+    const held = await heldNow(batchAsset).catch(() => null);
+    guard();
+    if (held !== null) {
+      const shortfall = walletSendCore.checkAmount({
+        units: total,
+        balance: held.toString(),
+        symbol,
+        decimals: batchAsset.decimals,
+      });
+      check(!shortfall, shortfall ?? "");
+    }
+    const steps = resolved.map((r) =>
+      transferTx(batchAsset.address as Address, r.address as Address, r.units.toString()),
+    );
+    const fingerprint = JSON.stringify(steps);
+    const rows: [string, string][] = [
+      [t("Action", "操作"), t("Send to many", "批量发送")],
+      [t("Total", "合计"), `${formatUnits(total, batchAsset.decimals)} ${symbol}`],
+      usdReviewRow(symbol, formatUnits(total, batchAsset.decimals)),
+      [t("Payments", "笔数"), String(resolved.length)],
+      ...resolved.map((r, i) => [`${i + 1}. ${r.label}`, `${r.amount} ${symbol}`] as [string, string]),
+    ];
+    // Every address is checked against the saved and past ones, not only the first.
+    for (const r of resolved) {
+      const imitated = lookalikeOf(r.address);
+      if (imitated)
+        rows.push([
+          t("Warning", "警告"),
+          t(
+            `${r.label} looks like ${imitated.name} (${short(imitated.address)}) but is a different address.`,
+            `${r.label} 看起来像 ${imitated.name}（${short(imitated.address)}），但地址不同。`,
+          ),
+        ]);
+    }
+    rows.push([
+      t("How it's sent", "发送方式"),
+      t(
+        `${resolved.length} transactions, one after another, approved once. If one is refused, the rest aren't sent.`,
+        `${resolved.length} 笔交易依次发送，只需确认一次。若其中一笔被拒绝，其余不会发送。`,
+      ),
+    ]);
+    await presentReview({
+      title: t(`Review ${resolved.length} payments`, `审核 ${resolved.length} 笔付款`),
+      activityType: "send",
+      rows,
+      steps,
+      verify: () => {
+        check(JSON.stringify(steps) === fingerprint, t("This list changed. Review it again.", "列表已变更，请重新审核。"));
+        steps.forEach(txCheck);
+      },
+      spendUsd: paymentUsd(symbol, total, batchAsset.decimals),
+      batch: resolved.map((r) => ({
+        amount: `${r.amount} ${symbol}`,
+        payee: r.address,
+        counterparty: r.label,
+        spendUsd: paymentUsd(symbol, r.units, batchAsset.decimals),
+      })),
+      returnTo: "activity",
+      afterSubmitted: async () => setBatchText(""),
+    });
+  }
   function openSpend() {
     setError("");
     setPayNote("");
@@ -4641,7 +4772,21 @@ function Wallet() {
         r.verify,
         async (record) => {
           if (record.step === record.totalSteps) submittedHash = record.hash;
-          const row = {
+          // Send to many: every step is a payment of its own, with its own row,
+          // payee and spend (the limits count each one).
+          const per = r.batch?.[record.step - 1];
+          const row = per ? {
+            ...record,
+            title: t(`Sent ${per.amount}`, `已发送 ${per.amount}`),
+            activityType: "send",
+            activityAmount: per.amount,
+            counterparty: per.counterparty,
+            reviewSnapshot: record.step === record.totalSteps
+              ? ({ rows: r.rows, steps: r.steps } satisfies ReviewSnapshot) : undefined,
+            recipient: per.payee,
+            payee: per.payee,
+            spendUsd: per.spendUsd ?? undefined,
+          } : {
             ...record,
             title: record.step === record.totalSteps ? activityTitle : t("Approval", "授权"),
             activityType: record.step === record.totalSteps ? activityType : "approval",
@@ -4683,11 +4828,19 @@ function Wallet() {
       )
         openContact(payee, true);
       else
-        setNotice({
-          title: t("Transaction submitted", "交易已提交"),
-          body: t("Your signed transaction is now in Activity.", "已签名交易现已显示在记录中。"),
-          tone: "success",
-        });
+        setNotice(
+          r.batch
+            ? {
+                title: t(`${r.batch.length} payments sent`, `已发送 ${r.batch.length} 笔付款`),
+                body: t("Each one is its own row in Activity.", "每笔付款在记录中单独显示。"),
+                tone: "success",
+              }
+            : {
+                title: t("Transaction submitted", "交易已提交"),
+                body: t("Your signed transaction is now in Activity.", "已签名交易现已显示在记录中。"),
+                tone: "success",
+              },
+        );
       setReview(null);
     } finally {
       setSigning(false);
@@ -8460,6 +8613,137 @@ function Wallet() {
         </>
       );
     }
+    if (page === "batch") {
+      const parsed = batchCore.parseBatch(batchText, {
+        asset: batchAsset,
+        book,
+        owner,
+        prices: batchPrices(),
+      });
+      const choices = assets.filter(
+        (a) => ["USDG", "ETH", "TERA"].includes(a.symbol) || BigInt(balance?.[a.symbol] || "0") > 0n,
+      );
+      const totalText = formatUnits(parsed.total, batchAsset.decimals);
+      const totalUsd = paymentUsd(batchAsset.symbol, parsed.total, batchAsset.decimals);
+      return (
+        <>
+          <Header title={t("Send to many", "批量发送")} onBack={() => setPage("home")} backLabel={t("Back", "返回")} />
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Paste a list, check every line, approve once.",
+              "粘贴列表，逐行检查，只需确认一次。",
+            )}
+          </Text>
+          <View style={[s.panel, { gap: 10 }]}>
+            <Text style={s.eyebrow}>{t("PAY IN", "支付资产")}</Text>
+            <View style={s.wrap}>
+              {choices.map((a) => (
+                <Pressable
+                  key={a.symbol}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: a.symbol === batchAsset.symbol }}
+                  onPress={() => setBatchSymbol(a.symbol)}
+                  style={{
+                    flexDirection: "row",
+                    gap: 8,
+                    alignItems: "center",
+                    paddingVertical: 7,
+                    paddingHorizontal: 10,
+                    borderRadius: 999,
+                    borderWidth: 1,
+                    borderColor: a.symbol === batchAsset.symbol ? colors.green : colors.line,
+                    backgroundColor: a.symbol === batchAsset.symbol ? colors.tint : colors.raised,
+                  }}
+                >
+                  <TokenIcon symbol={a.symbol} size={22} />
+                  <Text style={[s.text, { fontWeight: "700" }]}>{a.symbol}</Text>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+          <View style={[s.panel, { gap: 10 }]}>
+            <Text style={s.eyebrow}>{t("PAYMENTS", "付款列表")}</Text>
+            <TextInput
+              accessibilityLabel={t("Payments, one per line", "付款，每行一笔")}
+              value={batchText}
+              onChangeText={setBatchText}
+              multiline
+              autoCapitalize="none"
+              autoCorrect={false}
+              placeholder={"mom 10\n@astra 5\n0x5b27…9f05, $2.50"}
+              placeholderTextColor={colors.faint}
+              selectionColor={colors.green}
+              style={[s.input, { minHeight: 150, textAlignVertical: "top", paddingTop: 12, fontFamily: Platform.OS === "web" ? "monospace" : undefined }]}
+            />
+            <Text style={s.small}>
+              {t(
+                `One payment a line: who, then how much in ${batchAsset.symbol}. Who is a saved contact, an @tag or an address; use $ for dollars. Up to ${batchCore.MAX_PAYMENTS}. A spreadsheet column pastes straight in.`,
+                `每行一笔：收款人，然后 ${batchAsset.symbol} 金额。收款人可以是联系人、@标签或地址；用 $ 表示美元。最多 ${batchCore.MAX_PAYMENTS} 笔。可直接粘贴表格列。`,
+              )}
+            </Text>
+          </View>
+          {parsed.rows.length ? (
+            <View style={[s.panel, { gap: 8 }]}>
+              {parsed.rows.map((row) => (
+                <View key={row.line} style={{ flexDirection: "row", gap: 8, alignItems: "flex-start" }}>
+                  <Icon
+                    name={row.ok ? "circle-check" : "alert"}
+                    size={18}
+                    color={row.ok ? colors.green : colors.danger}
+                  />
+                  <View style={{ flex: 1 }}>
+                    {row.ok ? (
+                      <Text style={s.text}>
+                        {row.to.kind === "contact"
+                          ? row.to.name
+                          : row.to.kind === "tag"
+                            ? `@${row.to.tag}`
+                            : `${row.to.address.slice(0, 6)}…${row.to.address.slice(-4)}`}
+                        <Text style={{ fontWeight: "700" }}>{`  ${row.amount} ${batchAsset.symbol}`}</Text>
+                        {row.usd ? <Text style={s.small}>{`  ($${row.usd})`}</Text> : null}
+                      </Text>
+                    ) : (
+                      <>
+                        <Text style={[s.small, { color: colors.ink }]}>
+                          {t(`Line ${row.line}: `, `第 ${row.line} 行：`)}
+                          {row.text}
+                        </Text>
+                        <Text style={[s.small, { color: colors.danger }]}>{row.error}</Text>
+                      </>
+                    )}
+                  </View>
+                </View>
+              ))}
+              <View style={{ borderTopWidth: 1, borderTopColor: colors.line, paddingTop: 8, gap: 2 }}>
+                <Text style={[s.text, { fontWeight: "700" }]}>
+                  {t(
+                    `${parsed.payments.length} ${parsed.payments.length === 1 ? "payment" : "payments"} · ${totalText} ${batchAsset.symbol}`,
+                    `${parsed.payments.length} 笔 · ${totalText} ${batchAsset.symbol}`,
+                  )}
+                  {totalUsd ? <Text style={s.small}>{`  ≈ ${valueCore.format(Number(totalUsd) / 1e6)}`}</Text> : null}
+                </Text>
+                {parsed.problem ? <Text style={[s.small, { color: colors.danger }]}>{parsed.problem}</Text> : null}
+              </View>
+            </View>
+          ) : null}
+          <Button
+            primary
+            disabled={busy || !parsed.ready}
+            onPress={() => void run(prepareBatch)}
+          >
+            {parsed.ready
+              ? t(`Review ${parsed.payments.length} ${parsed.payments.length === 1 ? "payment" : "payments"}`, `审核 ${parsed.payments.length} 笔付款`)
+              : t("Review payments", "审核付款")}
+          </Button>
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "They're signed one after another with a single approval, each waiting for the last to confirm. If one is refused, the rest aren't sent.",
+              "它们只需一次确认，依次签名发送，每笔等待上一笔确认。若其中一笔被拒绝，其余不会发送。",
+            )}
+          </Text>
+        </>
+      );
+    }
     if (page === "send") {
       const isPrivate = sendMode === "private";
       const sendAssets = assets;
@@ -8490,6 +8774,13 @@ function Wallet() {
                 )}
               </Text>
             </View>
+          ) : null}
+          {flowStep === 0 && !scheduleRun ? (
+            <Pressable accessibilityRole="button" onPress={openBatch} style={{ alignSelf: "center", paddingVertical: 4 }}>
+              <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                {t("Paying several people? Send to many at once", "要付给多人？一次批量发送")}
+              </Text>
+            </Pressable>
           ) : null}
           {flowStep === 0 && (
             <View style={{ gap: 14 }}>
@@ -15367,6 +15658,12 @@ function Wallet() {
             icon: "wallet",
             label: t("Spend", "消费"),
             onPress: openSpend,
+          },
+          {
+            key: "batch",
+            icon: "users",
+            label: t("Send to many", "批量发送"),
+            onPress: openBatch,
           },
           {
             key: "scheduled",
