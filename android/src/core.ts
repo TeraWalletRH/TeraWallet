@@ -140,3 +140,6 @@ export * as stuck from "../../public/tera/core/stuck.js";
 
 // What a transaction does to this wallet's balances, from the chain's own simulation.
 export * as balanceChanges from "../../public/tera/core/balance-changes.js";
+
+// Send to many: a pasted list of payments, read and checked line by line.
+export * as batchSend from "../../public/tera/core/batch-send.js";
