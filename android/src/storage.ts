@@ -170,7 +170,15 @@ export type LocalData = {
     off?: boolean;
     lastSeen?: number;
     /** Everything announced, newest first, kept on this device only (capped). */
-    items?: { hash: string; direction: "send" | "receive"; title: string; body: string; at: number }[];
+    items?: {
+      hash: string;
+      direction: "send" | "receive";
+      title: string;
+      body: string;
+      at: number;
+      /** A scam warning (core/poisoning.js), not a payment. */
+      warning?: boolean;
+    }[];
     /** When the notifications page was last opened; newer items count as unread. */
     readAt?: number;
   };

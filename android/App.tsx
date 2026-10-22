@@ -908,7 +908,7 @@ function Wallet() {
     [grantsError, setGrantsError] = useState(""),
     // The transaction banner at the top of the screen, and the browser's
     // permission for system notifications as last read.
-    [txAlert, setTxAlert] = useState<null | { title: string; body: string; hash: string }>(null),
+    [txAlert, setTxAlert] = useState<null | { title: string; body: string; hash: string; warning?: boolean }>(null),
     [systemAlerts, setSystemAlerts] = useState(() => notify.systemPermission()),
     [limitFields, setLimitFields] = useState<Record<string, string>>({}),
     [limitError, setLimitError] = useState(""),
@@ -1272,6 +1272,11 @@ function Wallet() {
   const ownerRef = useRef(owner);
   ownerRef.current = owner;
   const alertSeen = useRef(new Set<string>());
+  const poisonContext = useRef<{ rows: any[]; trusted: string[]; name: (address: string) => string }>({
+    rows: [],
+    trusted: [],
+    name: () => t("an address you use", "你常用的地址"),
+  });
   const alertAssets = useRef<Record<string, { symbol: string; decimals: number }>>({});
   const alertTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const alertsOn = !!owner && !data.alerts?.off;
@@ -1279,10 +1284,18 @@ function Wallet() {
     const own = new Set(
       dataRef.current.history.map((h) => String(h.hash || "").toLowerCase()).filter(Boolean),
     );
-    const list = notify.core.fresh(items, { seen: alertSeen.current, own, since }) as notify.Heard[];
+    const heard = notify.core.fresh(items, { seen: alertSeen.current, own, since }) as notify.Heard[];
     for (const item of items) alertSeen.current.add(item.hash.toLowerCase());
+    // Address poisoning (core/poisoning.js): a lookalike of an address this
+    // wallet uses is a warning, never "Received"; a zero transfer says nothing.
+    const screened = poisoning.screenAlerts(heard, poisonContext.current.rows, poisonContext.current.trusted);
+    if (screened.planted.length) warnPlanted(screened.planted);
+    const list = screened.genuine as notify.Heard[];
     const shown = notify.core.batch(list);
-    if (!shown) return;
+    if (!shown) {
+      if (screened.planted.length) void refresh();
+      return;
+    }
     const book = contactsCore.cleanBook(dataRef.current.contacts);
     const who = (address: string) =>
       (isAddress(address) && contactsCore.nameFor(book, address)) ||
@@ -1305,11 +1318,7 @@ function Wallet() {
       ...lineFor(item),
       at: item.timestamp && item.timestamp < now ? item.timestamp : now,
     }));
-    const alertsNow = dataRef.current.alerts || {};
-    void store({
-      ...dataRef.current,
-      alerts: { ...alertsNow, items: [...kept, ...(alertsNow.items || [])].slice(0, 100) },
-    }).catch(() => {});
+    keepAlerts(kept);
     let title: string, body: string;
     if (shown.kind === "summary") {
       title = t("While you were away", "离开期间");
@@ -1323,12 +1332,56 @@ function Wallet() {
       if (rest.length) body += t(` · and ${rest.length} more`, ` · 另有 ${rest.length} 笔`);
     }
     const hash = shown.items[0].hash;
-    setTxAlert({ title, body, hash });
-    if (alertTimer.current) clearTimeout(alertTimer.current);
-    alertTimer.current = setTimeout(() => setTxAlert(null), 6000);
-    buzz("success");
-    notify.showSystem(title, body, hash, () => setPage("notifications"));
+    // A scam warning raised in the same breath keeps the banner.
+    if (!screened.planted.length) {
+      setTxAlert({ title, body, hash });
+      if (alertTimer.current) clearTimeout(alertTimer.current);
+      alertTimer.current = setTimeout(() => setTxAlert(null), 6000);
+      buzz("success");
+      notify.showSystem(title, body, hash, () => setPage("notifications"));
+    }
     void refresh();
+  }
+  // Kept for the notifications page. dataRef is set at once rather than when
+  // the save lands, so the sweep's own write straight after keeps these too.
+  function keepAlerts(kept: NonNullable<vault.LocalData["alerts"]>["items"] & {}) {
+    const alertsNow = dataRef.current.alerts || {};
+    const next = {
+      ...dataRef.current,
+      alerts: { ...alertsNow, items: [...kept, ...(alertsNow.items || [])].slice(0, 100) },
+    };
+    dataRef.current = next;
+    void store(next).catch(() => {});
+  }
+  function warnPlanted(planted: { item: any; imitates: string }[]) {
+    const nameOf = poisonContext.current.name;
+    const now = Date.now();
+    const kept = planted.map(({ item, imitates }) => ({
+      hash: String(item.hash).toLowerCase(),
+      direction: item.direction,
+      warning: true,
+      title: t("Lookalike address blocked", "已拦截仿冒地址"),
+      body: t(
+        `A lookalike of ${nameOf(imitates)} sent you a transfer. It's hidden from Activity. Never copy an address from it.`,
+        `一个仿冒${nameOf(imitates)}的地址向你转账。已从记录中隐藏，切勿从中复制地址。`,
+      ),
+      at: item.timestamp && item.timestamp < now ? item.timestamp : now,
+    }));
+    keepAlerts(kept);
+    const first = kept[0];
+    const title = first.title;
+    const body =
+      kept.length === 1
+        ? first.body
+        : t(
+            `${kept.length} transfers from addresses made to look like ones you use. Hidden from Activity. Never copy them.`,
+            `${kept.length} 笔来自仿冒地址的转账，已从记录中隐藏，切勿复制。`,
+          );
+    setTxAlert({ title, body, hash: first.hash, warning: true });
+    if (alertTimer.current) clearTimeout(alertTimer.current);
+    alertTimer.current = setTimeout(() => setTxAlert(null), 9000);
+    buzz("lookalike");
+    notify.showSystem(title, body, first.hash, () => setPage("notifications"));
   }
   useEffect(() => {
     if (!alertsOn) return;
@@ -1383,8 +1436,9 @@ function Wallet() {
         since,
       );
       const newest = Math.max(alerts.lastSeen ?? Date.now(), ...entries.map((e) => e.timestamp || 0));
+      // Read again: announce() has just added to the list kept for the page.
       if (newest !== alerts.lastSeen)
-        await store({ ...dataRef.current, alerts: { ...alerts, lastSeen: newest } });
+        await store({ ...dataRef.current, alerts: { ...dataRef.current.alerts, lastSeen: newest } });
     } catch {
       // The explorer is a convenience; the next read tries again.
     } finally {
@@ -3134,11 +3188,28 @@ function Wallet() {
   // Planted transfers — zero amounts, and lookalikes of addresses the owner
   // really uses — are kept out of the list so a poisoner's address is never
   // there to copy. core/poisoning.js has the rules.
-  const poisonSplit = poisoning.splitPoisoned(allHistory as any[], [
+  const poisonTrusted = [
     owner,
     ...accounts.map((entry) => entry.address),
     ...book.map((contact) => contact.address),
-  ]);
+  ];
+  const poisonSplit = poisoning.splitPoisoned(allHistory as any[], poisonTrusted);
+  /**
+   * Who a planted address is pretending to be, in words. A shortened address
+   * would be no help: the lookalike shortens to exactly the same thing.
+   */
+  const imitatedName = (address: string) => {
+    const account = accounts.find((entry) => same(entry.address, address));
+    if (account) return t(`your ${walletName(account)}`, `你的${walletName(account)}`);
+    const saved = contactsCore.nameFor(book, address);
+    if (saved) return t(`${saved}'s address`, `${saved} 的地址`);
+    const paid = allHistory.some(
+      (row: any) => same(row.recipient, address) || same(row.payee, address) || (row.direction === "send" && same(row.counterpartyAddress, address)),
+    );
+    return paid ? t("an address you've paid", "你付过款的地址") : t("an address in your activity", "你记录中的一个地址");
+  };
+  // The announcer runs from listeners, so it reads the activity from here.
+  poisonContext.current = { rows: allHistory, trusted: poisonTrusted, name: imitatedName };
   const poisonedHashes = new Set(poisonSplit.hidden.map((row: any) => row.hash));
   const combinedHistory: typeof allHistory = showPoisoned
     ? allHistory.map((row) =>
@@ -4604,14 +4675,20 @@ function Wallet() {
    */
   function lookalikeOf(address: string): { address: string; name: string } | undefined {
     const known = [
-      ...contactsCore.cleanBook(data.contacts).map((c: { address: string; name: string }) => ({ address: c.address, name: c.name })),
+      ...contactsCore.cleanBook(data.contacts).map((c: { address: string; name: string }) => ({ address: c.address, name: t(`${c.name}'s address`, `${c.name} 的地址`) })),
       ...accounts.map((a) => ({ address: a.address, name: t(`your ${walletName(a)}`, `你的${walletName(a)}`) })),
       ...data.history
         .map((h) => h.payee || h.recipient)
         .filter((a): a is string => typeof a === "string")
         .map((a) => ({ address: a, name: t("an address you've paid", "你付过款的地址") })),
     ];
-    return poisoning.impersonates(address, known) || undefined;
+    const match = poisoning.impersonates(address, known);
+    if (match) return match;
+    // An address that already planted a lookalike transfer here, copying one
+    // this wallet only ever received from.
+    const plantedRow = poisonSplit.hidden.find((row: any) => same(row.counterpartyAddress, address));
+    const why = plantedRow ? poisoning.reasonFor(plantedRow, allHistory, poisonTrusted) : null;
+    return why?.reason === "lookalike" ? { address: why.imitates!, name: imitatedName(why.imitates!) } : undefined;
   }
   async function presentReview(next: Review) {
     setReviewDetailsOpen(false);
@@ -11691,7 +11768,7 @@ function Wallet() {
       const items = data.alerts?.items || [];
       const readAt = notificationsReadAt.current;
       const openItem = (hash: string) => {
-        const row = combinedHistory.find((h) => String(h.hash || "").toLowerCase() === hash);
+        const row = allHistory.find((h) => String(h.hash || "").toLowerCase() === hash);
         if (row) {
           setActivityDetail(row.hash);
           setPage("activity-detail");
@@ -11764,16 +11841,16 @@ function Wallet() {
                 >
                   <View style={s.iconDisc}>
                     <Icon
-                      name={item.direction === "receive" ? "arrow-down" : "arrow-top-right"}
+                      name={item.warning ? "shield-alert-outline" : item.direction === "receive" ? "arrow-down" : "arrow-top-right"}
                       size={20}
-                      color={colors.ink}
+                      color={item.warning ? colors.danger : colors.ink}
                     />
                   </View>
                   <View style={{ flex: 1, gap: 3 }}>
-                    <Text style={s.label} numberOfLines={1}>
+                    <Text style={[s.label, item.warning && { color: colors.danger }]} numberOfLines={1}>
                       {item.title}
                     </Text>
-                    <Text style={s.small} numberOfLines={1}>
+                    <Text style={s.small} numberOfLines={item.warning ? 3 : 1}>
                       {item.body}
                     </Text>
                     <Text style={s.small}>{new Date(item.at).toLocaleString()}</Text>
@@ -12247,8 +12324,9 @@ function Wallet() {
       );
     }
     if (page === "activity-detail") {
-      const r = combinedHistory.find((h) => h.hash === activityDetail);
+      const r = allHistory.find((h) => h.hash === activityDetail);
       if (!r) return null;
+      const planted = poisonedHashes.has(r.hash) ? poisoning.reasonFor(r, allHistory, poisonTrusted) : null;
       const isBridge = Boolean(
         r.bridgeInput || (r.reference && /^0x[\da-f]{64}$/i.test(r.reference)) || r.isPrivateBridge,
       );
@@ -12278,6 +12356,46 @@ function Wallet() {
               <Text style={[s.small, { fontWeight: "700", color: tone.color }]}>{activityStatus(r.status)}</Text>
             </View>
           </View>
+          {planted ? (
+            <View style={[s.panel, { gap: 10, borderColor: colors.danger, borderWidth: 1 }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Icon name="shield-alert-outline" color={colors.danger} size={20} />
+                <Text style={[s.text, { fontWeight: "700", color: colors.danger }]}>
+                  {planted.reason === "lookalike"
+                    ? t("Lookalike address: never copy it", "仿冒地址：切勿复制")
+                    : t("Zero-value transfer", "零金额转账")}
+                </Text>
+              </View>
+              <Text style={s.small}>
+                {planted.reason === "lookalike"
+                  ? t(
+                      `This address was made to start and end like ${imitatedName(planted.imitates!)}, hoping you'll copy it from your activity next time you pay. It's hidden from Activity. Always pay from Contacts.`,
+                      `此地址被刻意做成与 ${imitatedName(planted.imitates!)} 首尾相同，等你下次从记录中复制。它已从记录中隐藏。请始终从联系人付款。`,
+                    )
+                  : t(
+                      "It moved nothing. Transfers like this are sent to plant an address in your activity. It's hidden from Activity.",
+                      "它没有转移任何资产。这类转账是为了在你的记录中植入地址。已从记录中隐藏。",
+                    )}
+              </Text>
+              {planted.reason === "lookalike" && r.counterpartyAddress
+                ? [
+                    { label: t("This transfer", "此转账"), address: r.counterpartyAddress, bad: true },
+                    { label: t("The real one", "真实地址"), address: planted.imitates!, bad: false },
+                  ].map((line) => (
+                    <View key={line.label} style={{ gap: 3 }}>
+                      <Text style={[s.small, { fontWeight: "700", color: line.bad ? colors.danger : colors.green }]}>
+                        {line.label}
+                      </Text>
+                      <Text style={[s.mono, { fontSize: 12 }]}>
+                        {line.address.slice(0, 6)}
+                        <Text style={{ color: line.bad ? colors.danger : colors.green }}>{line.address.slice(6, -4)}</Text>
+                        {line.address.slice(-4)}
+                      </Text>
+                    </View>
+                  ))
+                : null}
+            </View>
+          ) : null}
           {(() => {
             const note = notesCore.noteFor(txNotes, r.hash);
             const max = notesCore.LIMITS.maxLength;
@@ -17285,18 +17403,18 @@ function Wallet() {
               width: 36,
               height: 36,
               borderRadius: 18,
-              backgroundColor: colors.green,
+              backgroundColor: txAlert.warning ? colors.danger : colors.green,
               alignItems: "center",
               justifyContent: "center",
             }}
           >
-            <Icon name="bell" size={18} color={colors.paper} />
+            <Icon name={txAlert.warning ? "shield-alert-outline" : "bell"} size={18} color={colors.paper} />
           </View>
           <View style={{ flex: 1, gap: 2 }}>
             <Text style={s.label} numberOfLines={1}>
               {txAlert.title}
             </Text>
-            <Text style={s.small} numberOfLines={2}>
+            <Text style={s.small} numberOfLines={txAlert.warning ? 3 : 2}>
               {txAlert.body}
             </Text>
           </View>
