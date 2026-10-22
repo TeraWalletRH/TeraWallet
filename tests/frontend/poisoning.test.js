@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fingerprint, looksAlike, splitPoisoned } from "../../public/tera/core/poisoning.js";
+import { fingerprint, looksAlike, reasonFor, screenAlerts, splitPoisoned } from "../../public/tera/core/poisoning.js";
 
 const real = "0xabcd111111111111111111111111111111111234";
 const fake = "0xABCD999999999999999999999999999999991234";
@@ -65,4 +65,39 @@ test("rows this device signed always show, and order is kept", () => {
 test("ordinary activity with no lookalikes is untouched", () => {
   const rows = [chain(real, "1", 1), chain(other, "2", 2)];
   assert.deepEqual(splitPoisoned(rows).shown, rows);
+});
+
+test("reasonFor names the genuine address a hidden row imitates", () => {
+  const rows = [chain(real, "25", 10, "send"), chain(fake, "0.0001", 20), chain(other, "0", 30)];
+  assert.deepEqual(reasonFor(rows[1], rows), { reason: "lookalike", imitates: real });
+  assert.deepEqual(reasonFor(rows[2], rows), { reason: "zero" });
+  assert.equal(reasonFor(rows[0], rows), null);
+  assert.equal(reasonFor({ recipient: fake, amount: "0" }, rows), null);
+});
+
+test("screenAlerts warns about a lookalike, drops a zero transfer quietly, and lets real payments through", () => {
+  const rows = [chain(real, "25", 10, "send")];
+  const items = [
+    { hash: "0x1", amount: "0.000001", counterparty: fake },
+    { hash: "0x2", amount: "0", counterparty: other },
+    { hash: "0x3", amount: "5", counterparty: "0xab…34", counterpartyAddress: other },
+    { hash: "0x4", amount: "5", counterparty: real },
+  ];
+  const { genuine, planted, silent } = screenAlerts(items, rows);
+  assert.deepEqual(genuine.map((i) => i.hash), ["0x3", "0x4"]);
+  assert.deepEqual(silent.map((i) => i.hash), ["0x2"]);
+  assert.equal(planted.length, 1);
+  assert.equal(planted[0].item.hash, "0x1");
+  assert.equal(planted[0].imitates, real);
+  assert.equal(planted[0].address, fake.toLowerCase());
+});
+
+test("screenAlerts trusts contacts, and among all-new transfers the first seen is genuine", () => {
+  assert.equal(screenAlerts([{ hash: "0x1", amount: "1", counterparty: fake }], [], [real]).planted.length, 1);
+  const { genuine, planted } = screenAlerts([
+    { hash: "0x1", amount: "1", counterparty: real, timestamp: 5 },
+    { hash: "0x2", amount: "1", counterparty: fake, timestamp: 6 },
+  ], []);
+  assert.deepEqual(genuine.map((i) => i.hash), ["0x1"]);
+  assert.equal(planted[0].item.hash, "0x2");
 });

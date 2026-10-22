@@ -44,8 +44,8 @@ export function reviewIntelligence(input: IntelligenceInput): ReviewIntelligence
     const real = input.lookalikeOf.address;
     const glance = `${real.slice(0, 6)}…${real.slice(-4)}`;
     risks.push(zh
-      ? `此地址与「${input.lookalikeOf.name}」的地址（${glance}）首尾相同，但并不是同一个地址。这是常见的骗局。`
-      : `This address starts and ends like ${input.lookalikeOf.name}'s (${glance}) but is a different address. Lookalike addresses are a common scam.`);
+      ? `此地址与${input.lookalikeOf.name}（${glance}）首尾相同，但并不是同一个地址。这是常见的骗局。`
+      : `This address starts and ends like ${input.lookalikeOf.name} (${glance}) but is a different address. Lookalike addresses are a common scam.`);
     safer.push(zh ? "请从联系人中选择收款方，不要从记录中复制地址。" : "Pick the recipient from your contacts instead of copying an address from your activity.");
   }
   if (target && !input.knownRecipient) {
