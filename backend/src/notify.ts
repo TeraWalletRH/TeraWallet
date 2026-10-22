@@ -6,7 +6,8 @@
 // Plain fetch on every surface, nothing to keep alive through a proxy.
 //
 // Nothing is stored. The watcher reads Transfer logs only for wallets that
-// have asked in the last couple of minutes, keeps what it read for KEEP_MS so
+// have asked in the last couple of minutes (and for wallets that turned on
+// push, which push.ts keeps pinned here while their row exists), keeps what it read for KEEP_MS so
 // a reconnect does not miss it, and stops reading the chain when nobody is
 // listening. A request older than what is kept is told so (`gap`), and the app
 // reads its history from the explorer instead. Native ETH moves have no log
@@ -67,6 +68,10 @@ const state = {
   floor: null as number | null,
   events: [] as Kept[],
   watched: new Map<string, number>(),
+  /** Watched for as long as push.ts says, not just after a request. */
+  pinned: new Set<string>(),
+  /** Told about each transfer the moment it is first read. */
+  listeners: [] as ((events: TransferEvent[]) => void)[],
   waiters: new Set<Waiter>(),
   timer: null as ReturnType<typeof setTimeout> | null,
 };
@@ -76,12 +81,22 @@ const client = createPublicClient({ transport: http(env.rhcRpcUrl, { timeout: 10
 /** Take in what a pass read up to block `head`, and wake whoever it concerns. */
 export function ingest(logs: RawLog[], head: number, now = Date.now()) {
   const known = new Set(state.events.map((e) => `${e.hash}:${e.index}`));
-  for (const event of toEvents(logs, new Set(state.watched.keys()))) {
+  const fresh: TransferEvent[] = [];
+  for (const event of toEvents(logs, new Set([...state.watched.keys(), ...state.pinned]))) {
     const key = `${event.hash}:${event.index}`;
     if (known.has(key)) continue;
     known.add(key);
     state.events.push({ ...event, at: now });
+    fresh.push(event);
   }
+  if (fresh.length)
+    for (const listener of state.listeners) {
+      try {
+        listener(fresh);
+      } catch (error) {
+        logEvent("warn", undefined, "notify.listener_failed", { message: (error as Error)?.message });
+      }
+    }
   state.head = head;
   if (state.floor === null) state.floor = head;
   const cutoff = now - KEEP_MS;
@@ -114,6 +129,20 @@ function watch(address: string) {
   if (!state.timer) state.timer = setTimeout(tick, 0);
 }
 
+/** Keep reading transfers for these wallets until unpinned (push.ts). */
+export function pin(addresses: string[]) {
+  for (const address of addresses) state.pinned.add(address.toLowerCase());
+  if (state.pinned.size && !state.timer) state.timer = setTimeout(tick, 0);
+}
+
+export function unpin(address: string) {
+  state.pinned.delete(address.toLowerCase());
+}
+
+export function onTransfers(listener: (events: TransferEvent[]) => void) {
+  state.listeners.push(listener);
+}
+
 function stop() {
   state.head = null;
   state.floor = null;
@@ -132,14 +161,14 @@ async function tick() {
   const now = Date.now();
   for (const [address, seen] of state.watched)
     if (now - seen > WATCH_TTL_MS) state.watched.delete(address);
-  if (!state.watched.size && !state.waiters.size) return stop();
+  if (!state.watched.size && !state.waiters.size && !state.pinned.size) return stop();
   try {
     const latest = Number(await client.getBlockNumber());
     if (state.head === null) ingest([], latest);
     else if (latest > state.head) {
       const from = state.head + 1;
       const to = Math.min(latest, from + MAX_RANGE - 1);
-      const topics = [...state.watched.keys()].map(addressTopic);
+      const topics = [...new Set([...state.watched.keys(), ...state.pinned])].map(addressTopic);
       const logs: RawLog[] = [];
       for (let i = 0; i < topics.length; i += TOPIC_CHUNK) {
         const chunk = topics.slice(i, i + TOPIC_CHUNK);
@@ -197,6 +226,8 @@ export function reset() {
   if (state.timer) clearTimeout(state.timer);
   state.watched.clear();
   state.waiters.clear();
+  state.pinned.clear();
+  state.listeners = [];
   stop();
 }
 

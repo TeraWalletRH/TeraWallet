@@ -5,10 +5,10 @@
 //
 // scripts/build-web.mjs fills in BUILD and FILES. A new build is a new cache,
 // and the old one is deleted once the new one is ready.
-const BUILD = "77c0de0af41cc87e";
+const BUILD = "46fcc92cd29186ed";
 const FILES = [
-  "/app/_expo/static/js/web/index-8b3f4503be4cbc01f72c3d78176394fa.js",
-  "/app/_expo/static/js/web/native-52dff1708d5e10c56281eb1baed16a07.js",
+  "/app/_expo/static/js/web/index-4feca48fa7db7ad0d7876ec3dc3f6e1c.js",
+  "/app/_expo/static/js/web/native-da3eec188b7d3fd145e2ee923bd828e4.js",
   "/app/apple-touch-icon.png",
   "/app/assets/assets/RH-RWA-Assets-Media/amazon.011a040ad5744ef03634d45133707895.png",
   "/app/assets/assets/RH-RWA-Assets-Media/apple.7eb2afd24c5c70287d47aae4b2905a30.png",
@@ -97,4 +97,46 @@ self.addEventListener("fetch", (event) => {
   // Everything else under /app is named by its content hash, so a cached copy
   // is always the right one.
   event.respondWith(caches.match(request).then((hit) => hit || fetch(request)));
+});
+
+// Push notifications (core/push.js). Tera's service sends a short line, already
+// written for the lock screen, encrypted to this browser. With Tera open and in
+// front, the app announces the payment itself, so the push stays quiet.
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    data = {};
+  }
+  const title = typeof data.title === "string" ? data.title : "Tera";
+  const body = typeof data.body === "string" ? data.body : "Something moved in your wallet. Open Tera to see it.";
+  const url = typeof data.url === "string" && data.url.startsWith("/app") ? data.url : "/app/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
+      if (windows.some((w) => w.visibilityState === "visible" && w.focused)) return;
+      return self.registration.showNotification(title, {
+        body,
+        tag: typeof data.tag === "string" ? data.tag : undefined,
+        icon: "/app/icon-192.png",
+        badge: "/app/icon-192.png",
+        data: { url },
+      });
+    }),
+  );
+});
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || "/app/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((windows) => {
+      const open = windows.find((w) => new URL(w.url).pathname.startsWith("/app"));
+      if (open) {
+        open.postMessage({ tera: "open", page: "notifications" });
+        return open.focus();
+      }
+      return self.clients.openWindow(url);
+    }),
+  );
 });
