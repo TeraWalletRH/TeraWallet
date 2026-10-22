@@ -134,3 +134,6 @@ export * as notes from "../../public/tera/core/notes.js";
 
 // What the screen shows and what it holds back: small balances, privacy mode.
 export * as discretion from "../../public/tera/core/discretion.js";
+
+// A transaction that hasn't confirmed: what happened to it, and whether to send again or cancel.
+export * as stuck from "../../public/tera/core/stuck.js";

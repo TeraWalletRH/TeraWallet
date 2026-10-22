@@ -42,7 +42,19 @@ import * as payLinks from "./src/paylinks";
 import * as notify from "./src/notify";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
-import { balances, client, confirmation, execute, probeNetwork, setRotation, transactionStatus } from "./src/network";
+import {
+  balances,
+  cancelPending,
+  client,
+  confirmation,
+  execute,
+  inspectCancel,
+  inspectStuck,
+  probeNetwork,
+  sendAgain,
+  setRotation,
+  transactionStatus,
+} from "./src/network";
 import { fetchChainHistory, fetchTokenBalances, fetchTransferLegs, type ChainHistoryEntry, type FoundToken, type TransferLeg } from "./src/explorer";
 import { KNOWN_SPENDERS, scanApprovals, type Grant } from "./src/approvals";
 import { captureNote, SecretCover, useBlockScreenCapture } from "./src/secretGuard";
@@ -57,6 +69,7 @@ import {
   discretion,
   networkSpeed,
   notes as notesCore,
+  stuck as stuckCore,
   contacts as contactsCore,
   limits as limitsCore,
   spend as spendCore,
@@ -923,6 +936,8 @@ function Wallet() {
     [importError, setImportError] = useState(""),
     // The tx hash of whichever Activity row is open on the detail screen.
     [activityDetail, setActivityDetail] = useState<string | null>(null),
+    // What the chain said about a stuck transaction (core/stuck.js), by hash.
+    [stuckSeen, setStuckSeen] = useState<{ hash: string; state: string; actions: string[] } | null>(null),
     // What the Activity list is searched and filtered by. Kept while the
     // owner opens a row and comes back.
     [activityQuery, setActivityQuery] = useState(""),
@@ -3154,6 +3169,9 @@ function Wallet() {
       : status === "broadcasting" ? t("Sending", "发送中")
       : status === "pending" ? t("Pending", "待确认")
       : status === "failed" || status === "reverted" ? t("Failed", "失败")
+      : status === "cancelling" ? t("Cancelling", "取消中")
+      : status === "cancelled" ? t("Cancelled", "已取消")
+      : status === "replaced" ? t("Didn't go through", "未完成")
       : status;
   }
   function openActivityReview(row: any) {
@@ -4735,6 +4753,79 @@ function Wallet() {
     }
     void run((guard) => deliverAssistantMessage(guard, minimiseEnabled ? plan : undefined));
   }
+  /** Rewrite one history row, found by hash. */
+  async function updateRow(hash: string, change: (row: any) => any) {
+    await store({
+      ...dataRef.current,
+      history: dataRef.current.history.map((h) => (h.hash === hash ? change(h) : h)),
+    });
+  }
+  /** Ask the chain what happened to a stuck transaction, and file the answer on its row. */
+  async function checkStuck(row: any, guard: () => void) {
+    if (row.status === "cancelling" && row.cancelHash) {
+      const state = await inspectCancel(row.hash, row.cancelHash);
+      guard();
+      if (state !== "cancelling") await updateRow(row.hash, (h) => ({ ...h, status: state }));
+      setStuckSeen({ hash: row.hash, state, actions: [] });
+      return;
+    }
+    const seen = await inspectStuck(
+      row.hash,
+      Number.isInteger(row.nonce) ? row.nonce : null,
+      (row.from || owner) as Address,
+    );
+    guard();
+    const settled: Record<string, string> = { confirmed: "confirmed", reverted: "reverted", replaced: "replaced" };
+    if (settled[seen.state]) await updateRow(row.hash, (h) => ({ ...h, status: settled[seen.state] }));
+    setStuckSeen({ hash: row.hash, ...seen });
+  }
+  /** Send a stuck transaction again in its own slot, after the PIN or passkey. */
+  function retryStuck(row: any) {
+    authenticate(t("Send again", "重新发送"), async () => {
+      const hash = await sendAgain(row.hash);
+      const now = Date.now();
+      if (hash === row.hash) await updateRow(row.hash, (h) => ({ ...h, status: "pending", retriedAt: now }));
+      else {
+        // Signed again at today's fee: the row follows the new hash, and its note goes with it.
+        const note = notesCore.noteFor(dataRef.current.notes, row.hash);
+        await store({
+          ...dataRef.current,
+          notes: note ? notesCore.setNote(dataRef.current.notes, hash, note) : dataRef.current.notes,
+          history: dataRef.current.history.map((h) =>
+            h.hash === row.hash
+              ? { ...h, hash, status: "pending", retriedAt: now, earlierHashes: [...(h.earlierHashes ?? []), row.hash] }
+              : h,
+          ),
+        });
+        setActivityDetail(hash);
+      }
+      setStuckSeen(null);
+      setNotice({
+        title: t("Sent again", "已重新发送"),
+        body: t(
+          "It went out in the same slot as the original, so only one of them can ever go through.",
+          "已在原交易的同一序号中发出，因此两者只会有一笔成功。",
+        ),
+        tone: "success",
+      });
+    });
+  }
+  /** Cancel a stuck transaction: 0 ETH to yourself in its slot, after the PIN or passkey. */
+  function cancelStuck(row: any) {
+    authenticate(t("Cancel transaction", "取消交易"), async () => {
+      const cancelHash = await cancelPending(row.hash);
+      await updateRow(row.hash, (h) => ({ ...h, status: "cancelling", cancelHash, retriedAt: Date.now() }));
+      setStuckSeen(null);
+      setNotice({
+        title: t("Cancelling", "取消中"),
+        body: t(
+          "A 0 ETH transaction to yourself is taking the original's slot, so the original can never go through. It costs a small network fee. Check back in a moment.",
+          "一笔发给自己的 0 ETH 交易正在占用原交易的序号，原交易将无法成功。会产生少量网络手续费，请稍后查看。",
+        ),
+        tone: "success",
+      });
+    });
+  }
   function authenticate(title: string, action: () => Promise<void>) {
     setAuthPassword("");
     setAuthError("");
@@ -6199,7 +6290,7 @@ function Wallet() {
   function statusTone(status: string) {
     return status === "confirmed"
       ? { bg: colors.tint, color: colors.green }
-      : status === "failed" || status === "reverted"
+      : status === "failed" || status === "reverted" || status === "cancelled" || status === "replaced"
         ? { bg: colors.dangerTint, color: colors.danger }
         : { bg: colors.warnTint, color: colors.yellow };
   }
@@ -12003,6 +12094,55 @@ function Wallet() {
               </>
             )}
           </Group>
+          {stuckCore.looksStuck(r) && (!r.from || r.from.toLowerCase() === owner.toLowerCase()) ? (
+            <View style={[s.panel, { gap: 10, borderColor: colors.yellow, borderWidth: 1 }]}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+                <Icon name="clock" color={colors.yellow} size={20} />
+                <Text style={[s.text, { fontWeight: "700" }]}>
+                  {r.status === "cancelling"
+                    ? t("Cancelling", "取消中")
+                    : t("Taking longer than usual", "比平时更久")}
+                </Text>
+              </View>
+              <Text style={s.small}>
+                {stuckSeen?.hash === r.hash
+                  ? t(
+                      (stuckCore.EXPLAIN as Record<string, string>)[stuckSeen!.state] ??
+                        "The cancel hasn't confirmed yet. Check again in a moment.",
+                      (
+                        {
+                          confirmed: "这笔交易已完成。",
+                          reverted: "这笔交易已上链但被拒绝，除网络手续费外没有资产转移。",
+                          waiting: "网络已收到这笔交易但尚未打包，通常是因为此钱包更早的一笔交易缺失。你可以取消它。",
+                          missing: "这笔交易从未到达网络，因此没有发送任何资产。你可以重新发送，或取消它以确保它以后不会成功。",
+                          replaced: "此钱包的另一笔交易占用了它的位置，因此它永远不会成功。它没有发送任何资产。",
+                          unknown: "网络中没有这笔交易。它创建于 Tera 保存安全重试所需信息之前，再次付款前请先检查余额。",
+                          cancelled: "已取消，原交易永远不会成功。",
+                        } as Record<string, string>
+                      )[stuckSeen!.state] ?? "取消尚未确认，请稍后再查看。",
+                    )
+                  : t(
+                      "Transactions on Robinhood Chain usually confirm in seconds. Check what happened: Tera asks the network, and tells you whether to wait, send it again or cancel it. A higher fee doesn't speed anything up on this chain.",
+                      "Robinhood Chain 上的交易通常几秒内确认。查看情况：Tera 会询问网络，并告诉你应等待、重新发送还是取消。在此链上提高手续费并不能加快速度。",
+                    )}
+              </Text>
+              <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+                <Button disabled={busy} onPress={() => void run((g) => checkStuck(r, g))}>
+                  {t("Check what happened", "查看情况")}
+                </Button>
+                {stuckSeen?.hash === r.hash && stuckSeen!.actions.includes("again") ? (
+                  <Button primary disabled={busy} onPress={() => retryStuck(r)}>
+                    {t("Send again", "重新发送")}
+                  </Button>
+                ) : null}
+                {stuckSeen?.hash === r.hash && stuckSeen!.actions.includes("cancel") ? (
+                  <Button disabled={busy} onPress={() => cancelStuck(r)}>
+                    {t("Cancel it", "取消")}
+                  </Button>
+                ) : null}
+              </View>
+            </View>
+          ) : null}
           <Group title={t("Actions", "操作")}>
             <ListRow
               icon="refresh"
