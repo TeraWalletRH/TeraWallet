@@ -14,7 +14,13 @@ import {
 import { chain, PUBLIC_RPCS, RPC, RPCS, sources, type Tx } from "./config";
 import { currentAccount, notePending, pendingSend, sessionVersion } from "./storage";
 import { txCheck } from "./validation";
-import { networkSpeed as speedCore, revert as revertCore, rpcRotation, stuck as stuckCore } from "./core";
+import {
+  balanceChanges as changesCore,
+  networkSpeed as speedCore,
+  revert as revertCore,
+  rpcRotation,
+  stuck as stuckCore,
+} from "./core";
 
 /**
  * A refusal in words when the error carries a token's error code
@@ -270,6 +276,60 @@ export async function execute(
     sending = false;
   }
 }
+/**
+ * What every step of a review does to this wallet's balances, from the
+ * network's own simulation of them in order (eth_simulateV1 with transfer
+ * tracing; core/balance-changes.js reads it). Tokens the wallet doesn't know
+ * are named by their own contract, read here, and marked unknown.
+ * Throws when the node can't simulate, so the review can say so.
+ */
+export async function simulateChanges(
+  steps: Tx[],
+  owner: Address,
+  known: Record<string, { symbol: string; decimals: number; known?: boolean }>,
+  prices: Record<string, number>,
+) {
+  const result = (await txClient.request({
+    method: "eth_simulateV1" as never,
+    params: [
+      {
+        blockStateCalls: [
+          {
+            calls: steps.map((tx) => ({
+              from: owner,
+              to: tx.to,
+              data: tx.data,
+              value: `0x${BigInt(tx.value).toString(16)}`,
+            })),
+          },
+        ],
+        traceTransfers: true,
+        validation: false,
+      },
+      "latest",
+    ] as never,
+  })) as any;
+  const changes = changesCore.changesFrom(result?.[0]?.calls, owner);
+  if (!changes.ok) return { changes, shown: null };
+  const names = { ...known };
+  const missing = [
+    ...new Set([...(changes.tokens ?? []).map((c) => c.token),
+      ...(changes.nfts ?? []).map((n) => n.token),
+      ...(changes.approvals ?? []).map((a) => a.token),
+    ]),
+  ].filter((token) => !names[token] && token !== changesCore.NATIVE);
+  await Promise.all(
+    missing.map(async (token) => {
+      const [symbol, decimals] = await Promise.all([
+        txClient.readContract({ address: token as Address, abi: erc20Abi, functionName: "symbol" }).catch(() => ""),
+        txClient.readContract({ address: token as Address, abi: erc20Abi, functionName: "decimals" }).catch(() => 0),
+      ]);
+      if (symbol) names[token] = { symbol: String(symbol).slice(0, 16), decimals: Number(decimals) || 0, known: false };
+    }),
+  );
+  return { changes, shown: changesCore.describe(changes, { known: names, prices }) };
+}
+
 /** A receipt's verdict, or null when there isn't one yet. */
 async function receiptOf(hash: Hash) {
   try {

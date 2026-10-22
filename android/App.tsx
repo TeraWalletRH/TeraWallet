@@ -53,6 +53,7 @@ import {
   probeNetwork,
   sendAgain,
   setRotation,
+  simulateChanges,
   transactionStatus,
 } from "./src/network";
 import { fetchChainHistory, fetchTokenBalances, fetchTransferLegs, type ChainHistoryEntry, type FoundToken, type TransferLeg } from "./src/explorer";
@@ -4533,25 +4534,43 @@ function Wallet() {
           }),
         ),
       );
-      const [codeResult, gasResult] = await Promise.allSettled([
+      const [codeResult, gasResult, changesResult] = await Promise.allSettled([
         input.checkRecipientContract !== false && input.recipient && input.recipient.toLowerCase() !== owner.toLowerCase() && isAddress(input.recipient)
           ? client.getCode({ address: input.recipient as Address }) : Promise.resolve(undefined),
         Promise.all([
           client.getGasPrice(),
           Promise.all(next.steps.map((tx) => client.estimateGas({ account: owner as Address, to: tx.to, data: tx.data, value: BigInt(tx.value) }))),
         ]),
+        // What every step really moves, from the network's own simulation (update 5).
+        simulateChanges(
+          next.steps,
+          owner as Address,
+          Object.fromEntries(
+            assets
+              .filter((a) => a.address !== zeroAddress)
+              .map((a) => [a.address.toLowerCase(), { symbol: a.symbol, decimals: a.decimals, known: true }]),
+          ),
+          Object.fromEntries(
+            assets
+              .map((a) => [a.symbol, usablePrice((a as any).priceAs ?? a.symbol)] as const)
+              .filter(([, price]) => price !== null) as [string, number][],
+          ),
+        ),
       ]);
       const feeWei = gasResult.status === "fulfilled"
         ? gasResult.value[0] * gasResult.value[1].reduce((sum, gas) => sum + gas, 0n)
         : undefined;
       const estimatedFeeEth = feeWei !== undefined ? (Number(feeWei) / 1e18).toFixed(6) : undefined;
       const recipientHasCode = codeResult.status === "fulfilled" && !!codeResult.value && codeResult.value !== "0x";
-      const updatedDelta = calculateNetBalanceDelta({
-        tx: tx0,
-        intent: (next as any).intent || { actionType: next.activityType === "swap" ? "BUY" : "TRANSFER" },
-        asset: assetFound,
-        gasEstimate: estimatedFeeEth || "0.0001",
-      });
+      const simulated = changesResult.status === "fulfilled" ? changesResult.value.shown : null;
+      const updatedDelta = simulated
+        ? { ...simulated, source: "chain" as const }
+        : calculateNetBalanceDelta({
+            tx: tx0,
+            intent: (next as any).intent || { actionType: next.activityType === "swap" ? "BUY" : "TRANSFER" },
+            asset: assetFound,
+            gasEstimate: estimatedFeeEth || "0.0001",
+          });
       setReview({
         ...next,
         ...(feeWei !== undefined ? { feeWei: feeWei.toString() } : {}),
@@ -15994,19 +16013,43 @@ function Wallet() {
                   {review.intelligence.networkFee && <Text style={s.small}>{review.intelligence.networkFee}</Text>}
                 </View>
               )}
-              {!review?.historical && review?.netBalanceDelta && review.netBalanceDelta.hasDeltas && (
+              {!review?.historical &&
+                review?.netBalanceDelta &&
+                (review.netBalanceDelta.hasDeltas || review.netBalanceDelta.source === "chain") && (
                 <View style={[s.panel, { gap: 10, backgroundColor: colors.wash }]}>
-                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
-                    <Text style={s.eyebrow}>{t("SIMULATED NET BALANCE DELTA", "模拟净余额变动")}</Text>
-                    <Text style={[s.small, { color: colors.green, fontWeight: "600", fontSize: 11 }]}>
-                      {t("Pre-execution Simulation", "执行前模拟")}
+                  <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <Text style={s.eyebrow}>
+                      {review.netBalanceDelta.source === "chain"
+                        ? t("WHAT CHANGES IN YOUR WALLET", "钱包将发生的变化")
+                        : t("ESTIMATED CHANGES", "预估变化")}
+                    </Text>
+                    <Text
+                      style={[
+                        s.small,
+                        {
+                          color: review.netBalanceDelta.source === "chain" ? colors.green : colors.muted,
+                          fontWeight: "600",
+                          fontSize: 11,
+                        },
+                      ]}
+                    >
+                      {review.netBalanceDelta.source === "chain"
+                        ? t("Simulated on Robinhood Chain", "已在 Robinhood Chain 上模拟")
+                        : review.simulation === "checking"
+                          ? t("Simulating…", "模拟中…")
+                          : t("From the review, not simulated", "根据审核信息，未模拟")}
                     </Text>
                   </View>
+                  {review.netBalanceDelta.source === "chain" && !review.netBalanceDelta.hasDeltas ? (
+                    <Text style={s.small}>
+                      {t("No balances change, apart from the network fee.", "除网络手续费外，余额不会变化。")}
+                    </Text>
+                  ) : null}
                   <View style={{ gap: 8 }}>
                     {review.netBalanceDelta.pays.length > 0 && (
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                         <Text style={[s.small, { fontWeight: "700", color: colors.muted, width: 85 }]}>
-                          {t("You Pay:", "你支付:")}
+                          {t("You send:", "你发送:")}
                         </Text>
                         <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap", flex: 1 }}>
                           {review.netBalanceDelta.pays.map((item, idx) => (
@@ -16023,6 +16066,8 @@ function Wallet() {
                             >
                               <Text style={{ color: colors.danger, fontWeight: "700", fontSize: 12 }}>
                                 {item.formatted}
+                                {item.usd !== undefined ? ` (≈${valueCore.format(item.usd)})` : ""}
+                                {item.unknown ? ` · ${t("unknown token", "未知代币")}` : ""}
                               </Text>
                             </View>
                           ))}
@@ -16032,7 +16077,7 @@ function Wallet() {
                     {review.netBalanceDelta.receives.length > 0 && (
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
                         <Text style={[s.small, { fontWeight: "700", color: colors.muted, width: 85 }]}>
-                          {t("You Receive:", "你收到:")}
+                          {t("You get:", "你收到:")}
                         </Text>
                         <View style={{ flexDirection: "row", gap: 6, flexWrap: "wrap", flex: 1 }}>
                           {review.netBalanceDelta.receives.map((item, idx) => (
@@ -16049,6 +16094,8 @@ function Wallet() {
                             >
                               <Text style={{ color: colors.green, fontWeight: "700", fontSize: 12 }}>
                                 {item.formatted}
+                                {item.usd !== undefined ? ` (≈${valueCore.format(item.usd)})` : ""}
+                                {item.unknown ? ` · ${t("unknown token", "未知代币")}` : ""}
                               </Text>
                             </View>
                           ))}
@@ -16056,6 +16103,27 @@ function Wallet() {
                       </View>
                     )}
                   </View>
+                  {review.netBalanceDelta.approvals?.map((line, idx) => (
+                    <Text key={`approval-${idx}`} style={[s.small, { color: colors.yellow, fontWeight: "600" }]}>
+                      {line}
+                    </Text>
+                  ))}
+                  {review.netBalanceDelta.unknownToken ? (
+                    <Text style={[s.small, { color: colors.danger }]}>
+                      {t(
+                        "A token Tera doesn't know is involved. Its name is whatever its creator chose, so it may be imitating a real one.",
+                        "涉及 Tera 不认识的代币。它的名称由创建者自定，可能在仿冒真实代币。",
+                      )}
+                    </Text>
+                  ) : null}
+                  {review.netBalanceDelta.source === "chain" && review.netBalanceDelta.hasDeltas ? (
+                    <Text style={s.small}>
+                      {t(
+                        "Plus the network fee. A swap's final amount can differ a little with the price, within your slippage limit.",
+                        "另加网络手续费。兑换的最终数量可能随价格略有变化，但不超出你的滑点上限。",
+                      )}
+                    </Text>
+                  ) : null}
                 </View>
               )}
               {review?.rows.map(([label, value], i) => (
