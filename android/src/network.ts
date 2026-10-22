@@ -6,13 +6,15 @@ import {
   fallback,
   http,
   keccak256,
+  parseTransaction,
+  recoverTransactionAddress,
   type Address,
   type Hash,
 } from "viem";
 import { chain, PUBLIC_RPCS, RPC, RPCS, sources, type Tx } from "./config";
-import { currentAccount, notePending, sessionVersion } from "./storage";
+import { currentAccount, notePending, pendingSend, sessionVersion } from "./storage";
 import { txCheck } from "./validation";
-import { networkSpeed as speedCore, revert as revertCore, rpcRotation } from "./core";
+import { networkSpeed as speedCore, revert as revertCore, rpcRotation, stuck as stuckCore } from "./core";
 
 /**
  * A refusal in words when the error carries a token's error code
@@ -227,6 +229,8 @@ export async function execute(
         step: index + 1,
         totalSteps: steps.length,
         createdAt,
+        nonce: request.nonce,
+        raw: serialized,
       });
       // The row the owner actually sees. It is started here rather than after
       // the broadcast, so the transaction still appears the moment it is
@@ -239,6 +243,8 @@ export async function execute(
         step: index + 1,
         totalSteps: steps.length,
         createdAt,
+        nonce: request.nonce,
+        from: owner,
       }).catch(() => {});
       active();
       await txClient.sendRawTransaction({ serializedTransaction: serialized });
@@ -248,6 +254,8 @@ export async function execute(
         step: index + 1,
         totalSteps: steps.length,
         createdAt,
+        nonce: request.nonce,
+        from: owner,
       });
       if (index < steps.length - 1) {
         const receipt = await txClient.waitForTransactionReceipt({ hash, timeout: 90000 });
@@ -262,6 +270,145 @@ export async function execute(
     sending = false;
   }
 }
+/** A receipt's verdict, or null when there isn't one yet. */
+async function receiptOf(hash: Hash) {
+  try {
+    return (await txClient.getTransactionReceipt({ hash })).status;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What the chain says about a transaction that hasn't confirmed, read from
+ * the network's own node (core/stuck.js decides what it means).
+ */
+export async function inspectStuck(hash: Hash, nonce: number | null, from: Address) {
+  const [receipt, known, used] = await Promise.all([
+    receiptOf(hash),
+    txClient
+      .getTransaction({ hash })
+      .then(() => true)
+      .catch(() => false),
+    txClient.getTransactionCount({ address: from, blockTag: "latest" }).catch(() => null),
+  ]);
+  return stuckCore.classify({ receipt, known, nonce, used });
+}
+
+/** Where a cancel stands, from both receipts. */
+export async function inspectCancel(original: Hash, cancel: Hash) {
+  const [a, b] = await Promise.all([receiptOf(original), receiptOf(cancel)]);
+  return stuckCore.cancelState({ original: a, cancel: b });
+}
+
+/**
+ * Sign one transaction into a given slot with today's fees and broadcast it,
+ * under the same checks a normal send has: the network, the simulation, the
+ * fee cap, and the hash saved before the bytes leave.
+ */
+async function signIntoSlot(
+  tx: { to: Address; data: `0x${string}`; value: bigint },
+  nonce: number,
+  owner: Address,
+) {
+  const version = sessionVersion();
+  const active = () => {
+    if (version !== sessionVersion() || currentAccount().address !== owner)
+      throw new Error("Wallet locked. Try again. / 钱包已锁定，请重试。");
+  };
+  if ((await txClient.getChainId()) !== chain.id) throw new Error("RPC network mismatch.");
+  await txClient.call({ account: owner, ...tx }).catch((error) => {
+    throw readable(error);
+  });
+  const [gas, fees] = await Promise.all([
+    txClient.estimateGas({ account: owner, ...tx }).catch((error) => {
+      throw readable(error);
+    }),
+    txClient.estimateFeesPerGas(),
+  ]);
+  if (gas * fees.maxFeePerGas > 1000000000000000n)
+    throw new Error(
+      "Network fee exceeds the reviewed 0.001 ETH per-step limit. / 网络手续费超过每步 0.001 ETH 的限额。",
+    );
+  active();
+  const serialized = await currentAccount().signTransaction({
+    type: "eip1559",
+    chainId: chain.id,
+    nonce,
+    ...tx,
+    gas,
+    maxFeePerGas: fees.maxFeePerGas,
+    maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+  });
+  active();
+  const hash = keccak256(serialized);
+  await notePending({ hash, owner, step: 1, totalSteps: 1, createdAt: Date.now(), nonce, raw: serialized });
+  await txClient.sendRawTransaction({ serializedTransaction: serialized });
+  return hash;
+}
+
+/** The signed transaction behind a hash, checked to be this wallet's, or an error. */
+async function ownSigned(hash: Hash) {
+  const saved = await pendingSend(hash);
+  if (!saved?.raw || !Number.isInteger(saved.nonce))
+    throw new Error(
+      "Tera doesn't have this transaction's signed copy any more (it keeps it for a day), so it can't be retried safely. / 已无该交易的签名副本，无法安全重试。",
+    );
+  const owner = currentAccount().address;
+  const from = await recoverTransactionAddress({ serializedTransaction: saved.raw as never });
+  if (from.toLowerCase() !== owner.toLowerCase())
+    throw new Error("This transaction belongs to another account. Switch to it first. / 此交易属于另一个账户，请先切换。");
+  return { raw: saved.raw as `0x${string}`, nonce: saved.nonce as number, owner };
+}
+
+/**
+ * Send a transaction that never reached the network again, in its own slot.
+ * The signed bytes go first, unchanged; if the network now wants a higher
+ * fee, the same payment is signed again into the same slot. Either way only
+ * one of them can ever land. Returns the hash that went out.
+ */
+export async function sendAgain(hash: Hash) {
+  if (sending) throw new Error("A transaction is already in progress.");
+  sending = true;
+  try {
+    const { raw, nonce, owner } = await ownSigned(hash);
+    if ((await txClient.getChainId()) !== chain.id) throw new Error("RPC network mismatch.");
+    try {
+      await txClient.sendRawTransaction({ serializedTransaction: raw });
+      return hash;
+    } catch (error) {
+      // Already there after all: nothing to do but wait for it.
+      if (/already known|known transaction|already imported/i.test(String((error as any)?.message ?? error)))
+        return hash;
+      if (!/fee|underpriced|base fee/i.test(String((error as any)?.message ?? error))) throw readable(error);
+    }
+    const tx = parseTransaction(raw);
+    if (!tx.to) throw new Error("Contract deployments can't be sent again here.");
+    return await signIntoSlot(
+      { to: tx.to, data: (tx.data ?? "0x") as `0x${string}`, value: tx.value ?? 0n },
+      nonce,
+      owner,
+    );
+  } finally {
+    sending = false;
+  }
+}
+
+/**
+ * Cancel a transaction that hasn't landed: 0 ETH to yourself in its slot,
+ * so the original can never go through afterwards. Returns the cancel's hash.
+ */
+export async function cancelPending(hash: Hash) {
+  if (sending) throw new Error("A transaction is already in progress.");
+  sending = true;
+  try {
+    const { nonce, owner } = await ownSigned(hash);
+    return await signIntoSlot({ to: owner, data: "0x", value: 0n }, nonce, owner);
+  } finally {
+    sending = false;
+  }
+}
+
 export async function transactionStatus(hash: Hash) {
   try {
     return (await txClient.getTransactionReceipt({ hash })).status === "success"

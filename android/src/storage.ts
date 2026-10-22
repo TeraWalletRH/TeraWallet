@@ -946,6 +946,13 @@ export type PendingSend = {
   step: number;
   totalSteps: number;
   createdAt: number;
+  /**
+   * The slot it was signed into and the signed bytes, so a transaction that
+   * never reached the network can be sent again exactly, or cancelled
+   * (core/stuck.js). Kept the same day as the hash; older entries have neither.
+   */
+  nonce?: number;
+  raw?: string;
 };
 const PENDING = "pending-sends";
 const PENDING_KEPT_FOR = 86400000;
@@ -959,6 +966,10 @@ export async function notePending(entry: PendingSend) {
   );
   pendingCache = [entry, ...kept];
   await saveSealed(PENDING, pendingCache);
+}
+/** The signed bytes and slot of a transaction sent in the last day, or null. */
+export async function pendingSend(hash: string) {
+  return (await pendingSends()).find((row) => row.hash === hash) ?? null;
 }
 export async function eraseWallet() {
   const saved = await envelope();
