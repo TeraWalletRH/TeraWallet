@@ -1,3 +1,4 @@
+import * as addressLabels from "../core/address-labels.js";
 import {
   createApi,
   ApiError,
@@ -1662,7 +1663,7 @@ function proposalCard(p, index = state.drafts.indexOf(p)) {
     ${previewBlock(p)}
     ${historyBlock(p)}
     ${boundaryBlock(p, index)}
-    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") + swapLimitRows(p, intent) : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", tagFor(intent.recipient) ? `${displayTag(tagFor(intent.recipient))} · ${intent.recipient}` : intent.recipient) : ""}${intent?.actionType === "TRANSFER" && contactBook.nameFor(state.contacts, intent.recipient) ? pair("Saved as", contactBook.nameFor(state.contacts, intent.recipient)) : ""}${p.preparedTransaction ? pair("Transaction target", p.preparedTransaction.to) : ""}
+    ${pair(intent?.actionType === "BUY" ? "USDG input" : "Amount reported by service", amount)}${intent?.actionType === "BUY" || intent?.actionType === "SELL" ? pair("Quoted output", (p.quote || p.preparedTransaction?.quote)?.amountOut ? `${esc((p.quote || p.preparedTransaction.quote).amountOut)} · ${esc((p.quote || p.preparedTransaction.quote).route || "live route")}` : "Quote unavailable") + swapLimitRows(p, intent) : ""}${intent?.policyVersion ? pair("Local policy", `Signed bundle v${intent.policyVersion}`) : ""}${intent?.recipient ? pair("Recipient", tagFor(intent.recipient) ? `${displayTag(tagFor(intent.recipient))} · ${intent.recipient}` : intent.recipient) : ""}${intent?.actionType === "TRANSFER" && contactBook.nameFor(state.contacts, intent.recipient) ? pair("Saved as", contactBook.nameFor(state.contacts, intent.recipient)) : ""}${intent?.recipient && addressLabels.knownName(intent.recipient, chainId) ? pair("Built-in label", addressLabels.knownName(intent.recipient, chainId)) + `<p class="micro">${esc(addressLabels.LABEL_NOTE)}</p>` : ""}${intent?.actionType === "TRANSFER" && addressLabels.depositWarning(intent.recipient, chainId) ? pair("Deposit warning", addressLabels.depositWarning(intent.recipient, chainId)) : ""}${p.preparedTransaction ? pair("Transaction target", contactLabel(p.preparedTransaction.to)) : ""}
     ${submitted ? `<p>Transaction: ${explorer(p.txHash)}</p>` : issue ? `<p class="live-blocked">${esc(issue)}</p>` : '<p class="micro">Review the token amount and recipient. Your wallet will ask you to sign and pay the network fee.</p>'}
     <div class="actions">${button("Approve in wallet ↗", "approve", `data-index="${index}" ${issue || submitted || state.busy || state.chain !== chainId ? "disabled" : ""}`)}${button("Prepare again", "reprepare", `data-index="${index}" ${state.busy || submitted || !intent ? "disabled" : ""}`)}${button("Share redacted", "share", `data-index="${index}"`)}${button("Dismiss", "draft-dismiss", `data-index="${index}" ${state.busy ? "disabled" : ""}`)}</div></article>`;
 }
@@ -1782,7 +1783,7 @@ function createServiceSession() {
 }
 /** A saved name with the address beside it, or the address alone. */
 function contactLabel(address) {
-  const name = contactBook.nameFor(state.contacts, address);
+  const name = addressLabels.addressName(address, { contact: contactBook.nameFor(state.contacts, address), chainId });
   return name ? `${name} · ${address}` : address;
 }
 function contactsPanel() {
@@ -3076,10 +3077,9 @@ function createProposal(symbol, draft = null) {
     }
     if (isAddress(typed)) {
       contactPicks.innerHTML = "";
-      const name = contactBook.nameFor(state.contacts, typed);
-      contactStatus.textContent = name
-        ? `Saved as ${name}. Read the address above — it is what gets signed.`
-        : "";
+      const name = addressLabels.addressName(typed, { contact: contactBook.nameFor(state.contacts, typed), chainId });
+      const warning = addressLabels.depositWarning(typed, chainId);
+      contactStatus.textContent = [name, addressLabels.knownName(typed, chainId) ? addressLabels.LABEL_NOTE : "", warning].filter(Boolean).join(" ");
       return;
     }
     contactStatus.textContent = "";

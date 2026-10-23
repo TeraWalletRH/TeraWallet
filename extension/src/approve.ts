@@ -5,6 +5,7 @@
 
 import { ask, errorBox, h, header, setupForm, short } from "./ui";
 import { originLabel } from "./shared";
+import { knownName, depositWarning, LABEL_NOTE } from "../../public/tera/core/address-labels.js";
 
 type SignRequest = {
   kind: "message" | "typed";
@@ -311,9 +312,13 @@ function renderSend(origin: string, request: SendRequest, notice?: string) {
       ...described.rows.flatMap(([label, value]) => [
         h("dt", {}, label),
         h("dd", { class: ADDRESS.test(value) ? "mono" : "" }, value),
+        ...(ADDRESS.test(value) && knownName(value) ? [h("dt", {}, "Built-in label"), h("dd", {}, knownName(value))] : []),
       ]),
       ...(fee ? [h("dt", {}, "Network fee"), h("dd", {}, `Up to ${fee.maxFee} ETH`)] : []),
     ),
+    ...described.rows.filter(([label, value]) => label === "To" && ADDRESS.test(value) && depositWarning(value))
+      .map(([, value]) => h("p", { class: "note" }, depositWarning(value))),
+    described.rows.some(([, value]) => knownName(value)) ? h("p", { class: "muted small" }, LABEL_NOTE) : null,
     tx.data !== "0x"
       ? h(
           "details",
