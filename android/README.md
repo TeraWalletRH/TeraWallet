@@ -205,3 +205,27 @@ Production distribution requires device acceptance and a review of custody/signi
 ## NFTs
 
 The NFT gallery finds ERC-721 and ERC-1155 tokens from Robinhood Chain and sends them through the app's transaction review. Metadata and pictures load directly from third-party collection servers and the public Pinata IPFS gateway. These hosts see your network address and the requested token; some pictures may fail to load.
+
+## Claim links
+
+Send → Send with a claim link creates an ETH gift on Robinhood Chain. The funding
+uses the normal policy, spending limits, transaction review and signing path.
+The link is shared only after the chain reports a claimable balance. Opening it
+at `/app/#claim=1:4663:…` leads through wallet creation or unlock, then a claim
+review. Native `terawallet://claim#claim=1:4663:…` links also open that review.
+
+Each gift has a fresh random key. Its encrypted copy stays in the sender's
+per-account data independently of Activity retention, and its shared copy stays
+in the URL fragment, removed from the address bar on entry. Anyone holding the
+link, including the sender, can take the funds. There is no recipient binding or
+expiry. Share privately. A wallet recovery phrase alone does not recover sent
+gift keys; keep the device's data or save the links before erasing it.
+
+Claims sign only a single native ETH transfer to the active wallet, use the
+existing simulation, chain and fee checks, and save the signed hash before
+broadcast. Gas comes from the gift, so a new wallet needs no ETH. A reserve of
+twice the current estimated maximum fee is left behind; the same link can recover
+any remainder large enough to pay another fee. Empty, spent, dust, pending and
+unreachable-chain cases do not automatically resend. Claim keys are never saved
+in Activity, sent to Tera's API, or passed to a remote QR service. USDG and other
+tokens are not supported by claim links.

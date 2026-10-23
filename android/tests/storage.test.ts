@@ -68,6 +68,20 @@ it(
   DERIVES_A_KEY,
 );
 
+it("sent claim keys stay encrypted, survive retention and lock, and belong to their account", async () => {
+  await vault.createWallet(phrase, password);
+  const key = `0x${"a".repeat(64)}` as const;
+  const gift = { key, address: `0x${"1".repeat(40)}` as const, amount: "1000000000000000", createdAt: 1 };
+  await vault.saveData({ ...vault.emptyData(), retention: 1, claimLinks: [gift] });
+  expect([...files.values()].join("")).not.toContain(key);
+  expect((await vault.loadData()).claimLinks).toEqual([gift]);
+  vault.lock();
+  await vault.unlock(password);
+  expect((await vault.loadData()).claimLinks).toEqual([gift]);
+  await vault.addAccount();
+  expect((await vault.loadData()).claimLinks).toBeUndefined();
+}, DERIVES_A_KEY);
+
 it(
   "a lock during password derivation prevents a late unlock",
   async () => {

@@ -10,10 +10,13 @@ import {
   recoverTransactionAddress,
   type Address,
   type Hash,
+  type Hex,
 } from "viem";
 import { chain, PUBLIC_RPCS, RPC, RPCS, sources, type Tx } from "./config";
 import { currentAccount, notePending, pendingSend, sessionVersion } from "./storage";
 import { txCheck } from "./validation";
+import { walletFromPrivateKey } from "./crypto";
+import { checkClaimTx } from "../../public/tera/core/claim-links.js";
 import {
   balanceChanges as changesCore,
   networkSpeed as speedCore,
@@ -115,11 +118,14 @@ export async function execute(
   steps: Tx[],
   verify: () => void,
   record: (row: any) => Promise<void>,
+  claimKey?: Hex,
 ) {
   if (sending) throw new Error("A transaction is already in progress.");
-  sending = true;
   const version = sessionVersion();
   const owner = currentAccount().address;
+  const gift = claimKey ? walletFromPrivateKey(claimKey) : null;
+  const sender = gift?.address ?? owner;
+  sending = true;
   const active = () => {
     // Android can briefly report background while a native surface has focus.
     // The vault session and selected account determine whether the wallet is
@@ -127,6 +133,9 @@ export async function execute(
     if (version !== sessionVersion() || currentAccount().address !== owner)
       throw new Error("Wallet locked. Review again. / 钱包已锁定，请重新审核。");
     verify();
+    // A bearer key can only sweep native ETH to the wallet being reviewed.
+    // It never grants a second account an arbitrary transaction signing path.
+    if (gift) checkClaimTx(steps, owner);
   };
   // The chain cannot change between two steps of the same transaction, so it
   // is read once here instead of once per step. It is read again after any
@@ -154,7 +163,7 @@ export async function execute(
       const [code, simulated] = await Promise.allSettled([
         tx.data !== "0x" ? txClient.getCode({ address: tx.to }) : Promise.resolve(undefined),
         txClient.call({
-          account: owner,
+          account: sender,
           to: tx.to,
           data: tx.data,
           value: BigInt(tx.value),
@@ -179,10 +188,10 @@ export async function execute(
       // fees move while a step waits to confirm, and a fee carried over from
       // the step before is how a transaction gets stuck.
       const [nonce, gas, fees] = await Promise.all([
-        txClient.getTransactionCount({ address: owner, blockTag: "pending" }),
+        txClient.getTransactionCount({ address: sender, blockTag: "pending" }),
         txClient
           .estimateGas({
-            account: owner,
+            account: sender,
             to: tx.to,
             data: tx.data,
             value: BigInt(tx.value),
@@ -192,8 +201,10 @@ export async function execute(
           }),
         txClient.estimateFeesPerGas(),
       ]);
+      if (gift && nonce !== await txClient.getTransactionCount({ address: sender, blockTag: "latest" }))
+        throw new Error("This link has a pending transaction. Check Activity before trying again.");
       const request = await wallet.prepareTransactionRequest({
-        account: owner,
+        account: sender,
         to: tx.to,
         data: tx.data,
         value: BigInt(tx.value),
@@ -208,7 +219,7 @@ export async function execute(
           "Network fee exceeds the reviewed 0.001 ETH per-step limit. / 网络手续费超过每步 0.001 ETH 的限额。",
         );
       active();
-      const serialized = await currentAccount().signTransaction({
+      const serialized = await (gift ?? currentAccount()).signTransaction({
         type: "eip1559",
         chainId: chain.id,
         nonce: request.nonce,
@@ -250,7 +261,8 @@ export async function execute(
         totalSteps: steps.length,
         createdAt,
         nonce: request.nonce,
-        from: owner,
+        from: sender,
+        ...(gift ? { direction: "receive" } : {}),
       }).catch(() => {});
       active();
       await txClient.sendRawTransaction({ serializedTransaction: serialized });
@@ -261,7 +273,8 @@ export async function execute(
         totalSteps: steps.length,
         createdAt,
         nonce: request.nonce,
-        from: owner,
+        from: sender,
+        ...(gift ? { direction: "receive" } : {}),
       });
       if (index < steps.length - 1) {
         const receipt = await txClient.waitForTransactionReceipt({ hash, timeout: 90000 });
@@ -291,6 +304,7 @@ export async function simulateChanges(
   owner: Address,
   known: Record<string, { symbol: string; decimals: number; known?: boolean }>,
   prices: Record<string, number>,
+  sender: Address = owner,
 ) {
   const result = (await txClient.request({
     method: "eth_simulateV1" as never,
@@ -299,7 +313,7 @@ export async function simulateChanges(
         blockStateCalls: [
           {
             calls: steps.map((tx) => ({
-              from: owner,
+              from: sender,
               to: tx.to,
               data: tx.data,
               value: `0x${BigInt(tx.value).toString(16)}`,

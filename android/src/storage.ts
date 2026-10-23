@@ -58,6 +58,8 @@ type Envelope = {
   accountDeletionExpiresAt?: number;
 };
 export type LocalData = {
+  /** Bearer keys for sent gifts. Encrypted, per account, never retention-pruned. */
+  claimLinks?: import("./claims").Gift[];
   drafts: any[];
   history: any[];
   token: string;
