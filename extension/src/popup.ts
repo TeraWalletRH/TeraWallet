@@ -9,6 +9,7 @@
 // storage (memory only, gone when the browser closes) and come back on reopen.
 
 import { encodeQR } from "qr";
+import { knownName, depositWarning, LABEL_NOTE } from "../../public/tera/core/address-labels.js";
 import { formatUnits } from "../../public/tera/core/dapp-send.js";
 import { feeReserve, maxSendable, dollarsForTokens } from "../../public/tera/core/max-amount.js";
 import { impersonates } from "../../public/tera/core/poisoning.js";
@@ -350,6 +351,10 @@ function sendView() {
       const recipient = checkRecipient(typed, { owner: state.address, asset: asset() });
       if (recipient.error) toNote.append(errorBox(recipient.error));
       else {
+        const name = knownName(recipient.address);
+        if (name) toNote.append(h("p", { class: "note" }, `${name}. ${LABEL_NOTE}`));
+        const warning = depositWarning(recipient.address);
+        if (warning) toNote.append(h("p", { class: "note" }, warning));
         const match = impersonates(recipient.address, paid);
         if (match)
           toNote.append(
@@ -972,6 +977,7 @@ function activityView() {
                 rel: "noreferrer",
               },
               h("span", { class: "title" }, entry.title),
+              knownName(entry.recipient) ? h("span", { class: "muted small" }, `${knownName(entry.recipient)} · ${entry.recipient}`) : null,
               h(
                 "span",
                 { class: `muted small status-${entry.status}` },

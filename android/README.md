@@ -229,3 +229,19 @@ any remainder large enough to pay another fee. Empty, spent, dust, pending and
 unreachable-chain cases do not automatically resend. Claim keys are never saved
 in Activity, sent to Tera's API, or passed to a remote QR service. USDG and other
 tokens are not supported by claim links.
+
+## Known address labels
+
+Activity, its search, transaction details, Send and reviews share the built-in
+address list in `public/tera/core/address-labels.js` with the dashboard and
+extension. It starts with Tera's swap router, Relay's depository, Uniswap's router,
+Permit2, quoter and state view, plus the USDG, TERA and wrapped ETH contracts.
+Entries record their source in the existing integrations and match only an exact
+address on chain 4663. Testnet and other-chain addresses do not inherit a label.
+
+Private contact names remain separate and searchable alongside built-in labels;
+neither grants trusted-contact status. The full address remains visible in the
+review and transaction detail. Known contract destinations carry a warning about
+direct transfers. The shared category lookup also supports an exchange-deposit
+warning, but the seed deliberately has no exchange labels: exchange deposit
+addresses must be verified specifically for Robinhood Chain before adding them.

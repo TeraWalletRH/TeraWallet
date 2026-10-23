@@ -40,6 +40,7 @@ import * as tags from "./src/tags";
 import * as biz from "./src/business";
 import * as payLinks from "./src/paylinks";
 import * as claims from "./src/claims";
+import * as addressLabels from "../public/tera/core/address-labels.js";
 import { ClaimsScreen } from "./src/ClaimsScreen";
 import { claimAmount } from "../public/tera/core/claim-links.js";
 import * as notify from "./src/notify";
@@ -3283,12 +3284,27 @@ function Wallet() {
     if (row.actionHash || row.title?.includes("proposal") || row.title?.includes("提案")) return "swap";
     return "send";
   }
+  function counterpartyOf(row: any): string {
+    if (row.bridgeInput || row.isPrivateBridge || (row.chainId && row.chainId !== chain.id)) return "";
+    return [row.payee, row.counterpartyAddress, row.recipient, row.counterparty, row.from]
+      .find(address => isAddress(address ?? "") && !same(address, owner)) ?? "";
+  }
+  function nameForAddress(address: string) {
+    return addressLabels.addressName(address, { contact: contactsCore.nameFor(book, address), chainId: chain.id, language });
+  }
   function activityTitle(row: any) {
-    if (!/^(Review |审核)/.test(row.title || "")) return row.title;
     const kind = activityKind(row);
-    return kind === "bridge" ? t("Bridged assets", "已跨链转移")
-      : kind === "swap" ? t("Swapped assets", "已兑换资产")
-      : t("Sent assets", "已发送资产");
+    const title = /^(Review |审核)/.test(row.title || "")
+      ? kind === "bridge" ? t("Bridged assets", "已跨链转移")
+        : kind === "swap" ? t("Swapped assets", "已兑换资产") : t("Sent assets", "已发送资产")
+      : row.title;
+    const address = counterpartyOf(row);
+    const named = nameForAddress(address);
+    if (!named) return title;
+    // Explorer titles contain the shortened address. Replace it with the name;
+    // the detail page below always retains the full address.
+    const glance = short(address);
+    return title?.includes(glance) ? title.replace(glance, named) : `${title || t("Transaction", "交易")} · ${named}`;
   }
   function activityStatus(status: string) {
     return status === "confirmed" ? t("Completed", "已完成")
@@ -4799,6 +4815,18 @@ function Wallet() {
     holdProgress.setValue(0);
     const reviewVersion = vault.sessionVersion();
     const simulationOwner = next.claimKey ? walletFromPrivateKey(next.claimKey).address : owner as Address;
+    const labelledRecipient = next.bridgeInput || next.isPrivateBridge ? "" : next.payee || next.recipient;
+    const knownRecipient = addressLabels.knownName(labelledRecipient, chain.id, language);
+    const warning = addressLabels.depositWarning(labelledRecipient, chain.id, language);
+    next = { ...next, rows: [...next.rows] };
+    if (knownRecipient) next.rows.push([t("Built-in label", "内置标签"), knownRecipient]);
+    if (warning) next.rows.push([t("Deposit warning", "充值提示"), warning]);
+    const targets = [...new Set(next.steps.map(tx => tx.to))];
+    for (const target of targets) {
+      const name = addressLabels.knownName(target, chain.id, language);
+      if (name && !same(target, labelledRecipient))
+        next.rows.push([t("Contract", "合约"), `${name} · ${target}`]);
+    }
     const shownRecipient = next.rows.find(([label]) =>
       label === t("Recipient", "收款地址") || label === t("Recipient", "收款方"))?.[1];
     const intelligenceRecipient = next.payee || shownRecipient || next.recipient;
@@ -6116,15 +6144,14 @@ function Wallet() {
   function recipientPicks() {
     const typed = recipient.trim();
     if (isAddress(typed)) {
-      const name = contactsCore.nameFor(book, typed);
-      return name ? (
-        <Text style={[s.small, { color: colors.green }]}>
-          {t(
-            `Saved as ${name}. Read the address above — it is what gets signed.`,
-            `已保存为 ${name}。请核对上方地址——签名的是该地址。`,
-          )}
-        </Text>
-      ) : null;
+      const name = nameForAddress(typed);
+      const known = addressLabels.knownName(typed, chain.id, language);
+      const warning = addressLabels.depositWarning(typed, chain.id, language);
+      return <View style={{ gap: 6 }}>
+        {name ? <Text style={s.small}>{name}</Text> : null}
+        {known ? <Text style={s.small}>{t(addressLabels.LABEL_NOTE, "Tera 内置标签，不代表所有权或充值支持，请核对完整地址。")}</Text> : null}
+        {warning ? <Text style={[s.small, { color: colors.yellow }]}>{warning}</Text> : null}
+      </View>;
     }
     const saved = contactsCore.searchContacts(book, typed);
     const recent = typed
@@ -8430,6 +8457,11 @@ function Wallet() {
               }
             />
           )}
+          {addressLabels.knownName(spendTo, chain.id, language) ? <View style={[s.panel, { gap: 6 }]}>
+            <Row label={t("Built-in label", "内置标签")} value={addressLabels.knownName(spendTo, chain.id, language)} />
+            <Text style={s.small}>{t(addressLabels.LABEL_NOTE, "Tera 内置标签，不代表所有权或充值支持，请核对完整地址。")}</Text>
+            <Text style={[s.small, { color: colors.yellow }]}>{addressLabels.depositWarning(spendTo, chain.id, language)}</Text>
+          </View> : null}
           {overLimit ? (
             <View style={s.error}>
               <Text style={s.text}>{overLimit}</Text>
@@ -12008,7 +12040,7 @@ function Wallet() {
         {
           kindOf: activityKind,
           owner,
-          nameFor: (address: string) => contactsCore.nameFor(book, address),
+          nameFor: nameForAddress,
           noteFor: (hash: string) => notesCore.noteFor(txNotes, hash),
         },
       );
@@ -12455,7 +12487,9 @@ function Wallet() {
       );
       const kind = activityKind(r);
       const tone = statusTone(r.status);
-      const savedName = r.payee ? contactsCore.nameFor(book, r.payee) : "";
+      const partyAddress = counterpartyOf(r);
+      const savedName = contactsCore.nameFor(book, partyAddress);
+      const builtInName = addressLabels.knownName(partyAddress, chain.id, language);
       return (
         <>
           <Header title={activityTitle(r)} onBack={() => setPage("activity")} backLabel={t("Activity", "记录")} />
@@ -12598,14 +12632,16 @@ function Wallet() {
               </Pressable>
             );
           })()}
-          {r.payee ? (
+          {partyAddress ? (
             <View style={[s.panel, { gap: 10 }]}>
-              <Text style={s.eyebrow}>{t("To", "发送至")}</Text>
-              <Text selectable style={s.text}>
-                {savedName ? `${savedName} · ` : ""}
-                {short(r.payee)}
-              </Text>
-              <Button onPress={() => openContact(r.payee)}>
+              <Text style={s.eyebrow}>{kind === "receive" ? t("From", "来自") : t("To", "发送至")}</Text>
+              {savedName ? <Row label={t("Saved as", "已保存为")} value={savedName} /> : null}
+              {builtInName ? <>
+                <Row label={t("Built-in label", "内置标签")} value={builtInName} />
+                <Text style={s.small}>{t(addressLabels.LABEL_NOTE, "Tera 内置标签，不代表所有权或充值支持，请核对完整地址。")}</Text>
+              </> : null}
+              <Text selectable style={s.mono}>{partyAddress}</Text>
+              <Button onPress={() => openContact(partyAddress)}>
                 {savedName ? t("Rename address", "重命名地址") : t("Save to contacts", "保存到联系人")}
               </Button>
             </View>
