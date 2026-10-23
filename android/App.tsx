@@ -39,6 +39,9 @@ import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
 import * as biz from "./src/business";
 import * as payLinks from "./src/paylinks";
+import * as claims from "./src/claims";
+import { ClaimsScreen } from "./src/ClaimsScreen";
+import { claimAmount } from "../public/tera/core/claim-links.js";
 import * as notify from "./src/notify";
 import * as push from "./src/push";
 const tagsAvailable = () => tags.tagsAvailable();
@@ -150,6 +153,8 @@ import { nft } from "./src/core";
 
 type Review = {
   title: string;
+  /** Memory only: never included in saved review snapshots. */
+  claimKey?: Hex;
   rows: [string, string][];
   steps: Tx[];
   verify: () => void;
@@ -1091,6 +1096,7 @@ function Wallet() {
     // -1: no slot's word list is open. A slot only opens on tap — nothing
     // is shown until the owner asks for it.
     [activeAnswerSlot, setActiveAnswerSlot] = useState(-1);
+  const [incomingClaim, setIncomingClaim] = useState<string | null>(null);
   const [amount, setAmount] = useState(""),
     [amountInUsd, setAmountInUsd] = useState(false),
     [usdAmountInput, setUsdAmountInput] = useState(""),
@@ -2411,6 +2417,27 @@ function Wallet() {
     }
   }, []);
   useEffect(() => {
+    const accept = (url: string | null) => {
+      const key = claims.parseClaim(url);
+      if (key) setIncomingClaim(key);
+    };
+    if (Platform.OS === "web" && typeof window !== "undefined") {
+      accept(window.location.href);
+      if (window.location.hash.startsWith("#claim=")) {
+        const url = new URL(window.location.href);
+        url.hash = "";
+        window.history.replaceState(null, "", url.toString());
+      }
+    } else {
+      void Linking.getInitialURL().then(accept);
+      const subscription = Linking.addEventListener("url", ({ url }) => accept(url));
+      return () => subscription.remove();
+    }
+  }, []);
+  useEffect(() => {
+    if (owner && incomingClaim) setPage("claim-links");
+  }, [owner, incomingClaim]);
+  useEffect(() => {
     if (!owner || !pendingOpen) return;
     setPendingOpen(null);
     setPage(pendingOpen);
@@ -2859,7 +2886,7 @@ function Wallet() {
         if (!saved.tourSeen) {
           void vault.saveData(next).catch(() => {});
           // The tour points at the personal home screen, which a business wallet does not show.
-          if (!business) startTour();
+          if (!business && !incomingClaim) startTour();
         }
       })
       .catch(() => {});
@@ -3655,6 +3682,62 @@ function Wallet() {
       setBridgeStep(4);
       return;
     }
+  }
+  async function fundClaimLink(value: string, guard: () => void) {
+    const amount = units(value, 18);
+    check(!dataRef.current.trustedOnlyMode, t("Turn off trusted-only mode before creating a new gift address.", "创建礼物地址前请关闭仅信任联系人模式。"));
+    const gift = claims.newGift(amount);
+    const [gas, fees] = await Promise.all([
+      client.estimateGas({ account: owner as Address, to: gift.address, value: BigInt(amount) }),
+      client.estimateFeesPerGas(),
+    ]);
+    claimAmount(BigInt(amount), gas, fees.maxFeePerGas);
+    guard();
+    // Save spending authority before any funding can be signed or broadcast.
+    await store({ ...dataRef.current, claimLinks: [gift, ...(dataRef.current.claimLinks ?? [])] });
+    guard();
+    await proposeTransfer(guard, {
+      asset: sources[1], destination: gift.address, amount,
+      note: t("Claim link funding", "领取链接注资"), returnTo: "claim-links",
+      afterSubmitted: async (hash) => {
+        await store({ ...dataRef.current, claimLinks: (dataRef.current.claimLinks ?? []).map(g =>
+          g.address === gift.address ? { ...g, fundingHash: hash } : g) });
+      },
+    });
+  }
+  async function reviewClaim(key: string, guard: () => void) {
+    const recipient = owner as Address;
+    const { account, amount, reserve } = await claims.prepareClaim(key, recipient);
+    guard();
+    const tx = transferTx(zeroAddress, recipient, amount.toString());
+    await presentReview({
+      title: t("Review claim", "审核领取"), claimKey: key as Hex,
+      rows: [
+        [t("Receive", "收到"), `${formatUnits(amount, 18)} ETH`],
+        [t("From gift", "来自礼物"), account.address],
+        [t("Recipient", "收款地址"), recipient],
+        [t("Fee reserve", "手续费预留"), `${formatUnits(reserve, 18)} ETH`],
+        [t("Network", "网络"), "Robinhood Chain (4663)"],
+      ], steps: [tx], recipient, returnTo: "claim-links",
+      netBalanceDelta: {
+        pays: [], receives: [{ asset: "ETH", symbol: "ETH", amount: amount.toString(), formatted: `${formatUnits(amount, 18)} ETH` }],
+        summary: t("Receive ETH from the gift; fees are paid by the gift.", "从礼物中收到 ETH，手续费由礼物支付。"),
+        hasDeltas: true, source: "estimate",
+      },
+      verify: () => {
+        check(same(vault.currentAccount().address, recipient));
+        verifyTransfer(tx, zeroAddress, recipient, amount.toString());
+      },
+      afterSubmitted: async () => { setIncomingClaim(null); },
+    });
+  }
+  async function shareClaim(gift: claims.Gift, guard: () => void) {
+    check((await client.getChainId()) === chain.id, "RPC network mismatch.");
+    const held = await client.getBalance({ address: gift.address });
+    await claims.prepareClaim(gift.key, owner as Address);
+    guard();
+    check(held > 0n, t("This link has no confirmed funds to share. Check Activity.", "此链接没有可分享的已确认资金，请检查记录。"));
+    await shareText({ title: t("An ETH gift", "ETH 礼物"), url: claims.claimUrl(gift.key) });
   }
   async function prepareTransfer(guard: () => void) {
     // Resolved again here rather than reusing what the previous screen found.
@@ -4714,6 +4797,8 @@ function Wallet() {
     setReviewDetailsOpen(false);
     setImpactAccepted(false);
     holdProgress.setValue(0);
+    const reviewVersion = vault.sessionVersion();
+    const simulationOwner = next.claimKey ? walletFromPrivateKey(next.claimKey).address : owner as Address;
     const shownRecipient = next.rows.find(([label]) =>
       label === t("Recipient", "收款地址") || label === t("Recipient", "收款方"))?.[1];
     const intelligenceRecipient = next.payee || shownRecipient || next.recipient;
@@ -4744,7 +4829,7 @@ function Wallet() {
     if (input.lookalikeOf) buzz("lookalike");
     const tx0 = next.steps[0];
     const assetFound = assets.find((a) => same(a.address, tx0?.to) || next.rows.some(([l, v]) => v.includes(a.symbol)));
-    const delta = calculateNetBalanceDelta({
+    const delta = next.netBalanceDelta ?? calculateNetBalanceDelta({
       tx: tx0,
       intent: (next as any).intent || { actionType: next.activityType === "swap" ? "BUY" : "TRANSFER" },
       asset: assetFound,
@@ -4755,7 +4840,7 @@ function Wallet() {
       await Promise.all(
         next.steps.map((tx) =>
           client.call({
-            account: owner as Address,
+            account: simulationOwner,
             to: tx.to,
             data: tx.data,
             value: BigInt(tx.value),
@@ -4767,7 +4852,7 @@ function Wallet() {
           ? client.getCode({ address: input.recipient as Address }) : Promise.resolve(undefined),
         Promise.all([
           client.getGasPrice(),
-          Promise.all(next.steps.map((tx) => client.estimateGas({ account: owner as Address, to: tx.to, data: tx.data, value: BigInt(tx.value) }))),
+          Promise.all(next.steps.map((tx) => client.estimateGas({ account: simulationOwner, to: tx.to, data: tx.data, value: BigInt(tx.value) }))),
         ]),
         // What every step really moves, from the network's own simulation (update 5).
         simulateChanges(
@@ -4783,6 +4868,7 @@ function Wallet() {
               .map((a) => [a.symbol, usablePrice((a as any).priceAs ?? a.symbol)] as const)
               .filter(([, price]) => price !== null) as [string, number][],
           ),
+          simulationOwner,
         ),
       ]);
       const feeWei = gasResult.status === "fulfilled"
@@ -4793,12 +4879,13 @@ function Wallet() {
       const simulated = changesResult.status === "fulfilled" ? changesResult.value.shown : null;
       const updatedDelta = simulated
         ? { ...simulated, source: "chain" as const }
-        : calculateNetBalanceDelta({
+        : next.netBalanceDelta ?? calculateNetBalanceDelta({
             tx: tx0,
             intent: (next as any).intent || { actionType: next.activityType === "swap" ? "BUY" : "TRANSFER" },
             asset: assetFound,
             gasEstimate: estimatedFeeEth || "0.0001",
           });
+      if (reviewVersion !== vault.sessionVersion()) return;
       setReview({
         ...next,
         ...(feeWei !== undefined ? { feeWei: feeWei.toString() } : {}),
@@ -4814,10 +4901,12 @@ function Wallet() {
         }),
       });
     } catch {
+      if (reviewVersion !== vault.sessionVersion()) return;
       setReview({ ...next, netBalanceDelta: delta, simulation: "needs-attention", intelligence: reviewIntelligence({ ...input, simulation: "needs-attention" }) });
     }
   }
   async function signReview(r: Review) {
+    if (r.claimKey) check(r.simulation === "passed", t("Retry the claim check before signing.", "签名前请重新检查领取。"));
     if (!vault.isUnlocked()) {
       forget();
       setNotice({
@@ -4853,9 +4942,9 @@ function Wallet() {
       let submittedHash = "";
       const activityType = r.activityType ?? (r.bridgeInput || r.isPrivateBridge ? "bridge" : "send");
       const amountLabel = r.rows.find(([label]) =>
-        label === t("Send", "发送") || label === t("Amount", "金额"))?.[1]
+        label === t("Send", "发送") || label === t("Amount", "金额") || (r.claimKey && label === t("Receive", "收到")))?.[1]
         ?? r.rows.find(([label]) => label === t("NFT", "NFT"))?.[1];
-      const activityTitle = activityType === "revoke"
+      const activityTitle = r.claimKey ? t("Claimed ETH gift", "已领取 ETH 礼物") : activityType === "revoke"
         ? t("Revoked approval", "已撤销授权")
         : activityType === "swap"
         ? t(`Swapped${amountLabel ? ` ${amountLabel}` : ""}`, `已兑换${amountLabel ? ` ${amountLabel}` : ""}`)
@@ -4864,6 +4953,9 @@ function Wallet() {
           : t(`Sent${amountLabel ? ` ${amountLabel}` : ""}`, `已发送${amountLabel ? ` ${amountLabel}` : ""}`);
       const displayedRecipient = r.payee ?? r.rows.find(([label]) =>
         label === t("Recipient", "收款地址") || label === t("Recipient", "收款方"))?.[1];
+      const reviewClaimKey = r.claimKey;
+      // Consume bearer authority before sending, including timeout/error paths.
+      if (reviewClaimKey) setReview(null);
       await execute(
         r.steps,
         r.verify,
@@ -4911,6 +5003,7 @@ function Wallet() {
             drafts: dataRef.current.drafts.filter((d) => !r.draftId || d.createdAt !== r.draftId),
           });
         },
+        reviewClaimKey,
       );
       // Business notes live in the Reports book, a separate file, so they are written here.
       if (r.note && sharedNotes && submittedHash) await saveTxNote(submittedHash, r.note).catch(() => {});
@@ -8047,6 +8140,14 @@ function Wallet() {
         </>
       );
     }
+    if (page === "claim-links") return <ClaimsScreen
+      gifts={data.claimLinks ?? []} incoming={incomingClaim} busy={busy} t={t}
+      back={() => setPage("home")}
+      create={(value) => void run(guard => fundClaimLink(value, guard))}
+      open={setIncomingClaim}
+      claim={(key) => void run(guard => reviewClaim(key, guard))}
+      share={(gift) => void run(guard => shareClaim(gift, guard))}
+    />;
     if (page === "receive")
       return (
         <>
@@ -8860,6 +8961,7 @@ function Wallet() {
             backLabel={t("Back", "返回")}
           />
           <Steps count={5} current={flowStep} label={stepTitle} />
+          {flowStep === 0 ? <Button onPress={() => setPage("claim-links")}>{t("Send with a claim link", "通过领取链接发送")}</Button> : null}
           {scheduleRun && !isPrivate ? (
             <View style={[s.panel, { borderColor: colors.lime, borderWidth: 1, backgroundColor: colors.tint, gap: 4 }]}>
               <Text style={[s.text, { fontWeight: "700", color: colors.lime }]}>
