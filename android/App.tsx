@@ -80,6 +80,7 @@ import {
   batchSend as batchCore,
   contacts as contactsCore,
   avatars as avatarsCore,
+  networks as networksCore,
   limits as limitsCore,
   spend as spendCore,
   UNVERIFIABLE,
@@ -814,6 +815,15 @@ function Wallet() {
     [watchError, setWatchError] = useState(""),
     [watchBalances, setWatchBalances] = useState<Record<string, Record<string, string> | null>>({}),
     [watchHistory, setWatchHistory] = useState<ChainHistoryEntry[] | null>(null),
+    // Custom EVM networks: reference only, never used to send, swap, bridge or sign.
+    [networkForm, setNetworkForm] = useState({
+      name: "",
+      chainId: "",
+      rpcUrl: "",
+      symbol: "",
+      explorerUrl: "",
+    }),
+    [networkError, setNetworkError] = useState(""),
     // The limit order the swap screen was opened for, the order form, and its error.
     [limitRun, setLimitRun] = useState<
       null | { id: string; side: "buy" | "sell"; asset: string; kind: "limit" | "stop" | "take"; limit: string }
@@ -1807,6 +1817,7 @@ function Wallet() {
   const book = contactsCore.cleanBook(data.contacts);
   const watchedList = watchedCore.sortedWatched(data.watched);
   const watchedKey = watchedList.map((entry: any) => entry.address).join(",");
+  const networkList = networksCore.sortedNetworks(data.customNetworks);
   /** What a watched wallet holds is valued with the same rule as the owner's, and never added to it. */
   function watchedValuation(address: string) {
     const held = watchBalances[address];
@@ -1884,6 +1895,28 @@ function Wallet() {
     guard();
     setWatchOpen(result.entry.address);
     setPage("watch-view");
+  }
+  function openNetworkForm() {
+    setNetworkError("");
+    setNetworkForm({ name: "", chainId: "", rpcUrl: "", symbol: "", explorerUrl: "" });
+    setPage("network-add");
+  }
+  async function saveNetworkForm(guard: () => void) {
+    setNetworkError("");
+    const result = networksCore.addNetwork(dataRef.current.customNetworks, {
+      chainId: Number(networkForm.chainId),
+      name: networkForm.name,
+      rpcUrl: networkForm.rpcUrl,
+      symbol: networkForm.symbol,
+      explorerUrl: networkForm.explorerUrl,
+    });
+    if (!result.ok) {
+      setNetworkError(result.reason);
+      return;
+    }
+    await store({ ...dataRef.current, customNetworks: result.list });
+    guard();
+    setPage("networks");
   }
   const scheduleToday = schedulesCore.today();
   const dueScheduled = owner ? schedulesCore.duePayments(data.schedules, scheduleToday) : [];
@@ -11364,6 +11397,143 @@ function Wallet() {
         </>
       );
     }
+    if (page === "networks") {
+      return (
+        <>
+          <Header
+            title={t("Custom networks", "自定义网络")}
+            onBack={() => setPage("settings")}
+            backLabel={t("Settings", "设置")}
+            right={
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={t("Add a network", "添加网络")}
+                hitSlop={8}
+                onPress={openNetworkForm}
+                style={s.iconDisc}
+              >
+                <Icon name="plus" size={20} color={colors.ink} />
+              </Pressable>
+            }
+          />
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "Keep an EVM network's details next to this wallet. Reference only -- Tera never sends, swaps, bridges or signs on one of these.",
+              "在此钱包中保存 EVM 网络信息，仅供参考 -- Tera 不会在这些网络上发送、兑换、跨链或签名。",
+            )}
+          </Text>
+          {networkList.length === 0 ? (
+            <View style={[s.panel, { alignItems: "center", gap: 12, paddingVertical: 28 }]}>
+              <Icon name="link-variant" size={34} color={colors.lime} />
+              <Text style={[s.text, { textAlign: "center" }]}>
+                {t(
+                  "No custom networks yet. Add one by its name, chain ID and RPC URL.",
+                  "暂无自定义网络。请添加名称、链 ID 和 RPC 网址。",
+                )}
+              </Text>
+              <Button primary onPress={openNetworkForm}>
+                {t("Add a network", "添加网络")}
+              </Button>
+            </View>
+          ) : (
+            <Group>
+              {networkList.map((entry: any) => (
+                <ListRow
+                  key={entry.chainId}
+                  icon="link-variant"
+                  label={entry.name}
+                  detail={`${t("Chain ID", "链 ID")} ${entry.chainId} · ${entry.symbol}`}
+                  onPress={() =>
+                    confirm(
+                      t(`Remove ${entry.name}?`, `移除 ${entry.name}？`),
+                      t(
+                        "This only removes it from this device. The network itself is not affected.",
+                        "仅从此设备移除，网络本身不受影响。",
+                      ),
+                      () =>
+                        void run(async () => {
+                          await store({
+                            ...dataRef.current,
+                            customNetworks: networksCore.removeNetwork(
+                              dataRef.current.customNetworks,
+                              entry.chainId,
+                            ),
+                          });
+                        }),
+                    )
+                  }
+                  right={<Icon name="trash-can-outline" size={18} color={colors.muted} />}
+                />
+              ))}
+            </Group>
+          )}
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              networksCore.PRIVACY_NOTE,
+              "仅保存在此设备。自定义网络不会用于在此发送、兑换、跨链或签名 -- 仅作为可在区块浏览器打开或复制到别处使用的参考信息。",
+            )}
+          </Text>
+        </>
+      );
+    }
+    if (page === "network-add") {
+      return (
+        <>
+          <Header
+            title={t("Add a network", "添加网络")}
+            onBack={() => setPage("networks")}
+            backLabel={t("Custom networks", "自定义网络")}
+          />
+          <Field
+            label={t("Name", "名称")}
+            value={networkForm.name}
+            onChangeText={(value) => setNetworkForm((current) => ({ ...current, name: value }))}
+            maxLength={networksCore.LIMITS.maxName}
+            autoCapitalize="sentences"
+            placeholder={t("e.g. Base, Polygon, Arbitrum", "例如：Base、Polygon、Arbitrum")}
+          />
+          <Field
+            label={t("Chain ID", "链 ID")}
+            value={networkForm.chainId}
+            onChangeText={(value) => setNetworkForm((current) => ({ ...current, chainId: value }))}
+            keyboardType="number-pad"
+            placeholder="8453"
+          />
+          <Field
+            label={t("RPC URL", "RPC 网址")}
+            value={networkForm.rpcUrl}
+            onChangeText={(value) => setNetworkForm((current) => ({ ...current, rpcUrl: value }))}
+            autoCapitalize="none"
+            placeholder="https://mainnet.base.org"
+          />
+          <Field
+            label={t("Currency symbol", "货币符号")}
+            value={networkForm.symbol}
+            onChangeText={(value) => setNetworkForm((current) => ({ ...current, symbol: value }))}
+            maxLength={networksCore.LIMITS.maxSymbol}
+            autoCapitalize="characters"
+            placeholder="ETH"
+          />
+          <Field
+            label={t("Block explorer URL (optional)", "区块浏览器网址（可选）")}
+            value={networkForm.explorerUrl}
+            onChangeText={(value) => setNetworkForm((current) => ({ ...current, explorerUrl: value }))}
+            autoCapitalize="none"
+            placeholder="https://basescan.org"
+          />
+          {networkError ? (
+            <Text style={[s.small, { color: colors.danger }]}>{networkError}</Text>
+          ) : null}
+          {action("Add network", "添加网络", saveNetworkForm)}
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              networksCore.PRIVACY_NOTE,
+              "仅保存在此设备。自定义网络不会用于在此发送、兑换、跨链或签名 -- 仅作为可在区块浏览器打开或复制到别处使用的参考信息。",
+            )}
+          </Text>
+        </>
+      );
+    }
     if (page === "watching") {
       return (
         <>
@@ -13056,6 +13226,16 @@ function Wallet() {
                   : t("Follow any wallet without its key", "无需私钥关注任意钱包")
               }
               onPress={() => setPage("watching")}
+            />
+            <ListRow
+              icon="link-variant"
+              label={t("Custom networks", "自定义网络")}
+              detail={
+                networkList.length
+                  ? t(`${networkList.length} saved · reference only`, `已保存 ${networkList.length} 个 · 仅供参考`)
+                  : t("Keep another EVM network's details here", "在此保存其他 EVM 网络信息")
+              }
+              onPress={() => setPage("networks")}
             />
             <ListRow
               icon="calendar-clock"

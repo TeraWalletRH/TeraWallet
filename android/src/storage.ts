@@ -106,6 +106,20 @@ export type LocalData = {
    */
   watched?: { address: string; name: string; tag: string; addedAt: number }[];
   /**
+   * EVM networks the owner added by hand, beyond the ones Tera ships with.
+   * Sealed with the rest of this file and never sent anywhere; `core/networks.js`
+   * cleans them on every read. Reference only -- never used to send, swap,
+   * bridge or sign.
+   */
+  customNetworks?: {
+    chainId: number;
+    name: string;
+    rpcUrl: string;
+    symbol: string;
+    explorerUrl: string;
+    addedAt: number;
+  }[];
+  /**
    * Limit orders. Sealed with the rest of this file and never sent anywhere;
    * `core/limit-orders.js` cleans them on every read.
    */
