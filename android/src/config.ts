@@ -22,6 +22,17 @@ export const PUBLIC_RPCS: string[] = String(
   .split(",")
   .map((url: string) => url.trim())
   .filter((url: string) => url.length > 0);
+// ENS lives on Ethereum mainnet, a different network from Robinhood Chain
+// above, so resolving a name needs its own nodes. These are independent
+// public mainnet nodes, read-only, used only to look up a name the owner
+// typed on the send screen. EXPO_PUBLIC_ENS_RPC_POOL replaces the list.
+export const ENS_RPCS: string[] = String(
+  process.env.EXPO_PUBLIC_ENS_RPC_POOL ||
+    "https://eth.llamarpc.com,https://ethereum-rpc.publicnode.com,https://cloudflare-eth.com",
+)
+  .split(",")
+  .map((url: string) => url.trim())
+  .filter((url: string) => url.length > 0);
 export const POLICY_SIGNER =
   process.env.EXPO_PUBLIC_POLICY_SIGNER_PUBLIC_KEY || "0x5b2759f9620f54a5E1651A567Ebd8381F07f9f05";
 export const chain = defineChain({
