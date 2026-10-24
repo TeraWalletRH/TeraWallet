@@ -44,8 +44,12 @@ Tera never stays unlocked, so there's nothing to lock on blur or after a
 timeout: every send and signature asks for the password, and the key is
 opened only for that one step.
 
-**Sites.** A connected site gets the wallet's address, can read the chain
-through it, and can ask for:
+**Sites.** Before a connection request ever shows an approval window, the
+site's domain is checked against a known-phishing list (MetaMask's own
+maintained, open-source blocklist), fetched and cached locally and refreshed
+at most once a day; a listed domain is refused outright, with no window shown
+at all (`src/phishing.ts`). A connected site gets the wallet's address, can
+read the chain through it, and can ask for:
 
 - **Transactions** (`eth_sendTransaction`), described in words by
   `core/dapp-send.js`. ETH sends and token transfers read as "Send 5 USDG".

@@ -28,6 +28,7 @@ import {
   switchChain,
 } from "../../public/tera/core/dapp-connect.js";
 import { SIGNABLE, refusal, signRequest } from "../../public/tera/core/dapp-sign.js";
+import * as phishing from "./phishing";
 import {
   describe,
   feeCheck,
@@ -331,11 +332,19 @@ function ask(kind: Approval["kind"], origin: string, request?: AnyRequest) {
   return promise;
 }
 
-function askToConnect(origin: string) {
+async function askToConnect(origin: string) {
   // A site asking twice while the first window is open gets the same window.
   for (const approval of approvals.values())
     if (approval.kind === "connect" && approval.origin === origin)
       return approval.promise as Promise<string[]>;
+  // Checked before the cool-down and before any window opens: a known-phishing
+  // site gets no approval window at all, not even one the owner could tap
+  // through by habit.
+  if (await phishing.isKnownPhishing(origin))
+    throw rpcError(
+      ERRORS.unauthorized,
+      "Tera has refused to connect: this site is on a known phishing list.",
+    );
   cooling(origin);
   return ask("connect", origin) as Promise<string[]>;
 }
