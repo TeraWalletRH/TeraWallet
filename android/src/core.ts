@@ -15,6 +15,9 @@ export * as parse from "../../public/tera/core/parse.js";
 export * as tags from "../../public/tera/core/tags.js";
 // Names the owner gives addresses they send to. Kept on the device only.
 export * as contacts from "../../public/tera/core/contacts.js";
+// The shape of an encrypted contacts-export file, and the rules for merging
+// one into a book that already has some. The encrypting itself is src/contact-export.ts.
+export * as contactExport from "../../public/tera/core/contact-export.js";
 // Preset pictures an owner can pick for an account, to tell them apart at a glance.
 export * as avatars from "../../public/tera/core/avatars.js";
 // EVM networks the owner added by hand, kept for reference only.
