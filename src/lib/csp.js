@@ -33,6 +33,11 @@ export const APP_CONNECT = [
   "https://robinhood.drpc.org",
   "https://4663.rpc.thirdweb.com",
   "https://robinhoodchain.blockscout.com",
+  // Ethereum mainnet nodes, for resolving an ENS name on the send screen
+  // (src/ens.ts) -- a different network from Robinhood Chain above.
+  "https://eth.llamarpc.com",
+  "https://ethereum-rpc.publicnode.com",
+  "https://cloudflare-eth.com",
 ];
 
 // WalletConnect's verify and embedded-wallet frames, and Coinbase's popup host.
