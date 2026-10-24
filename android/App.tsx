@@ -79,6 +79,7 @@ import {
   stuck as stuckCore,
   batchSend as batchCore,
   contacts as contactsCore,
+  avatars as avatarsCore,
   limits as limitsCore,
   spend as spendCore,
   UNVERIFIABLE,
@@ -924,7 +925,7 @@ function Wallet() {
     // Addresses only live here while the wallet is open; locking clears them,
     // the same as the ledger that records who has read them.
     [accounts, setAccounts] = useState<
-      Array<{ index: number; address: string; name: string; active: boolean }>
+      Array<{ index: number; address: string; name: string; avatar: string; active: boolean }>
     >([]),
     [nameInput, setNameInput] = useState(""),
     // Which wallet's "…" action sheet / rename sheet is open, if any — an
@@ -932,6 +933,8 @@ function Wallet() {
     // any wallet in the list, not just the one currently open.
     [walletMenuFor, setWalletMenuFor] = useState<number | null>(null),
     [renamingIndex, setRenamingIndex] = useState<number | null>(null),
+    [avatarPickerIndex, setAvatarPickerIndex] = useState<number | null>(null),
+    [avatarError, setAvatarError] = useState(""),
     // Shown inline in the rename sheet, never via the global `error` →
     // `notice` pipeline: that pipeline opens its own Modal, which would
     // stack on top of the rename sheet's still-open Modal and hang iOS,
@@ -13874,6 +13877,7 @@ function Wallet() {
               <ListRow
                 key={entry.index}
                 icon={entry.active ? "wallet" : "wallet-outline"}
+                avatar={entry.avatar}
                 label={walletName(entry)}
                 detail={short(entry.address)}
                 disabled={busy}
@@ -16182,6 +16186,17 @@ function Wallet() {
               },
             },
             {
+              key: "avatar",
+              icon: "emoticon-outline",
+              label: t("Avatar", "头像"),
+              onPress: () => {
+                afterWalletMenuCloses.current = () => {
+                  setAvatarError("");
+                  setAvatarPickerIndex(entry.index);
+                };
+              },
+            },
+            {
               key: "copy",
               icon: "content-copy",
               label: t("Copy address", "复制地址"),
@@ -16315,6 +16330,103 @@ function Wallet() {
             </Pressable>
           </Pressable>
         </KeyboardAvoidingView>
+      </Modal>
+      <Modal
+        visible={avatarPickerIndex !== null && !!owner}
+        transparent
+        animationType={modalAnimation("slide", reduceMotion)}
+        onRequestClose={() => setAvatarPickerIndex(null)}
+      >
+        <Pressable
+          onPress={() => setAvatarPickerIndex(null)}
+          style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "flex-end" }}
+        >
+          <Pressable
+            onPress={() => {}}
+            style={{
+              backgroundColor: colors.sheet,
+              borderTopLeftRadius: 30,
+              borderTopRightRadius: 30,
+              ...sheetFrame,
+              padding: 24,
+              gap: 14,
+            }}
+          >
+            <Text style={s.title}>{t("Pick an avatar", "选择头像")}</Text>
+            <Text style={s.small}>
+              {t(
+                "Shown only to you, in the wallet switcher. It is never sent to a site or shown in a review.",
+                "仅你可见，显示在钱包切换器中，不会发送给任何网站，也不会出现在审核页面。",
+              )}
+            </Text>
+            <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 10 }}>
+              {avatarsCore.PRESETS.map((emoji: string) => (
+                <Pressable
+                  key={emoji}
+                  accessibilityRole="button"
+                  accessibilityLabel={emoji}
+                  onPress={() => {
+                    if (avatarPickerIndex === null) return;
+                    // Not routed through `run()`: its catch opens the shared
+                    // "Couldn't complete that" Modal, which would stack on
+                    // this sheet's still-open one and hang iOS — same reason
+                    // the rename sheet above catches inline.
+                    void (async () => {
+                      try {
+                        await vault.setAccountAvatar(avatarPickerIndex, emoji);
+                        syncAccounts();
+                        setAvatarPickerIndex(null);
+                      } catch (e) {
+                        setAvatarError(
+                          e instanceof Error
+                            ? e.message
+                            : t("Couldn't save that avatar.", "无法保存该头像。"),
+                        );
+                      }
+                    })();
+                  }}
+                  style={({ pressed }) => [
+                    s.panel,
+                    {
+                      width: 52,
+                      height: 52,
+                      alignItems: "center",
+                      justifyContent: "center",
+                      opacity: pressed ? 0.6 : 1,
+                    },
+                    accounts.find((a) => a.index === avatarPickerIndex)?.avatar === emoji && {
+                      borderWidth: 2,
+                      borderColor: colors.green,
+                    },
+                  ]}
+                >
+                  <Text style={{ fontSize: 24 }}>{emoji}</Text>
+                </Pressable>
+              ))}
+            </View>
+            {avatarError ? (
+              <Text style={[s.small, { color: colors.danger }]}>{avatarError}</Text>
+            ) : null}
+            <Button
+              onPress={() => {
+                if (avatarPickerIndex === null) return;
+                void (async () => {
+                  try {
+                    await vault.setAccountAvatar(avatarPickerIndex, "");
+                    syncAccounts();
+                    setAvatarPickerIndex(null);
+                  } catch (e) {
+                    setAvatarError(
+                      e instanceof Error ? e.message : t("Couldn't save that.", "无法保存。"),
+                    );
+                  }
+                })();
+              }}
+            >
+              {t("Use the default mark", "使用默认标志")}
+            </Button>
+          </Pressable>
+        </Pressable>
       </Modal>
       <Modal
         visible={accountsInfo}

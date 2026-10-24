@@ -19,6 +19,7 @@ import {
 import { API, type Asset } from "./config";
 import { append as logAppend, entryFor as logEntry } from "../../public/tera/core/signature-log.js";
 import { matches as phraseMatches } from "../../public/tera/core/phrase-check.js";
+import { isPreset as isAvatarPreset } from "../../public/tera/core/avatars.js";
 const WALLET = "tera.wallet.v1";
 const BIOMETRIC = "tera.wallet.biometric.v1";
 export const biometricsSupported = store.biometricsSupported;
@@ -34,6 +35,7 @@ export type DeletedAccount = {
   index: number;
   address: string;
   name: string;
+  avatar?: string;
   deletedAt: number;
   expiresAt: number;
 };
@@ -53,6 +55,13 @@ type Envelope = {
    * stored name it never asked for.
    */
   names?: Record<string, string>;
+  /**
+   * Which preset avatar the owner picked for each account, by index. Optional
+   * and usually sparse, same as `names`: an account with no entry falls back
+   * to the default mark rather than being given a stored avatar it never
+   * asked for. One of `core/avatars.js`'s `PRESETS`, checked on write.
+   */
+  avatars?: Record<string, string>;
   deletedAccounts?: DeletedAccount[];
   accountDeletionScheduledAt?: number;
   accountDeletionExpiresAt?: number;
@@ -215,6 +224,7 @@ export let authenticating = false;
 let indices: number[] = [0];
 let selected = 0;
 let names: Record<string, string> = {};
+let avatars: Record<string, string> = {};
 let deletedAccounts: DeletedAccount[] = [];
 let accountDeletionScheduledAt: number | undefined;
 let accountDeletionExpiresAt: number | undefined;
@@ -301,6 +311,7 @@ export function lock() {
   indices = [0];
   selected = 0;
   names = {};
+  avatars = {};
   pendingCache = null;
   epoch++;
 }
@@ -337,6 +348,7 @@ export function listAccounts() {
     index,
     address: walletFromSecret(held, index).address,
     name: names[String(index)] || "",
+    avatar: avatars[String(index)] || "",
     active: index === selected,
   }));
 }
@@ -369,6 +381,31 @@ export async function renameAccount(index: number, name: string) {
 }
 
 /**
+ * Pick an avatar for an account, or clear it by passing "".
+ *
+ * Checked against `core/avatars.js`'s presets here, not just wherever the
+ * picker UI happens to run, so nothing can land in the envelope that a future
+ * reader of `avatars[index]` has to re-validate before trusting it is one of
+ * the pictures this wallet actually knows how to render.
+ */
+export async function setAccountAvatar(index: number, value: string) {
+  if (!phrase) throw new Error("Wallet locked. / 钱包已锁定。");
+  if (!indices.includes(index)) throw new Error("Unknown account. / 未知账户。");
+  if (value && !isAvatarPreset(value)) throw new Error("Not a valid avatar. / 无效头像。");
+  const previous = avatars;
+  const next = { ...avatars };
+  if (value) next[String(index)] = value;
+  else delete next[String(index)];
+  avatars = next;
+  try {
+    await writeSettings({ avatars });
+  } catch (error) {
+    avatars = previous;
+    throw error;
+  }
+}
+
+/**
  * Rewrite the envelope's account fields, leaving the sealed phrase untouched.
  *
  * Which accounts exist and which is selected are not secrets about the phrase,
@@ -383,6 +420,7 @@ async function writeSettings(
       | "accounts"
       | "selected"
       | "names"
+      | "avatars"
       | "deletedAccounts"
       | "accountDeletionScheduledAt"
       | "accountDeletionExpiresAt"
@@ -420,12 +458,14 @@ export async function deleteAccount(index: number) {
 
   const address = walletFromSecret(phrase, index).address;
   const name = names[String(index)] || "";
+  const avatar = avatars[String(index)] || "";
   const now = Date.now();
   const expiresAt = now + 30 * 86400000;
 
   const previousIndices = indices;
   const previousSelected = selected;
   const previousNames = { ...names };
+  const previousAvatars = { ...avatars };
   const previousDeleted = [...deletedAccounts];
 
   // Remove index
@@ -434,15 +474,18 @@ export async function deleteAccount(index: number) {
   const nextSelected = selected === index ? 0 : selected;
   const nextNames = { ...names };
   delete nextNames[String(index)];
+  const nextAvatars = { ...avatars };
+  delete nextAvatars[String(index)];
 
   const nextDeleted = [
     ...deletedAccounts.filter((d) => d.index !== index),
-    { index, address, name, deletedAt: now, expiresAt },
+    { index, address, name, avatar, deletedAt: now, expiresAt },
   ];
 
   indices = nextIndices;
   selected = nextSelected;
   names = nextNames;
+  avatars = nextAvatars;
   deletedAccounts = nextDeleted;
 
   try {
@@ -450,12 +493,14 @@ export async function deleteAccount(index: number) {
       accounts: nextIndices,
       selected: nextSelected,
       names: nextNames,
+      avatars: nextAvatars,
       deletedAccounts: nextDeleted,
     });
   } catch (error) {
     indices = previousIndices;
     selected = previousSelected;
     names = previousNames;
+    avatars = previousAvatars;
     deletedAccounts = previousDeleted;
     throw error;
   }
@@ -473,26 +518,32 @@ export async function restoreAccount(index: number) {
 
   const previousIndices = indices;
   const previousNames = { ...names };
+  const previousAvatars = { ...avatars };
   const previousDeleted = [...deletedAccounts];
 
   const nextIndices = [...new Set([...indices, index])].sort((a, b) => a - b);
   const nextNames = { ...names };
   if (target.name) nextNames[String(index)] = target.name;
+  const nextAvatars = { ...avatars };
+  if (target.avatar) nextAvatars[String(index)] = target.avatar;
   const nextDeleted = deletedAccounts.filter((d) => d.index !== index);
 
   indices = nextIndices;
   names = nextNames;
+  avatars = nextAvatars;
   deletedAccounts = nextDeleted;
 
   try {
     await writeSettings({
       accounts: nextIndices,
       names: nextNames,
+      avatars: nextAvatars,
       deletedAccounts: nextDeleted,
     });
   } catch (error) {
     indices = previousIndices;
     names = previousNames;
+    avatars = previousAvatars;
     deletedAccounts = previousDeleted;
     throw error;
   }
@@ -643,6 +694,7 @@ export async function createWallet(secret: string, password: string) {
     indices = [0];
     selected = 0;
     names = {};
+    avatars = {};
     return account.address;
   } finally {
     key.fill(0);
@@ -717,7 +769,11 @@ export async function unlock(password: string | null) {
     selected = indices.includes(saved.selected as number) ? (saved.selected as number) : 0;
     names =
       saved.names && typeof saved.names === "object" ? (saved.names as Record<string, string>) : {};
-    
+    avatars =
+      saved.avatars && typeof saved.avatars === "object"
+        ? (saved.avatars as Record<string, string>)
+        : {};
+
     // Purge expired deleted accounts (past 30 days)
     const now = Date.now();
     deletedAccounts = (saved.deletedAccounts || []).filter((item) => {
@@ -777,6 +833,7 @@ export async function migrateToPin(currentPassword: string, pin: string) {
         accounts: indices,
         selected,
         names,
+        avatars,
       } satisfies Envelope),
     );
   } finally {

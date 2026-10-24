@@ -842,6 +842,7 @@ export function Group({ title, children }: { title?: string; children: React.Rea
 }
 export function ListRow({
   icon,
+  avatar,
   label,
   detail,
   onPress,
@@ -850,6 +851,8 @@ export function ListRow({
   disabled = false,
 }: {
   icon: string;
+  /** A picked avatar (one emoji), shown instead of `icon` when set. */
+  avatar?: string;
   label: string;
   detail?: string;
   onPress?: () => void;
@@ -872,7 +875,11 @@ export function ListRow({
       })}
     >
       <View style={[styles.iconDisc, danger && { backgroundColor: colors.dangerTint }]}>
-        <Icon name={icon} size={20} color={danger ? tone : colors.green} />
+        {avatar ? (
+          <Text style={{ fontSize: 18 }}>{avatar}</Text>
+        ) : (
+          <Icon name={icon} size={20} color={danger ? tone : colors.green} />
+        )}
       </View>
       <View style={{ flex: 1, gap: 2 }}>
         <Text style={[styles.label, { color: tone }]}>{label}</Text>
