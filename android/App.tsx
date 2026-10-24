@@ -37,6 +37,7 @@ import { erc20Abi, formatUnits, parseUnits, zeroAddress, isAddress, getAddress, 
 import { api, requestFor } from "./src/api";
 import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
+import * as ens from "./src/ens";
 import * as biz from "./src/business";
 import * as payLinks from "./src/paylinks";
 import * as claims from "./src/claims";
@@ -3545,10 +3546,14 @@ function Wallet() {
    * registry and the address it resolved to is shown, because that address is
    * what the owner is actually agreeing to.
    */
-  /** A tag, or on the web a business email: whichever the owner typed. */
+  /** A tag, a business email, or an ENS name: whichever the owner typed. */
   const resolveName = (input: string) =>
-    biz.isEmail(input) ? biz.resolveEmail(input) : tags.resolveTag(input);
-  const nameLabel = (name: string) => (biz.isEmail(name) ? name : tags.display(name));
+    biz.isEmail(input)
+      ? biz.resolveEmail(input)
+      : ens.isEnsName(input)
+        ? ens.resolveEns(input)
+        : tags.resolveTag(input);
+  const nameLabel = (name: string) => (biz.isEmail(name) || ens.isEnsName(name) ? name : tags.display(name));
   async function resolveRecipientStep() {
     if (recipientKind === "address") {
       setTagLookup({ state: "idle" });
@@ -3572,7 +3577,11 @@ function Wallet() {
       setTagLookup({ state: "error", message });
       buzz("error");
       setNotice({
-        title: biz.isEmail(typed) ? t("Email not found", "未找到邮箱") : t("Tag not found", "未找到标签"),
+        title: biz.isEmail(typed)
+          ? t("Email not found", "未找到邮箱")
+          : ens.isEnsName(typed)
+            ? t("ENS name not found", "未找到 ENS 名称")
+            : t("Tag not found", "未找到标签"),
         body: message,
         tone: "error",
       });
@@ -6961,7 +6970,11 @@ function Wallet() {
     );
   }
   // On the web a business can be paid at its email, typed in the same field as a tag.
-  const nameChoice = biz.emailAvailable() ? t("Tag or email", "标签或邮箱") : t("Tera tag", "Tera 标签");
+  const nameChoice = biz.emailAvailable()
+    ? t("Tag, email or ENS name", "标签、邮箱或 ENS 名称")
+    : tagsAvailable()
+      ? t("Tag or ENS name", "标签或 ENS 名称")
+      : t("ENS name", "ENS 名称");
   function main() {
     if (business && (page === "home" || page.startsWith("biz-")))
       return (
@@ -9220,24 +9233,16 @@ function Wallet() {
           )}
           {flowStep === 3 && (
             <View style={{ gap: 12 }}>
-              {(tagsAvailable() || biz.emailAvailable()) && (
-                <>
-                  <Text style={s.eyebrow}>{t("SEND TO", "发送至")}</Text>
-                  <Choices
-                    options={[nameChoice, t("Wallet address", "钱包地址")]}
-                    value={
-                      recipientKind === "tag"
-                        ? nameChoice
-                        : t("Wallet address", "钱包地址")
-                    }
-                    select={(choice) => {
-                      setRecipientKind(choice === nameChoice ? "tag" : "address");
-                      setRecipient("");
-                      setTagLookup({ state: "idle" });
-                    }}
-                  />
-                </>
-              )}
+              <Text style={s.eyebrow}>{t("SEND TO", "发送至")}</Text>
+              <Choices
+                options={[nameChoice, t("Wallet address", "钱包地址")]}
+                value={recipientKind === "tag" ? nameChoice : t("Wallet address", "钱包地址")}
+                select={(choice) => {
+                  setRecipientKind(choice === nameChoice ? "tag" : "address");
+                  setRecipient("");
+                  setTagLookup({ state: "idle" });
+                }}
+              />
               <Field
                 label={
                   recipientKind === "tag"
@@ -9247,9 +9252,9 @@ function Wallet() {
                 value={recipient}
                 placeholder={
                   recipientKind === "tag"
-                    ? biz.emailAvailable()
-                      ? "@astra · pay@acme.com"
-                      : "@astra"
+                    ? [tagsAvailable() && "@astra", biz.emailAvailable() && "pay@acme.com", "vitalik.eth"]
+                        .filter(Boolean)
+                        .join(" · ")
                     : "0x…"
                 }
                 onChangeText={(value) => {
@@ -9315,8 +9320,8 @@ function Wallet() {
                       : tagLookup.state === "error"
                         ? tagLookup.message
                         : t(
-                            "A tag is looked up in Tera's register. You will see the address it resolves to before you sign — read it.",
-                            "标签将在 Tera 注册表中查询。签名前会显示其对应地址，请仔细核对。",
+                            "A tag or email is looked up in Tera's register; an ENS name is looked up directly on Ethereum. You will see the address it resolves to before you sign — read it.",
+                            "标签或邮箱将在 Tera 注册表中查询；ENS 名称将直接在以太坊上查询。签名前会显示其对应地址，请仔细核对。",
                           )}
                 </Text>
               ) : (
@@ -9350,7 +9355,13 @@ function Wallet() {
               />
               {tagLookup.state === "found" && (
                 <Row
-                  label={biz.isEmail(tagLookup.tag) ? t("Email", "邮箱") : t("Tag", "标签")}
+                  label={
+                    biz.isEmail(tagLookup.tag)
+                      ? t("Email", "邮箱")
+                      : ens.isEnsName(tagLookup.tag)
+                        ? t("ENS name", "ENS 名称")
+                        : t("Tag", "标签")
+                  }
                   value={nameLabel(tagLookup.tag)}
                 />
               )}
