@@ -38,6 +38,7 @@ import { api, requestFor } from "./src/api";
 import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
 import * as ens from "./src/ens";
+import * as contactExport from "./src/contact-export";
 import * as biz from "./src/business";
 import * as payLinks from "./src/paylinks";
 import * as claims from "./src/claims";
@@ -81,6 +82,7 @@ import {
   contacts as contactsCore,
   avatars as avatarsCore,
   networks as networksCore,
+  contactExport as contactExportCore,
   limits as limitsCore,
   spend as spendCore,
   UNVERIFIABLE,
@@ -844,6 +846,16 @@ function Wallet() {
     [costEdit, setCostEdit] = useState<{ symbol: string; value: string } | null>(null),
     [pinnedAssets, setPinnedAssetsState] = useState<string[]>(() => getPinnedAssets()),
     [csvModalOpen, setCsvModalOpen] = useState(false),
+    // Encrypted contacts export/import: each its own password field and error,
+    // never the wallet's own password -- the file may be opened on a device
+    // that doesn't have this wallet on it at all.
+    [contactExportOpen, setContactExportOpen] = useState(false),
+    [contactExportPassword, setContactExportPassword] = useState(""),
+    [contactExportError, setContactExportError] = useState(""),
+    [contactImportOpen, setContactImportOpen] = useState(false),
+    [contactImportText, setContactImportText] = useState(""),
+    [contactImportPassword, setContactImportPassword] = useState(""),
+    [contactImportError, setContactImportError] = useState(""),
     [stakingPosition, setStakingPosition] = useState<any>(null),
     // The staking screen's positions, fixed locks and recent payouts; null while reading.
     [stakeData, setStakeData] = useState<
@@ -1917,6 +1929,57 @@ function Wallet() {
     await store({ ...dataRef.current, customNetworks: result.list });
     guard();
     setPage("networks");
+  }
+  // Not routed through `run()`: its catch opens the shared "Couldn't complete
+  // that" Modal, which would stack on these forms' still-open ones and hang
+  // iOS -- same reason the rename and avatar sheets catch inline.
+  async function doExportContacts() {
+    setContactExportError("");
+    try {
+      const json = await contactExport.exportContacts(book, contactExportPassword);
+      if (Platform.OS === "web") {
+        const blob = new Blob([json], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.setAttribute("download", `tera-contacts-${Date.now()}.json`);
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      } else {
+        await shareText({ title: t("Tera contacts export", "Tera 联系人导出"), text: json });
+      }
+      setContactExportOpen(false);
+      setContactExportPassword("");
+    } catch (e) {
+      setContactExportError(
+        e instanceof Error ? e.message : t("Couldn't export.", "无法导出。"),
+      );
+    }
+  }
+  async function doImportContacts() {
+    setContactImportError("");
+    try {
+      const imported = await contactExport.importContacts(contactImportText, contactImportPassword);
+      const result = contactExportCore.mergeImported(dataRef.current.contacts, imported, { owner });
+      await store({ ...dataRef.current, contacts: result.book });
+      setContactImportOpen(false);
+      setContactImportText("");
+      setContactImportPassword("");
+      setNotice({
+        title: t("Contacts imported", "联系人已导入"),
+        body: t(
+          `${result.added.length} added, ${result.skipped.length} already saved or skipped.`,
+          `已添加 ${result.added.length} 个，${result.skipped.length} 个已存在或跳过。`,
+        ),
+        tone: "success",
+      });
+    } catch (e) {
+      setContactImportError(
+        e instanceof Error ? e.message : t("Couldn't import.", "无法导入。"),
+      );
+    }
   }
   const scheduleToday = schedulesCore.today();
   const dueScheduled = owner ? schedulesCore.duePayments(data.schedules, scheduleToday) : [];
@@ -14023,6 +14086,41 @@ function Wallet() {
                   )}
             </Text>
           )}
+          {book.length > 0 && (
+            <View style={[s.wrap, { marginTop: 4 }]}>
+              <Button
+                onPress={() => {
+                  setContactExportError("");
+                  setContactExportPassword("");
+                  setContactExportOpen(true);
+                }}
+              >
+                {t("Export contacts", "导出联系人")}
+              </Button>
+              <Button
+                onPress={() => {
+                  setContactImportError("");
+                  setContactImportText("");
+                  setContactImportPassword("");
+                  setContactImportOpen(true);
+                }}
+              >
+                {t("Import contacts", "导入联系人")}
+              </Button>
+            </View>
+          )}
+          {book.length === 0 && (
+            <Button
+              onPress={() => {
+                setContactImportError("");
+                setContactImportText("");
+                setContactImportPassword("");
+                setContactImportOpen(true);
+              }}
+            >
+              {t("Import contacts", "导入联系人")}
+            </Button>
+          )}
         </>
       );
     }
@@ -16607,6 +16705,111 @@ function Wallet() {
             </Button>
           </Pressable>
         </Pressable>
+      </Modal>
+      <Modal
+        visible={contactExportOpen}
+        transparent
+        animationType={modalAnimation("slide", reduceMotion)}
+        onRequestClose={() => setContactExportOpen(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1, justifyContent: "flex-end" }}
+        >
+          <Pressable
+            onPress={() => setContactExportOpen(false)}
+            style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "flex-end" }}
+          >
+            <Pressable
+              onPress={() => {}}
+              style={{
+                backgroundColor: colors.sheet,
+                borderTopLeftRadius: 30,
+                borderTopRightRadius: 30,
+                ...sheetFrame,
+                padding: 24,
+                gap: 14,
+              }}
+            >
+              <Text style={s.title}>{t("Export contacts", "导出联系人")}</Text>
+              <Text style={s.small}>
+                {t(
+                  "Encrypted with a password you choose for this file -- not your wallet password. You'll need the same password to import it on another device.",
+                  "使用你为此文件设置的密码加密 -- 不是钱包密码。在其他设备导入时需要输入相同密码。",
+                )}
+              </Text>
+              <Field
+                label={t("File password", "文件密码")}
+                value={contactExportPassword}
+                onChangeText={setContactExportPassword}
+                secureTextEntry
+              />
+              {contactExportError ? (
+                <Text style={[s.small, { color: colors.danger }]}>{contactExportError}</Text>
+              ) : null}
+              <Button primary onPress={() => void doExportContacts()}>
+                {t("Export", "导出")}
+              </Button>
+              <Button onPress={() => setContactExportOpen(false)}>{t("Cancel", "取消")}</Button>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
+      <Modal
+        visible={contactImportOpen}
+        transparent
+        animationType={modalAnimation("slide", reduceMotion)}
+        onRequestClose={() => setContactImportOpen(false)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1, justifyContent: "flex-end" }}
+        >
+          <Pressable
+            onPress={() => setContactImportOpen(false)}
+            style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "flex-end" }}
+          >
+            <Pressable
+              onPress={() => {}}
+              style={{
+                backgroundColor: colors.sheet,
+                borderTopLeftRadius: 30,
+                borderTopRightRadius: 30,
+                ...sheetFrame,
+                padding: 24,
+                gap: 14,
+              }}
+            >
+              <Text style={s.title}>{t("Import contacts", "导入联系人")}</Text>
+              <Field
+                label={t("Exported file's contents", "导出文件内容")}
+                value={contactImportText}
+                onChangeText={setContactImportText}
+                placeholder={t("Paste the file's contents here", "将文件内容粘贴到此处")}
+                multiline
+              />
+              <Field
+                label={t("File password", "文件密码")}
+                value={contactImportPassword}
+                onChangeText={setContactImportPassword}
+                secureTextEntry
+              />
+              {contactImportError ? (
+                <Text style={[s.small, { color: colors.danger }]}>{contactImportError}</Text>
+              ) : null}
+              <Text style={s.small}>
+                {t(
+                  "An address already saved on this device is left alone. Only new contacts are added.",
+                  "此设备已保存的地址不受影响，仅会添加新的联系人。",
+                )}
+              </Text>
+              <Button primary onPress={() => void doImportContacts()}>
+                {t("Import", "导入")}
+              </Button>
+              <Button onPress={() => setContactImportOpen(false)}>{t("Cancel", "取消")}</Button>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
       </Modal>
       <Modal
         visible={accountsInfo}

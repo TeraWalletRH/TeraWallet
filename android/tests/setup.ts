@@ -10,8 +10,20 @@
 import { mock } from "bun:test";
 import { pbkdf2 } from "@noble/hashes/pbkdf2";
 import { sha256 } from "@noble/hashes/sha256";
+import { randomFillSync } from "node:crypto";
 
 mock.module("react-native-quick-crypto", () => ({
   pbkdf2Sync: (password: string, salt: Uint8Array, iterations: number, keylen: number) =>
     Buffer.from(pbkdf2(sha256, password, salt, { c: iterations, dkLen: keylen })),
+}));
+
+// expo-crypto (used directly by a few src/*.ts files for random bytes) pulls
+// in the real `react-native` package at module load for the same reason as
+// above -- its own Flow syntax this runner can't parse. getRandomValues is
+// the only export any of those files actually call.
+mock.module("expo-crypto", () => ({
+  getRandomValues: <T extends ArrayBufferView>(array: T): T => {
+    randomFillSync(new Uint8Array(array.buffer, array.byteOffset, array.byteLength));
+    return array;
+  },
 }));
