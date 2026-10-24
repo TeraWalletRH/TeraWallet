@@ -132,7 +132,7 @@ it(
   "adds wallets from the one phrase, at the standard path, and switches between them",
   async () => {
     const first = await vault.createWallet(phrase, password);
-    expect(vault.listAccounts()).toEqual([{ index: 0, address: first, name: "", active: true }]);
+    expect(vault.listAccounts()).toEqual([{ index: 0, address: first, name: "", avatar: "", active: true }]);
 
     const second = await vault.addAccount();
     expect(second).not.toBe(first);
@@ -193,7 +193,7 @@ it(
     secure.set("tera.wallet.v1", JSON.stringify(stored));
     vault.lock();
     expect(await vault.unlock(password)).toBe(address);
-    expect(vault.listAccounts()).toEqual([{ index: 0, address, name: "", active: true }]);
+    expect(vault.listAccounts()).toEqual([{ index: 0, address, name: "", avatar: "", active: true }]);
   },
   DERIVES_A_KEY,
 );
@@ -406,6 +406,56 @@ it(
     await vault.restoreAccount(1);
     expect(vault.accountIndices()).toEqual([0, 1]);
     expect(vault.listDeletedAccounts()).toHaveLength(0);
+  },
+  DERIVES_A_KEY,
+);
+
+it(
+  "picks, clears, and rejects an account avatar",
+  async () => {
+    await vault.createWallet(phrase, password);
+    await vault.setAccountAvatar(0, "🦊");
+    expect(vault.listAccounts().map((entry) => entry.avatar)).toEqual(["🦊"]);
+
+    await vault.setAccountAvatar(0, "");
+    expect(vault.listAccounts().map((entry) => entry.avatar)).toEqual([""]);
+
+    await expect(vault.setAccountAvatar(0, "🐍")).rejects.toThrow("Not a valid avatar");
+    await expect(vault.setAccountAvatar(5, "🦊")).rejects.toThrow("Unknown account");
+  },
+  DERIVES_A_KEY,
+);
+
+it(
+  "keeps an account avatar across a lock and a PIN migration",
+  async () => {
+    await vault.createWallet(phrase, password);
+    const second = await vault.addAccount();
+    await vault.setAccountAvatar(1, "🐢");
+    vault.lock();
+    expect(await vault.unlock(password)).toBe(second);
+    expect(vault.listAccounts().map((entry) => entry.avatar)).toEqual(["", "🐢"]);
+
+    await vault.migrateToPin(password, "654321");
+    vault.lock();
+    await vault.unlock("654321");
+    expect(vault.listAccounts().map((entry) => entry.avatar)).toEqual(["", "🐢"]);
+  },
+  DERIVES_A_KEY,
+);
+
+it(
+  "carries an account's avatar into the recovery bin and back",
+  async () => {
+    await vault.createWallet(phrase, password);
+    await vault.addAccount();
+    await vault.setAccountAvatar(1, "🌙");
+
+    await vault.deleteAccount(1);
+    expect(vault.listAccounts().map((entry) => entry.avatar)).toEqual([""]);
+
+    await vault.restoreAccount(1);
+    expect(vault.listAccounts().map((entry) => entry.avatar)).toEqual(["", "🌙"]);
   },
   DERIVES_A_KEY,
 );

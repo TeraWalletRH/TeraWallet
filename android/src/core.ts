@@ -15,6 +15,8 @@ export * as parse from "../../public/tera/core/parse.js";
 export * as tags from "../../public/tera/core/tags.js";
 // Names the owner gives addresses they send to. Kept on the device only.
 export * as contacts from "../../public/tera/core/contacts.js";
+// Preset pictures an owner can pick for an account, to tell them apart at a glance.
+export * as avatars from "../../public/tera/core/avatars.js";
 // The swap slippage limit the owner chose, and the minimum output it guarantees.
 export * as slippage from "../../public/tera/core/slippage.js";
 // Recurring payments: reminders with the send already written out, never paid
