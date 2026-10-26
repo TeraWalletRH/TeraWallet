@@ -7,7 +7,7 @@
 
 import * as Clipboard from "expo-clipboard";
 import React, { useCallback, useEffect, useState } from "react";
-import { Pressable, View } from "react-native";
+import { Linking, Pressable, View } from "react-native";
 import { getAddress, isAddress, type Address } from "viem";
 import type { Asset } from "../config";
 import { balances } from "../network";
@@ -26,6 +26,7 @@ import {
 import { amountText, priceNow, short, usd } from "./data";
 import { isEmail, linkedEmail, resolveEmail } from "./email";
 import { isProposalExpired, remainingSeconds } from "../../../public/tera/core/teams.js";
+import { BUSINESS_APPS } from "../../../public/tera/core/business-apps.js";
 import {
   approve,
   can,
@@ -1239,6 +1240,39 @@ function TeamView({
     </Card>
   ) : null;
 
+  const apps = (
+    <Card>
+      <Text style={[s.text, { fontWeight: "700" }]}>{t("Apps for treasuries", "资金库工具")}</Text>
+      <Text style={s.small}>
+        {t(
+          "A few allocators and risk curators confirmed on Robinhood Chain. Discovery only -- opening one leaves Tera, the same as a bookmark.",
+          "部分已确认部署在 Robinhood Chain 上的资金分配与风险管理工具，仅供发现，打开即离开 Tera，如同书签一样。",
+        )}
+      </Text>
+      {BUSINESS_APPS.map((entry) => (
+        <Pressable
+          key={entry.id}
+          accessibilityRole="button"
+          onPress={() => void Linking.openURL(entry.url)}
+          style={({ pressed }) => ({
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 10,
+            opacity: pressed ? 0.6 : 1,
+          })}
+        >
+          <Icon name="external-link" size={18} color={colors.muted} />
+          <View style={{ flex: 1 }}>
+            <Text style={[s.text, { fontWeight: "700" }]}>{entry.name}</Text>
+            <Text style={s.small}>
+              {entry.category} · {entry.description}
+            </Text>
+          </View>
+        </Pressable>
+      ))}
+    </Card>
+  );
+
   const trust = (
     <Text style={s.small}>
       {t(
@@ -1266,6 +1300,7 @@ function TeamView({
           <View style={{ flex: 5, minWidth: 0, gap: 20 }}>
             {members}
             {past}
+            {apps}
             {trust}
             <Link label={t("+ Start another team", "+ 创建其他团队")} onPress={onNewTeam} />
           </View>
@@ -1279,6 +1314,7 @@ function TeamView({
       {queue}
       {members}
       {past}
+      {apps}
       {trust}
       <Link label={t("+ Start another team", "+ 创建其他团队")} onPress={onNewTeam} />
     </>
