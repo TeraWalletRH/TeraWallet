@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isEnsName } from "../src/ens";
+import { isEnsName, resolveEnsAvatar } from "../src/ens";
 
 describe("isEnsName", () => {
   test("accepts well-formed .eth names", () => {
@@ -17,5 +17,11 @@ describe("isEnsName", () => {
     expect(isEnsName("vitalik")).toBe(false);
     expect(isEnsName("vitalik.com")).toBe(false);
     expect(isEnsName(".eth")).toBe(false);
+  });
+});
+
+describe("resolveEnsAvatar", () => {
+  test("never throws -- a malformed name resolves to null, not a rejection", async () => {
+    await expect(resolveEnsAvatar("not a valid ens name \u0000")).resolves.toBeNull();
   });
 });

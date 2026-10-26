@@ -1149,6 +1149,10 @@ function Wallet() {
       | { state: "found"; tag: string; address: Address }
       | { state: "error"; message: string }
     >({ state: "idle" }),
+    // An ENS name's avatar, fetched only once `tagLookup` resolves one. For
+    // the owner's glance, same as a wallet avatar (storage.ts) -- never a
+    // check, since anyone can set any avatar on any name they own.
+    [ensAvatar, setEnsAvatar] = useState<string | null>(null),
     [myTag, setMyTag] = useState<string | null>(null),
     [claimInput, setClaimInput] = useState(""),
     [, setTagsOn] = useState(false),
@@ -3687,6 +3691,22 @@ function Wallet() {
       return false;
     }
   }
+  // An ENS name's avatar, fetched only once the lookup above resolves one.
+  // Cleared immediately on any other result, so a stale avatar from a
+  // previous name never survives onto a new one.
+  useEffect(() => {
+    if (tagLookup.state !== "found" || !ens.isEnsName(tagLookup.tag)) {
+      setEnsAvatar(null);
+      return;
+    }
+    let live = true;
+    void ens.resolveEnsAvatar(tagLookup.tag).then((url) => {
+      if (live) setEnsAvatar(url);
+    });
+    return () => {
+      live = false;
+    };
+  }, [tagLookup]);
   function continueSend() {
     if (flowStep === 0) {
       if (sendMode === "private" && assetSymbol !== "ETH" && assetSymbol !== "TERA") {
@@ -9463,6 +9483,27 @@ function Wallet() {
                   }
                   value={nameLabel(tagLookup.tag)}
                 />
+              )}
+              {tagLookup.state === "found" && ens.isEnsName(tagLookup.tag) && ensAvatar && (
+                <View
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 10,
+                    paddingVertical: 8,
+                  }}
+                >
+                  <Image
+                    source={{ uri: ensAvatar }}
+                    style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: colors.raised }}
+                  />
+                  <Text style={[s.small, { flex: 1 }]}>
+                    {t(
+                      "That name's avatar. Decoration, not a check — anyone can set one.",
+                      "该名称设置的头像，仅作展示，非身份核验 — 任何人都可设置。",
+                    )}
+                  </Text>
+                </View>
               )}
               <Row
                 label={t("To", "收款方")}

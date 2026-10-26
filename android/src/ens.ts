@@ -53,3 +53,29 @@ export async function resolveEns(input: string) {
   // Named `tag` to fit the send screen's lookup state, which shows it as typed.
   return { tag: name, address };
 }
+
+/**
+ * The avatar an ENS name has set, or null if it has none, the lookup fails,
+ * or the record isn't a plain https image URL. Never throws -- this is shown
+ * beside an already-resolved address, for the owner's glance, not a second
+ * check. Anyone can set any avatar on any name they own; it is no more
+ * trustworthy than the name itself.
+ *
+ * Reads the raw `avatar` text record with `getEnsText` rather than viem's own
+ * `getEnsAvatar`, which also resolves NFT-URI avatars by fetching metadata
+ * from whatever host that NFT's contract points to -- a host this wallet's
+ * web build cannot put on its fixed Content-Security-Policy connect-src
+ * allowlist in advance, since it is different for every NFT. A plain https
+ * image URL carries no such surprise.
+ */
+export async function resolveEnsAvatar(name: string): Promise<string | null> {
+  try {
+    const value = await client.getEnsText({
+      name: normalize(String(name ?? "").trim().toLowerCase()),
+      key: "avatar",
+    });
+    return value && value.startsWith("https://") ? value : null;
+  } catch {
+    return null;
+  }
+}
