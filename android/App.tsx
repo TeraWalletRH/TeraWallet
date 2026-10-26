@@ -39,6 +39,7 @@ import { Asset, chain, destinations, sources, Tx, USDG } from "./src/config";
 import * as tags from "./src/tags";
 import * as ens from "./src/ens";
 import * as contactExport from "./src/contact-export";
+import * as nftPricesCore from "./src/nft-prices";
 import * as biz from "./src/business";
 import * as payLinks from "./src/paylinks";
 import * as claims from "./src/claims";
@@ -1784,26 +1785,89 @@ function Wallet() {
     [contactError, setContactError] = useState(""),
     [contactQuery, setContactQuery] = useState(""),
     [alertPriceInput, setAlertPriceInput] = useState(""),
-    [alertCondition, setAlertCondition] = useState<"above" | "below">("above");
+    [alertCondition, setAlertCondition] = useState<"above" | "below">("above"),
+    // NFT floor-price alerts: which collection the sheet is open for, its
+    // current floor at the moment it was opened, and the form's own fields --
+    // separate from the token alert fields above, which belong to a
+    // different screen entirely.
+    [floorAlertTarget, setFloorAlertTarget] = useState<
+      { contract: string; name: string; currentFloorUsd: number | null } | null
+    >(null),
+    [floorAlertPriceInput, setFloorAlertPriceInput] = useState(""),
+    [floorAlertCondition, setFloorAlertCondition] = useState<"above" | "below">("below"),
+    // NFT floor prices read for existing alerts (keyed by alert symbol, e.g.
+    // "nft:0x..."), and each contract's collection name for notices -- kept
+    // independent of Gallery.tsx's own copy, since an alert must keep
+    // checking after the owner leaves that screen.
+    [nftAlertPrices, setNftAlertPrices] = useState<Record<string, number>>({}),
+    [nftFloorNames, setNftFloorNames] = useState<Record<string, string>>({});
 
+  // Floor prices for whatever NFT alerts exist, independent of whether the
+  // gallery is even open -- an alert has to keep working after the owner
+  // leaves the screen they set it from, the same as a token alert does.
+  useEffect(() => {
+    const contracts = [
+      ...new Set(
+        (data.priceAlerts || [])
+          .map((alert: PriceAlert) => nftPricesCore.floorAlertContract(alert.symbol))
+          .filter((contract): contract is string => !!contract),
+      ),
+    ];
+    if (!contracts.length) return;
+    let alive = true;
+    const read = () =>
+      void Promise.all(
+        contracts.map(async (contract) => {
+          const match = await nftPricesCore.collectionFor(contract);
+          if (!match) return [contract, null, ""] as const;
+          const usd = await nftPricesCore.floorPriceUsd(match.id);
+          return [contract, usd, match.name] as const;
+        }),
+      ).then((triples) => {
+        if (!alive) return;
+        setNftAlertPrices((current) => {
+          const next = { ...current };
+          for (const [contract, usd] of triples)
+            if (usd != null) next[nftPricesCore.floorAlertSymbol(contract)] = usd;
+          return next;
+        });
+        setNftFloorNames((current) => {
+          const next = { ...current };
+          for (const [contract, , name] of triples) if (name) next[contract] = name;
+          return next;
+        });
+      });
+    read();
+    const interval = setInterval(read, 5 * 60 * 1000);
+    return () => {
+      alive = false;
+      clearInterval(interval);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.priceAlerts]);
   useEffect(() => {
     const alertList = data.priceAlerts;
-    if (!Array.isArray(alertList) || !alertList.length || !prices || !Object.keys(prices).length) return;
-    const { updatedAlerts, triggeredAlerts } = evaluatePriceAlerts(alertList, prices);
+    const combined = { ...prices, ...nftAlertPrices };
+    if (!Array.isArray(alertList) || !alertList.length || !Object.keys(combined).length) return;
+    const { updatedAlerts, triggeredAlerts } = evaluatePriceAlerts(alertList, combined);
     if (triggeredAlerts.length > 0) {
       triggeredAlerts.forEach((alert) => {
+        const contract = nftPricesCore.floorAlertContract(alert.symbol);
+        const label = contract ? nftFloorNames[contract] || t("that collection", "该合集") : alert.symbol;
         setNotice({
-          title: t(`Price Alert: ${alert.symbol}`, `价格预警：${alert.symbol}`),
+          title: contract
+            ? t(`Floor Alert: ${label}`, `地板价预警：${label}`)
+            : t(`Price Alert: ${alert.symbol}`, `价格预警：${alert.symbol}`),
           body: t(
-            `${alert.symbol} target price of $${alert.targetPrice.toLocaleString()} reached! (${alert.condition === "above" ? "≥" : "≤"} current price: ${prices[alert.symbol] ? "$" + prices[alert.symbol].toLocaleString() : ""})`,
-            `${alert.symbol} 目标价格 $${alert.targetPrice.toLocaleString()} 已到达！（${alert.condition === "above" ? "≥" : "≤"} 当前价格：${prices[alert.symbol] ? "$" + prices[alert.symbol].toLocaleString() : ""}）`,
+            `${label} target price of $${alert.targetPrice.toLocaleString()} reached! (${alert.condition === "above" ? "≥" : "≤"} current price: ${combined[alert.symbol] ? "$" + combined[alert.symbol].toLocaleString() : ""})`,
+            `${label} 目标价格 $${alert.targetPrice.toLocaleString()} 已到达！（${alert.condition === "above" ? "≥" : "≤"} 当前价格：${combined[alert.symbol] ? "$" + combined[alert.symbol].toLocaleString() : ""}）`,
           ),
           tone: "success",
         });
       });
       void run(() => store({ ...dataRef.current, priceAlerts: updatedAlerts }));
     }
-  }, [prices, data.priceAlerts]);
+  }, [prices, nftAlertPrices, data.priceAlerts]);
   // Limit orders are checked against every price the wallet reads. An order that
   // reaches its price becomes ready and is announced once; it fills only when
   // the owner signs.
@@ -7279,7 +7343,27 @@ function Wallet() {
       );
     if (page === "nfts" && owner)
       return (
-        <Gallery key={owner} owner={owner} t={t} onBack={() => setPage("home")} onSend={sendNft} />
+        <Gallery
+          key={owner}
+          owner={owner}
+          t={t}
+          onBack={() => setPage("home")}
+          onSend={sendNft}
+          floorAlerts={(data.priceAlerts || []).filter((alert: PriceAlert) =>
+            nftPricesCore.floorAlertContract(alert.symbol),
+          )}
+          onSetFloorAlert={(contract, name, currentFloorUsd) => {
+            setFloorAlertPriceInput(currentFloorUsd != null ? String(currentFloorUsd) : "");
+            setFloorAlertCondition("below");
+            setFloorAlertTarget({ contract, name, currentFloorUsd });
+          }}
+          onRemoveFloorAlert={(id) => {
+            const updated = (dataRef.current.priceAlerts || []).filter(
+              (alert: PriceAlert) => alert.id !== id,
+            );
+            void run(() => store({ ...dataRef.current, priceAlerts: updated }));
+          }}
+        />
       );
     if (page === "home") {
       // Tera Go offers to name the wallet just paid, for a day (core/tera-go.js).
@@ -13859,15 +13943,28 @@ function Wallet() {
                     }}
                   >
                     <View style={{ flexDirection: "row", alignItems: "center", gap: 10 }}>
-                      <TokenIcon symbol={alert.symbol} size={28} />
-                      <View style={{ gap: 2 }}>
-                        <Text style={[s.text, { fontWeight: "700" }]}>
-                          {alert.symbol} {alert.condition === "above" ? "≥" : "≤"} ${Number(alert.targetPrice).toLocaleString()}
-                        </Text>
-                        <Text style={s.small}>
-                          {new Date(alert.createdAt).toLocaleDateString()}
-                        </Text>
-                      </View>
+                      {(() => {
+                        const contract = nftPricesCore.floorAlertContract(alert.symbol);
+                        const label = contract
+                          ? nftFloorNames[contract] ||
+                            `${contract.slice(0, 6)}…${contract.slice(-4)}`
+                          : alert.symbol;
+                        return (
+                          <>
+                            {!contract && <TokenIcon symbol={alert.symbol} size={28} />}
+                            <View style={{ gap: 2 }}>
+                              <Text style={[s.text, { fontWeight: "700" }]}>
+                                {label} {alert.condition === "above" ? "≥" : "≤"} $
+                                {Number(alert.targetPrice).toLocaleString()}
+                              </Text>
+                              <Text style={s.small}>
+                                {new Date(alert.createdAt).toLocaleDateString()}
+                                {contract ? ` · ${t("floor price", "地板价")}` : ""}
+                              </Text>
+                            </View>
+                          </>
+                        );
+                      })()}
                     </View>
                     <Pressable
                       accessibilityRole="button"
@@ -16394,6 +16491,12 @@ function Wallet() {
             onPress: () => openFlow("bridge"),
           },
           {
+            key: "nfts",
+            icon: "images",
+            label: t("NFTs", "NFT"),
+            onPress: () => setPage("nfts"),
+          },
+          {
             key: "private",
             icon: "shield-lock-outline",
             label: t("Private", "私密发送"),
@@ -16848,6 +16951,129 @@ function Wallet() {
                 {t("Import", "导入")}
               </Button>
               <Button onPress={() => setContactImportOpen(false)}>{t("Cancel", "取消")}</Button>
+            </Pressable>
+          </Pressable>
+        </KeyboardAvoidingView>
+      </Modal>
+      <Modal
+        visible={floorAlertTarget !== null}
+        transparent
+        animationType={modalAnimation("slide", reduceMotion)}
+        onRequestClose={() => setFloorAlertTarget(null)}
+      >
+        <KeyboardAvoidingView
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          style={{ flex: 1, justifyContent: "flex-end" }}
+        >
+          <Pressable
+            onPress={() => setFloorAlertTarget(null)}
+            style={{ flex: 1, backgroundColor: colors.scrim, justifyContent: "flex-end" }}
+          >
+            <Pressable
+              onPress={() => {}}
+              style={{
+                backgroundColor: colors.sheet,
+                borderTopLeftRadius: 30,
+                borderTopRightRadius: 30,
+                ...sheetFrame,
+                padding: 24,
+                gap: 14,
+              }}
+            >
+              <Text style={s.title}>{t("Set a floor-price alert", "设置地板价预警")}</Text>
+              <Text style={s.small}>
+                {floorAlertTarget?.name}
+                {floorAlertTarget?.currentFloorUsd != null
+                  ? t(
+                      ` — floor is $${floorAlertTarget.currentFloorUsd.toLocaleString()} now`,
+                      ` — 当前地板价 $${floorAlertTarget.currentFloorUsd.toLocaleString()}`,
+                    )
+                  : ""}
+              </Text>
+              <Field
+                label={t("Target price (USD)", "目标价格（美元）")}
+                value={floorAlertPriceInput}
+                onChangeText={setFloorAlertPriceInput}
+                keyboardType="decimal-pad"
+              />
+              <View style={{ flexDirection: "row", gap: 8 }}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setFloorAlertCondition("below")}
+                  style={{
+                    paddingVertical: 8,
+                    paddingHorizontal: 14,
+                    borderRadius: 10,
+                    backgroundColor: floorAlertCondition === "below" ? colors.green : colors.wash,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontWeight: "700",
+                      color: floorAlertCondition === "below" ? colors.paper : colors.muted,
+                    }}
+                  >
+                    {t("≤ Falls to or below", "≤ 跌至或低于")}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setFloorAlertCondition("above")}
+                  style={{
+                    paddingVertical: 8,
+                    paddingHorizontal: 14,
+                    borderRadius: 10,
+                    backgroundColor: floorAlertCondition === "above" ? colors.green : colors.wash,
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      fontWeight: "700",
+                      color: floorAlertCondition === "above" ? colors.paper : colors.muted,
+                    }}
+                  >
+                    {t("≥ Rises to or above", "≥ 涨至或高于")}
+                  </Text>
+                </Pressable>
+              </View>
+              <Button
+                primary
+                onPress={() => {
+                  if (!floorAlertTarget) return;
+                  const targetNum = Number(floorAlertPriceInput || floorAlertTarget.currentFloorUsd || 0);
+                  if (!Number.isFinite(targetNum) || targetNum <= 0) {
+                    setNotice({
+                      title: t("Invalid price", "无效价格"),
+                      body: t("Please enter a valid target price.", "请输入有效的目标价格。"),
+                      tone: "error",
+                    });
+                    return;
+                  }
+                  const newAlert: PriceAlert = {
+                    id: "nfa_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+                    symbol: nftPricesCore.floorAlertSymbol(floorAlertTarget.contract),
+                    targetPrice: targetNum,
+                    condition: floorAlertCondition,
+                    createdAt: new Date().toISOString(),
+                  };
+                  const updated = [...(dataRef.current.priceAlerts || []), newAlert];
+                  void run(() => store({ ...dataRef.current, priceAlerts: updated }));
+                  setFloorAlertTarget(null);
+                  setNotice({
+                    title: t("Floor Alert Set", "地板价预警已设置"),
+                    body: t(
+                      `Alert set for ${floorAlertTarget.name} when the floor is ${floorAlertCondition === "above" ? "≥" : "≤"} $${targetNum.toLocaleString()}.`,
+                      `已设置 ${floorAlertTarget.name} 当地板价 ${floorAlertCondition === "above" ? "≥" : "≤"} $${targetNum.toLocaleString()} 时预警。`,
+                    ),
+                    tone: "success",
+                  });
+                }}
+              >
+                {t("Set alert", "设置预警")}
+              </Button>
+              <Button onPress={() => setFloorAlertTarget(null)}>{t("Cancel", "取消")}</Button>
             </Pressable>
           </Pressable>
         </KeyboardAvoidingView>

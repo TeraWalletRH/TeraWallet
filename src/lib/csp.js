@@ -38,6 +38,8 @@ export const APP_CONNECT = [
   "https://eth.llamarpc.com",
   "https://ethereum-rpc.publicnode.com",
   "https://cloudflare-eth.com",
+  // NFT collection floor prices (src/nft-prices.ts), free and keyless.
+  "https://api.coingecko.com",
 ];
 
 // WalletConnect's verify and embedded-wallet frames, and Coinbase's popup host.

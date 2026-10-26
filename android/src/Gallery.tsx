@@ -2,7 +2,9 @@ import React, { useEffect, useState } from "react";
 import { Image, Pressable, View } from "react-native";
 import { nft } from "./core";
 import { findTokens, type Token } from "./nfts";
+import { collectionFor, floorPriceUsd } from "./nft-prices";
 import { Button, colors, Header, styles as s, TeraSpinner, Text, TextInput } from "./ui";
+import type { PriceAlert } from "./alerts";
 
 export type Item = Token & { metadata: ReturnType<typeof nft.parseMetadata> };
 const keyOf = (token: Token) => token.contract + ":" + token.tokenId;
@@ -11,11 +13,18 @@ export function Gallery({
   t,
   onBack,
   onSend,
+  floorAlerts,
+  onSetFloorAlert,
+  onRemoveFloorAlert,
 }: {
   owner: string;
   t: (en: string, zh: string) => string;
   onBack: () => void;
   onSend: (token: Item, recipient: string) => void;
+  /** This owner's existing floor-price alerts, keyed by `nft:<contract>`. */
+  floorAlerts: PriceAlert[];
+  onSetFloorAlert: (contract: string, collectionName: string, currentFloorUsd: number | null) => void;
+  onRemoveFloorAlert: (id: string) => void;
 }) {
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState(true);
@@ -24,6 +33,12 @@ export function Gallery({
   // every card let an address typed under one NFT follow the owner to the next.
   const [open, setOpen] = useState("");
   const [recipient, setRecipient] = useState("");
+  // Floor prices for held collections that CoinGecko tracks on Robinhood
+  // Chain, by contract address. A collection this session hasn't checked yet
+  // has no entry here at all -- that is "not checked", not "no floor".
+  const [floors, setFloors] = useState<Record<string, { id: string; name: string; usd: number | null }>>(
+    {},
+  );
   useEffect(() => {
     let alive = true;
     void findTokens(owner)
@@ -45,7 +60,41 @@ export function Gallery({
       alive = false;
     };
   }, [owner]);
+  // Floor prices for the held collections, fetched once per unique contract
+  // per mount -- not per token, so a collection with ten held pieces costs
+  // one lookup, not ten.
+  useEffect(() => {
+    const contracts = [...new Set(items.map((item) => item.contract.toLowerCase()))].filter(
+      (contract) => !(contract in floors),
+    );
+    if (!contracts.length) return;
+    let alive = true;
+    void Promise.all(
+      contracts.map(async (contract) => {
+        const match = await collectionFor(contract);
+        if (!match) return [contract, null] as const;
+        const usd = await floorPriceUsd(match.id);
+        return [contract, { id: match.id, name: match.name, usd }] as const;
+      }),
+    ).then((pairs) => {
+      if (!alive) return;
+      setFloors((current) => {
+        const next = { ...current };
+        for (const [contract, entry] of pairs) if (entry) next[contract] = entry;
+        return next;
+      });
+    });
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [items]);
   const selected = items.find((token) => keyOf(token) === open);
+  const selectedContract = selected?.contract.toLowerCase() ?? "";
+  const selectedFloor = floors[selectedContract];
+  const selectedAlerts = floorAlerts.filter(
+    (alert) => alert.symbol === `nft:${selectedContract}`,
+  );
   return (
     <>
       <Header title={t("NFTs", "NFT 收藏")} onBack={onBack} backLabel={t("Back", "返回")} />
@@ -130,6 +179,12 @@ export function Gallery({
                 <Text style={s.small} numberOfLines={1}>
                   {token.collection || t("Unnamed collection", "未命名合集")}
                 </Text>
+                {floors[token.contract.toLowerCase()]?.usd != null ? (
+                  <Text style={[s.small, { color: colors.green }]} numberOfLines={1}>
+                    {t("Floor", "地板价")} $
+                    {floors[token.contract.toLowerCase()]!.usd!.toLocaleString()}
+                  </Text>
+                ) : null}
               </View>
             </Pressable>
           );
@@ -144,6 +199,52 @@ export function Gallery({
             <Text numberOfLines={3} style={s.small}>
               {selected.metadata.description}
             </Text>
+          ) : null}
+          {selectedFloor ? (
+            <View style={{ gap: 8 }}>
+              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                <Text style={s.small}>
+                  {t("Collection floor", "合集地板价")}{" "}
+                  {selectedFloor.usd != null
+                    ? `$${selectedFloor.usd.toLocaleString()}`
+                    : t("unavailable", "暂不可用")}
+                </Text>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => onSetFloorAlert(selectedContract, selectedFloor.name, selectedFloor.usd)}
+                >
+                  <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                    {t("Set floor alert", "设置地板价预警")}
+                  </Text>
+                </Pressable>
+              </View>
+              {selectedAlerts.map((alert) => (
+                <View
+                  key={alert.id}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    paddingVertical: 6,
+                    paddingHorizontal: 10,
+                    borderRadius: 8,
+                    backgroundColor: colors.wash,
+                  }}
+                >
+                  <Text style={s.small}>
+                    {alert.condition === "above" ? "≥" : "≤"} $
+                    {Number(alert.targetPrice).toLocaleString()}
+                  </Text>
+                  <Pressable
+                    accessibilityRole="button"
+                    hitSlop={8}
+                    onPress={() => onRemoveFloorAlert(alert.id)}
+                  >
+                    <Text style={[s.small, { color: colors.danger }]}>{t("Remove", "移除")}</Text>
+                  </Pressable>
+                </View>
+              ))}
+            </View>
           ) : null}
           <TextInput
             accessibilityLabel={t("Recipient address", "收款地址")}
