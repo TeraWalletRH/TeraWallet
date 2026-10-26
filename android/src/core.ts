@@ -22,6 +22,8 @@ export * as contactExport from "../../public/tera/core/contact-export.js";
 export * as avatars from "../../public/tera/core/avatars.js";
 // EVM networks the owner added by hand, kept for reference only.
 export * as networks from "../../public/tera/core/networks.js";
+// A short, curated list of notable dapps confirmed live on Robinhood Chain. Discovery only.
+export * as dappDirectory from "../../public/tera/core/dapp-directory.js";
 // The swap slippage limit the owner chose, and the minimum output it guarantees.
 export * as slippage from "../../public/tera/core/slippage.js";
 // Recurring payments: reminders with the send already written out, never paid

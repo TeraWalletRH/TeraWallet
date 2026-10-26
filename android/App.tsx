@@ -83,6 +83,7 @@ import {
   contacts as contactsCore,
   avatars as avatarsCore,
   networks as networksCore,
+  dappDirectory as dappDirectoryCore,
   contactExport as contactExportCore,
   limits as limitsCore,
   spend as spendCore,
@@ -827,6 +828,7 @@ function Wallet() {
       explorerUrl: "",
     }),
     [networkError, setNetworkError] = useState(""),
+    [discoverCategory, setDiscoverCategory] = useState(""),
     // The limit order the swap screen was opened for, the order form, and its error.
     [limitRun, setLimitRun] = useState<
       null | { id: string; side: "buy" | "sell"; asset: string; kind: "limit" | "stop" | "take"; limit: string }
@@ -11585,6 +11587,76 @@ function Wallet() {
         </>
       );
     }
+    if (page === "discover") {
+      const shown = dappDirectoryCore.byCategory(discoverCategory);
+      return (
+        <>
+          <Header title={t("Discover", "发现")} onBack={() => setPage("home")} backLabel={t("Home", "首页")} />
+          <Text style={[s.small, { textAlign: "center" }]}>
+            {t(
+              "A few notable dapps confirmed on Robinhood Chain. Tera has no relationship with any of these -- opening one leaves the wallet, the same as a bookmark.",
+              "部分已确认部署在 Robinhood Chain 上的知名 dapp。Tera 与它们没有任何关联 -- 打开即离开钱包，如同书签一样。",
+            )}
+          </Text>
+          <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 8 }}>
+            <Pressable
+              accessibilityRole="button"
+              onPress={() => setDiscoverCategory("")}
+              style={{
+                paddingVertical: 7,
+                paddingHorizontal: 14,
+                borderRadius: 999,
+                backgroundColor: discoverCategory === "" ? colors.green : colors.wash,
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 13,
+                  fontWeight: "700",
+                  color: discoverCategory === "" ? colors.paper : colors.muted,
+                }}
+              >
+                {t("All", "全部")}
+              </Text>
+            </Pressable>
+            {dappDirectoryCore.CATEGORIES.map((category: string) => (
+              <Pressable
+                key={category}
+                accessibilityRole="button"
+                onPress={() => setDiscoverCategory(category)}
+                style={{
+                  paddingVertical: 7,
+                  paddingHorizontal: 14,
+                  borderRadius: 999,
+                  backgroundColor: discoverCategory === category ? colors.green : colors.wash,
+                }}
+              >
+                <Text
+                  style={{
+                    fontSize: 13,
+                    fontWeight: "700",
+                    color: discoverCategory === category ? colors.paper : colors.muted,
+                  }}
+                >
+                  {category}
+                </Text>
+              </Pressable>
+            ))}
+          </View>
+          <Group>
+            {shown.map((entry: { id: string; name: string; category: string; url: string; description: string }) => (
+              <ListRow
+                key={entry.id}
+                icon="external-link"
+                label={entry.name}
+                detail={`${entry.category} · ${entry.description}`}
+                onPress={() => void Linking.openURL(entry.url)}
+              />
+            ))}
+          </Group>
+        </>
+      );
+    }
     if (page === "networks") {
       return (
         <>
@@ -16495,6 +16567,12 @@ function Wallet() {
             icon: "images",
             label: t("NFTs", "NFT"),
             onPress: () => setPage("nfts"),
+          },
+          {
+            key: "discover",
+            icon: "earth",
+            label: t("Discover", "发现"),
+            onPress: () => setPage("discover"),
           },
           {
             key: "private",
