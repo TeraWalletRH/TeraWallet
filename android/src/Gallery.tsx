@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from "react";
 import { Image, Pressable, View } from "react-native";
-import { nft } from "./core";
+import { discretion, nft } from "./core";
 import { findTokens, type Token } from "./nfts";
 import { collectionFor, floorPriceUsd } from "./nft-prices";
 import { Button, colors, Header, styles as s, TeraSpinner, Text, TextInput } from "./ui";
@@ -16,6 +16,8 @@ export function Gallery({
   floorAlerts,
   onSetFloorAlert,
   onRemoveFloorAlert,
+  privacyOn,
+  noMarketData,
 }: {
   owner: string;
   t: (en: string, zh: string) => string;
@@ -25,7 +27,12 @@ export function Gallery({
   floorAlerts: PriceAlert[];
   onSetFloorAlert: (contract: string, collectionName: string, currentFloorUsd: number | null) => void;
   onRemoveFloorAlert: (id: string) => void;
+  /** Settings → Privacy & data → Privacy mode. Covers a floor price next to a held NFT, same as every other balance figure outside a review screen. */
+  privacyOn: boolean;
+  /** Settings → Privacy & data → No market data. No floor-price lookups at all while it's on, same as every other price request. */
+  noMarketData: boolean;
 }) {
+  const shown = (text: string) => discretion.conceal(text, { on: privacyOn });
   const [items, setItems] = useState<Item[]>([]);
   const [busy, setBusy] = useState(true);
   const [error, setError] = useState("");
@@ -64,6 +71,9 @@ export function Gallery({
   // per mount -- not per token, so a collection with ten held pieces costs
   // one lookup, not ten.
   useEffect(() => {
+    // Settings → Privacy & data → No market data: no price requests at all,
+    // a floor price being exactly that.
+    if (noMarketData) return;
     const contracts = [...new Set(items.map((item) => item.contract.toLowerCase()))].filter(
       (contract) => !(contract in floors),
     );
@@ -88,7 +98,7 @@ export function Gallery({
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items]);
+  }, [items, noMarketData]);
   const selected = items.find((token) => keyOf(token) === open);
   const selectedContract = selected?.contract.toLowerCase() ?? "";
   const selectedFloor = floors[selectedContract];
@@ -181,8 +191,8 @@ export function Gallery({
                 </Text>
                 {floors[token.contract.toLowerCase()]?.usd != null ? (
                   <Text style={[s.small, { color: colors.green }]} numberOfLines={1}>
-                    {t("Floor", "地板价")} $
-                    {floors[token.contract.toLowerCase()]!.usd!.toLocaleString()}
+                    {t("Floor", "地板价")}{" "}
+                    {shown(`$${floors[token.contract.toLowerCase()]!.usd!.toLocaleString()}`)}
                   </Text>
                 ) : null}
               </View>
@@ -206,7 +216,7 @@ export function Gallery({
                 <Text style={s.small}>
                   {t("Collection floor", "合集地板价")}{" "}
                   {selectedFloor.usd != null
-                    ? `$${selectedFloor.usd.toLocaleString()}`
+                    ? shown(`$${selectedFloor.usd.toLocaleString()}`)
                     : t("unavailable", "暂不可用")}
                 </Text>
                 <Pressable
@@ -232,8 +242,7 @@ export function Gallery({
                   }}
                 >
                   <Text style={s.small}>
-                    {alert.condition === "above" ? "≥" : "≤"} $
-                    {Number(alert.targetPrice).toLocaleString()}
+                    {alert.condition === "above" ? "≥" : "≤"} ${Number(alert.targetPrice).toLocaleString()}
                   </Text>
                   <Pressable
                     accessibilityRole="button"

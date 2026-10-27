@@ -1836,6 +1836,9 @@ function Wallet() {
   // gallery is even open -- an alert has to keep working after the owner
   // leaves the screen they set it from, the same as a token alert does.
   useEffect(() => {
+    // "No market data" means no price requests, full stop -- a floor-price
+    // alert pauses the same way a token price alert already does.
+    if (data.noMarketData) return;
     const contracts = [
       ...new Set(
         (data.priceAlerts || [])
@@ -1874,7 +1877,7 @@ function Wallet() {
       clearInterval(interval);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data.priceAlerts]);
+  }, [data.priceAlerts, data.noMarketData]);
   useEffect(() => {
     const alertList = data.priceAlerts;
     const combined = { ...prices, ...nftAlertPrices };
@@ -7537,6 +7540,8 @@ function Wallet() {
           t={t}
           onBack={() => setPage("home")}
           onSend={sendNft}
+          privacyOn={privacyOn}
+          noMarketData={!!data.noMarketData}
           floorAlerts={(data.priceAlerts || []).filter((alert: PriceAlert) =>
             nftPricesCore.floorAlertContract(alert.symbol),
           )}
