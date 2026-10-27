@@ -49,6 +49,7 @@ import { claimAmount } from "../public/tera/core/claim-links.js";
 import * as notify from "./src/notify";
 import * as push from "./src/push";
 import * as handoff from "./src/handoff";
+import * as ledgerCore from "./src/ledger";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
 import {
@@ -1073,7 +1074,15 @@ function Wallet() {
   const [setupHistory, setSetupHistory] = useState<(typeof setup)[]>([]);
   // What the owner is bringing in on the import step. The secret itself goes in
   // `mnemonic` either way; the vault tells a key from a phrase by its shape.
-  const [importKind, setImportKind] = useState<"phrase" | "key">("phrase");
+  // "ledger" has no secret to type at all -- see the ledgerAccounts state below.
+  const [importKind, setImportKind] = useState<"phrase" | "key" | "ledger">("phrase");
+  // The Ledger setup sub-flow: which numbering scheme, the accounts read from
+  // the device so far (empty before "Connect" is pressed), and any failure
+  // from the device itself (not connected, wrong app, rejected).
+  const [ledgerScheme, setLedgerScheme] = useState<"live" | "standard">("live");
+  const [ledgerAccountsFound, setLedgerAccountsFound] = useState<{ path: string; address: string }[]>([]);
+  const [ledgerConnecting, setLedgerConnecting] = useState(false);
+  const [ledgerStepError, setLedgerStepError] = useState("");
   function goSetup(next: typeof setup) {
     setSetupHistory((h) => [...h, setup]);
     setSetup(next);
@@ -1083,6 +1092,36 @@ function Wallet() {
       if (!h.length) return h;
       setSetup(h[h.length - 1]);
       return h.slice(0, -1);
+    });
+  }
+  async function connectLedger() {
+    setLedgerStepError("");
+    setLedgerConnecting(true);
+    try {
+      if (!(await ledgerCore.allowLedger())) throw new Error(ledgerCore.NO_LEDGER);
+      setLedgerAccountsFound(await ledgerCore.ledgerAccounts(ledgerScheme, 5));
+    } catch (e) {
+      setLedgerAccountsFound([]);
+      setLedgerStepError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLedgerConnecting(false);
+    }
+  }
+  function pickLedgerAccount(account: { path: string; address: string }) {
+    setLedgerStepError("");
+    void run(async (g) => {
+      // Read the address again, shown on the device's own screen, so the
+      // owner confirms there -- not just picks a row `ledgerAccounts`
+      // happened to list -- before it's saved as this wallet's signer.
+      const confirmed = await ledgerCore.ledgerAddress(account.path, true);
+      if (confirmed.toLowerCase() !== account.address.toLowerCase())
+        throw new Error(
+          "The Ledger gave a different address. Try again. / Ledger 返回了不同的地址，请重试。",
+        );
+      g();
+      const address = (await vault.createLedgerWallet(account.path, confirmed)) as Address;
+      g();
+      await opened(address, g);
     });
   }
   // There's no navigation stack here (plain state, not react-navigation), so
@@ -2536,6 +2575,7 @@ function Wallet() {
   }
   const inactivity = useRef(Date.now());
   const backgroundLock = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const ledgerAutoUnlockTried = useRef(false);
   function forget() {
     vault.lock();
     setOwner("");
@@ -2736,6 +2776,22 @@ function Wallet() {
     // vault. Never leave a transaction review visible for a locked session.
     if (owner && !vault.isUnlocked()) forget();
   }, [owner]);
+  useEffect(() => {
+    // A Ledger wallet has no PIN screen: there is nothing local to decrypt
+    // with one, so the owner never types anything to get past it. Once the
+    // device is needed -- to actually sign something -- that's the Ledger's
+    // own screen asking, not this one.
+    if (!exists || owner || handoffInvite || ledgerAutoUnlockTried.current) return;
+    ledgerAutoUnlockTried.current = true;
+    void vault.isLedgerWallet().then((ledgerWallet) => {
+      if (!ledgerWallet) return;
+      void run(async (g) => {
+        const address = await vault.unlockLedger();
+        g();
+        await opened(address as Address, g);
+      });
+    });
+  }, [exists, owner, handoffInvite]);
   useEffect(() => {
     if (error)
       setNotice({ title: t("Couldn’t complete that", "无法完成操作"), body: error, tone: "error" });
@@ -5478,6 +5534,18 @@ function Wallet() {
     });
   }
   function authenticate(title: string, action: () => Promise<void>) {
+    // A Ledger wallet has no password to re-enter here: the local vault
+    // holds nothing more sensitive than the device's address and path
+    // already, and anything the action itself needs the device for will
+    // ask the device, the same real gate every other Ledger-signed action
+    // already relies on.
+    if (vault.isLedger()) {
+      void run(async (g) => {
+        g();
+        await action();
+      });
+      return;
+    }
     setAuthPassword("");
     setAuthError("");
     setAuth({ title, action });
@@ -6168,7 +6236,9 @@ function Wallet() {
     }
     if (setup === "import") {
       const byKey = importKind === "key";
+      const byLedger = importKind === "ledger";
       const secretLabel = byKey ? t("Private key", "私钥") : t("Recovery phrase", "助记词");
+      const ledgerLabel = t("Ledger", "Ledger");
       return (
         <>
           {authHeader(
@@ -6176,33 +6246,91 @@ function Wallet() {
             title(
               "Welcome back.",
               "欢迎回来。",
-              byKey
+              byLedger
                 ? t(
-                    "Import the private key of one Ethereum account. A key opens that account only, so this wallet has no recovery phrase and cannot add more accounts.",
-                    "导入一个以太坊账户的私钥。私钥只能打开该账户，因此此钱包没有助记词，也无法添加更多账户。",
+                    "Plug in your Ledger, unlock it and open the Ethereum app. Every send and signature is approved there; the key never leaves it.",
+                    "插入并解锁你的 Ledger，打开以太坊应用。每笔发送和签名都在设备上确认，私钥永不离开设备。",
                   )
-                : t(
-                    "Import a standard English recovery phrase. Uses the first Ethereum account; BIP-39 passphrases are not supported in this version.",
-                    "导入标准英文助记词，使用第一个以太坊账户，此版本不支持 BIP-39 附加口令。",
-                  ),
+                : byKey
+                  ? t(
+                      "Import the private key of one Ethereum account. A key opens that account only, so this wallet has no recovery phrase and cannot add more accounts.",
+                      "导入一个以太坊账户的私钥。私钥只能打开该账户，因此此钱包没有助记词，也无法添加更多账户。",
+                    )
+                  : t(
+                      "Import a standard English recovery phrase. Uses the first Ethereum account; BIP-39 passphrases are not supported in this version.",
+                      "导入标准英文助记词，使用第一个以太坊账户，此版本不支持 BIP-39 附加口令。",
+                    ),
             ),
             false,
           )}
           <Choices
-            options={[t("Recovery phrase", "助记词"), t("Private key", "私钥")]}
-            value={secretLabel}
+            options={[
+              t("Recovery phrase", "助记词"),
+              t("Private key", "私钥"),
+              ...(ledgerCore.ledgerSupported() ? [ledgerLabel] : []),
+            ]}
+            value={byLedger ? ledgerLabel : secretLabel}
             select={(o) => {
-              const next = o === t("Private key", "私钥") ? "key" : "phrase";
+              const next = o === ledgerLabel ? "ledger" : o === t("Private key", "私钥") ? "key" : "phrase";
               if (next === importKind) return;
               // A phrase half-typed into the key field, or the reverse, is
               // never what the owner meant to import.
               setMnemonic("");
               setError("");
+              setLedgerStepError("");
+              setLedgerAccountsFound([]);
               setImportKind(next);
             }}
           />
-          <View style={s.field}>
-            <Text style={s.eyebrow}>{secretLabel}</Text>
+          {byLedger ? (
+            <>
+              <Choices
+                options={[t("Ledger Live", "Ledger Live"), t("Standard", "标准")]}
+                value={ledgerScheme === "live" ? t("Ledger Live", "Ledger Live") : t("Standard", "标准")}
+                select={(o) => {
+                  const next = o === t("Standard", "标准") ? "standard" : "live";
+                  if (next === ledgerScheme) return;
+                  setLedgerScheme(next);
+                  setLedgerAccountsFound([]);
+                }}
+              />
+              {ledgerStepError ? (
+                <Text style={[s.small, { color: colors.danger, textAlign: "center" }]}>
+                  {ledgerStepError}
+                </Text>
+              ) : null}
+              {ledgerAccountsFound.length ? (
+                <Group title={t("Pick an account", "选择一个账户")}>
+                  {ledgerAccountsFound.map((account, i) => (
+                    <ListRow
+                      key={account.path}
+                      icon="key-variant"
+                      label={t(`Account ${i + 1}`, `账户 ${i + 1}`)}
+                      detail={`${account.address.slice(0, 6)}…${account.address.slice(-4)} · ${account.path}`}
+                      disabled={busy}
+                      onPress={() => pickLedgerAccount(account)}
+                    />
+                  ))}
+                </Group>
+              ) : null}
+              <Button primary disabled={ledgerConnecting || busy} onPress={() => void connectLedger()}>
+                {ledgerConnecting
+                  ? t("Looking for your Ledger…", "正在查找你的 Ledger…")
+                  : ledgerAccountsFound.length
+                    ? t("Look again", "重新查找")
+                    : t("Connect Ledger", "连接 Ledger")}
+              </Button>
+              <Text style={[s.small, { textAlign: "center" }]}>
+                {t(
+                  "Swaps and contract calls may need Blind signing turned on in the Ethereum app's settings.",
+                  "交易所和合约调用可能需要在以太坊应用设置中开启盲签名。",
+                )}
+              </Text>
+            </>
+          ) : (
+            <>
+              <View style={s.field}>
+                <Text style={s.eyebrow}>{secretLabel}</Text>
             <View style={[s.input, { padding: 0, overflow: "hidden" }]}>
               <TextInput
                 accessibilityLabel={secretLabel}
@@ -6302,6 +6430,8 @@ function Wallet() {
           >
             {t("Continue", "继续")}
           </Button>
+            </>
+          )}
         </>
       );
     }
@@ -14730,16 +14860,27 @@ function Wallet() {
                 }
               />
             )}
-            <ListRow
-              icon="key-variant"
-              label={t("Show private key", "显示私钥")}
-              detail={t(
-                "For this wallet only · authentication required",
-                "仅适用于此钱包 · 需要身份验证",
-              )}
-              disabled={busy}
-              onPress={() => requestPrivateKey(vault.selectedIndex())}
-            />
+            {vault.isLedger() ? (
+              <ListRow
+                icon="key-variant"
+                label={t("Hardware wallet", "硬件钱包")}
+                detail={t(
+                  "Signs on a Ledger. The key never leaves the device, so there's nothing here to show.",
+                  "由 Ledger 签名，私钥永不离开设备，因此此处无内容可显示。",
+                )}
+              />
+            ) : (
+              <ListRow
+                icon="key-variant"
+                label={t("Show private key", "显示私钥")}
+                detail={t(
+                  "For this wallet only · authentication required",
+                  "仅适用于此钱包 · 需要身份验证",
+                )}
+                disabled={busy}
+                onPress={() => requestPrivateKey(vault.selectedIndex())}
+              />
+            )}
             {/* Web only for now; the phone apps get it in a later release. */}
             {Platform.OS === "web" && (
               <ListRow
@@ -16934,14 +17075,18 @@ function Wallet() {
                     });
                 }),
             },
-            {
-              key: "private-key",
-              icon: "key-variant",
-              label: t("Show private key", "显示私钥"),
-              onPress: () => {
-                afterWalletMenuCloses.current = () => requestPrivateKey(entry.index);
-              },
-            },
+            ...(vault.isLedger()
+              ? []
+              : [
+                  {
+                    key: "private-key",
+                    icon: "key-variant",
+                    label: t("Show private key", "显示私钥"),
+                    onPress: () => {
+                      afterWalletMenuCloses.current = () => requestPrivateKey(entry.index);
+                    },
+                  },
+                ]),
             ...(entry.index > 0
               ? [
                   {

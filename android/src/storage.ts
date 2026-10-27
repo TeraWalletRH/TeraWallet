@@ -17,12 +17,31 @@ import {
   type Box,
 } from "./crypto";
 import { API, type Asset } from "./config";
+import { ledgerAccount } from "./ledger";
 import { append as logAppend, entryFor as logEntry } from "../../public/tera/core/signature-log.js";
 import { matches as phraseMatches } from "../../public/tera/core/phrase-check.js";
 import { isPreset as isAvatarPreset } from "../../public/tera/core/avatars.js";
 const WALLET = "tera.wallet.v1";
 const BIOMETRIC = "tera.wallet.biometric.v1";
 export const biometricsSupported = store.biometricsSupported;
+/**
+ * A Ledger wallet's envelope seals this JSON instead of a phrase or private
+ * key, under a fixed, non-secret key rather than an owner-chosen one -- there
+ * is nothing local worth a password protecting, since the key never leaves
+ * the device. The fixed key only keeps this descriptor in the same sealed
+ * shape every other envelope uses; it is not a security boundary.
+ */
+const LEDGER_KEY = "tera.ledger.wallet.v1";
+function parseLedgerSecret(secret: string): { path: string; address: string } | null {
+  try {
+    const parsed = JSON.parse(secret);
+    return parsed && parsed.ledger === true && typeof parsed.path === "string" && typeof parsed.address === "string"
+      ? { path: parsed.path, address: parsed.address }
+      : null;
+  } catch {
+    return null;
+  }
+}
 /**
  * `accounts` and `selected` are optional, and their absence is what every wallet
  * created before this feature looks like. A missing list reads as `[0]` and a
@@ -47,6 +66,14 @@ type Envelope = {
   box: Box;
   kdf?: number;
   pin?: true;
+  /**
+   * The sealed secret is a Ledger descriptor, not a phrase or key -- see
+   * createLedgerWallet()/unlockLedger() in this file. A Ledger wallet has
+   * no PIN of its own (there is nothing locally worth protecting with one;
+   * the key never leaves the device, and every sign asks it to confirm) and
+   * never carries `accounts`/`selected` below -- one wallet, one device.
+   */
+  ledger?: true;
   accounts?: number[];
   selected?: number;
   /**
@@ -246,12 +273,17 @@ export const sessionVersion = () => epoch;
 export const isUnlocked = () => phrase !== null;
 /**
  * Whether this wallet came from a recovery phrase. A wallet imported from a
- * private key has no phrase to show and no second account to derive.
+ * private key, or signed by a Ledger, has no phrase to show and no second
+ * account to derive.
  */
-export const hasPhrase = () => phrase !== null && normalizePrivateKey(phrase) === null;
+export const hasPhrase = () =>
+  phrase !== null && normalizePrivateKey(phrase) === null && !parseLedgerSecret(phrase);
+/** Whether the active wallet signs on a Ledger rather than a local key. */
+export const isLedger = () => phrase !== null && !!parseLedgerSecret(phrase);
 export const currentAccount = () => {
   if (!phrase) throw new Error("Wallet locked. / 钱包已锁定。");
-  return logged(walletFromSecret(phrase, selected));
+  const ledger = parseLedgerSecret(phrase);
+  return ledger ? logged(ledgerAccount(ledger.path, ledger.address)) : logged(walletFromSecret(phrase, selected));
 };
 /**
  * The signature log (core/signature-log.js). Every message the wallet signs is
@@ -280,7 +312,13 @@ function noteSignature(input: Record<string, unknown>) {
     })
     .catch(() => {});
 }
-function logged<A extends ReturnType<typeof walletFromSecret>>(account: A): A {
+function logged<
+  A extends {
+    address: string;
+    signMessage: (...args: any[]) => Promise<any>;
+    signTypedData: (...args: any[]) => Promise<any>;
+  },
+>(account: A): A {
   return {
     ...account,
     signMessage: async (args: Parameters<A["signMessage"]>[0]) => {
@@ -306,6 +344,8 @@ export async function setSignatureLog(next: SignatureLog) {
 }
 export function exportPrivateKey(index: number) {
   if (!phrase) throw new Error("Wallet locked. / 钱包已锁定。");
+  if (parseLedgerSecret(phrase))
+    throw new Error("No private key -- this account signs on a Ledger. / 没有私钥，此账户由 Ledger 签名。");
   if (!indices.includes(index)) throw new Error("Unknown account. / 未知账户。");
   const imported = normalizePrivateKey(phrase);
   if (imported) return { address: walletFromSecret(imported).address, privateKey: imported };
@@ -680,6 +720,18 @@ export async function usesPin() {
     return false;
   }
 }
+/**
+ * Whether the saved wallet is a Ledger's, read from the envelope's plaintext
+ * marker -- no decryption, so this can be checked before any PIN is asked
+ * for (a Ledger wallet is never asked for one; see unlockLedger()).
+ */
+export async function isLedgerWallet() {
+  try {
+    return (await envelope()).ledger === true;
+  } catch {
+    return false;
+  }
+}
 const assertPin = (pin: string) => {
   if (!/^\d{6}$/.test(pin)) throw new Error("Use a six-digit PIN. / 请输入六码 PIN。");
 };
@@ -718,6 +770,66 @@ async function envelope(): Promise<Envelope> {
   const raw = await store.secureGet(WALLET);
   if (!raw) throw new Error("Wallet unavailable. / 钱包不可用。");
   return JSON.parse(raw);
+}
+/**
+ * Saves a Ledger as the wallet, at the path the owner picked. `address` is
+ * what the Ledger itself answered for that path, shown on its screen and
+ * confirmed there before this is ever called -- see `ledgerAccounts`/
+ * `ledgerAddress` (src/ledger.ts).
+ */
+export async function createLedgerWallet(path: string, address: string) {
+  if (await hasWallet()) throw new Error("A wallet already exists. / 钱包已存在。");
+  const version = epoch;
+  const secret = JSON.stringify({ ledger: true, path, address });
+  const salt = random(16);
+  const key = await passwordKey(LEDGER_KEY, salt);
+  try {
+    if (version !== epoch) throw new Error("Setup interrupted. / 设置已中断。");
+    const sealedEnvelope: Envelope = {
+      v: 1,
+      address,
+      salt: bytesToHex(salt),
+      box: seal(key, secret, random(12)),
+      kdf: PASSWORD_ITERATIONS,
+      ledger: true,
+    };
+    await store.secureSet(WALLET, JSON.stringify(sealedEnvelope));
+    if (version !== epoch) throw new Error("Unlock your saved wallet. / 请解锁已保存的钱包。");
+    phrase = secret;
+    indices = [0];
+    selected = 0;
+    names = {};
+    avatars = {};
+    return address;
+  } finally {
+    key.fill(0);
+  }
+}
+/**
+ * Opens a Ledger wallet. There is no password to check -- the key never
+ * left the device, so decrypting this envelope only recovers which path and
+ * address it points at. Every actual signature still asks the device.
+ */
+export async function unlockLedger() {
+  const version = epoch;
+  const saved = await envelope();
+  if (!saved.ledger) throw new Error("Not a Ledger wallet. / 不是 Ledger 钱包。");
+  const key = await passwordKey(LEDGER_KEY, hexToBytes(saved.salt), saved.kdf ?? PASSWORD_ITERATIONS);
+  try {
+    const recovered = open(key, saved.box);
+    const parsed = parseLedgerSecret(recovered);
+    if (!parsed || parsed.address.toLowerCase() !== saved.address.toLowerCase() || version !== epoch)
+      throw new Error("Ledger wallet entry is corrupted. Reconnect it to set up again. / Ledger 钱包记录已损坏，请重新连接设置。");
+    phrase = recovered;
+    indices = [0];
+    selected = 0;
+    names = {};
+    avatars = {};
+    deletedAccounts = [];
+    return currentAccount().address;
+  } finally {
+    key.fill(0);
+  }
 }
 async function upgradeLegacyEnvelope(
   password: string,
