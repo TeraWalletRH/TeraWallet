@@ -4,7 +4,26 @@ The Tera wallet as a browser extension: a wallet in the toolbar, and one
 that sites on Robinhood Chain can find (`window.ethereum` and EIP-6963) and
 ask to connect, with the owner deciding.
 
-**This version (0.5) is the wallet in the popup, with swaps and staking.**
+**This version (0.6) is the wallet in the popup, with swaps and staking,
+and a new setup.** Installing Tera opens a welcome tab (`welcome.html`,
+`src/welcome.ts`), and so does the popup until there's a wallet: Chrome
+closes the popup whenever it loses focus, which is every time someone
+switches to the note their phrase is in.
+
+- **Create a new wallet** opens the Tera web wallet, where the phrase is made
+  and backed up, then comes back to bring it in.
+- **I already have a wallet** offers a recovery phrase (12 or 24 numbered
+  boxes; paste the whole phrase into the first and it fills them, numbering
+  and all; misspelt words show in red) or a private key. Either shows the
+  wallet's address once it's valid, before anything is stored.
+- **Create a password**, with a strength meter (`core/onboarding.js`): 8
+  characters at least, as before; the meter only advises.
+- **You're all set**, with the steps to pin Tera to the toolbar, ticked off
+  as soon as Chrome reports it pinned.
+
+The secret stays in the welcome tab's memory between the step it's typed in
+and the password step, which hands it to the background worker to seal.
+
 Click the toolbar icon:
 
 - **Wallet**: the total value, and what the wallet holds (ETH, USDG, and any

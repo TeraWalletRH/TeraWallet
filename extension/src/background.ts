@@ -457,6 +457,12 @@ async function tryPassword(
 
 // ------------------------------------------------------- extension pages ----
 
+// A fresh install opens the welcome tab, as most wallets do; an update doesn't.
+chrome.runtime.onInstalled.addListener(async ({ reason }) => {
+  if (reason !== "install" || (await load()).vault) return;
+  await chrome.tabs.create({ url: chrome.runtime.getURL("welcome.html") }).catch(() => {});
+});
+
 chrome.runtime.onMessage.addListener((message, sender, reply) => {
   // Only the extension's own pages, never a content script inside a site.
   if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(chrome.runtime.getURL("")))

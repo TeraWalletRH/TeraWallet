@@ -1,8 +1,8 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-cf847d0588ba",
-  "builtAt": "2026-10-23T15:43:42.706Z",
+  "release": "r-38bb533ea5a2",
+  "builtAt": "2026-10-27T10:30:11.500Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
@@ -23,6 +23,11 @@
       "bytes": 6405
     },
     {
+      "path": "core/avatars.js",
+      "hash": "sha256-zJTAwWPpP/fF0RZIFdsk3to/CEz6eM4TNSlrsIBP4sU=",
+      "bytes": 1308
+    },
+    {
       "path": "core/balance-changes.js",
       "hash": "sha256-C5hsy+ORHrvmeI/iirsUcqYCBRCfjkW/esA+PpRJXpI=",
       "bytes": 8827
@@ -31,6 +36,11 @@
       "path": "core/batch-send.js",
       "hash": "sha256-7VW2CU9r1LuZGPzu2MVHKICDAjCYDxZ9kREz1ynU7og=",
       "bytes": 6022
+    },
+    {
+      "path": "core/business-apps.js",
+      "hash": "sha256-rmRFTYP6Z24gNDGvZ6MNmw9X+boGn/c+rm135HsXXyY=",
+      "bytes": 1516
     },
     {
       "path": "core/business-email.js",
@@ -48,6 +58,11 @@
       "bytes": 2266
     },
     {
+      "path": "core/contact-export.js",
+      "hash": "sha256-XKlp83ZYyNbCf6XkHbTSVgsbkdcsTeLwS6PTervo4M0=",
+      "bytes": 3800
+    },
+    {
       "path": "core/contacts.js",
       "hash": "sha256-2l3Xvi2ltsP+KS4xt9bKiUdqaAagiQt0Y+WWI+UHSaI=",
       "bytes": 9239
@@ -61,6 +76,11 @@
       "path": "core/dapp-connect.js",
       "hash": "sha256-yQ0ii9KkY3GeB6ZILtC6mjkUpSF3E2Fz6wXk4zZvih4=",
       "bytes": 6497
+    },
+    {
+      "path": "core/dapp-directory.js",
+      "hash": "sha256-WeQuQS3O0yzsIynAQSm2G8KflnCut+W5XRZ2N0mUXsc=",
+      "bytes": 2422
     },
     {
       "path": "core/dapp-send.js",
@@ -143,6 +163,11 @@
       "bytes": 6442
     },
     {
+      "path": "core/networks.js",
+      "hash": "sha256-3w3NemLCj/K/oxcx+3FsDjRHlTGC4eS2FxUImoH5R1Y=",
+      "bytes": 4804
+    },
+    {
       "path": "core/nft.js",
       "hash": "sha256-YDquuil9zAiulVDhrDEG3hlf6bTUYugqPMkFZMGSwlA=",
       "bytes": 23440
@@ -158,6 +183,11 @@
       "bytes": 6557
     },
     {
+      "path": "core/onboarding.js",
+      "hash": "sha256-x5w6x19yRi92NFT1Kr5smaq0U318FRohEwaTLeCyXRA=",
+      "bytes": 3897
+    },
+    {
       "path": "core/palette.js",
       "hash": "sha256-+3+GvCQnaL1e3epn8lC5lb3MiSOYNeS7ntNUjCfyG6k=",
       "bytes": 3004
@@ -171,6 +201,11 @@
       "path": "core/pay-links.js",
       "hash": "sha256-S8nAx9Z8ZBML/2/lJf05j/BPMnrqa6wbscpjrXA6cL0=",
       "bytes": 9099
+    },
+    {
+      "path": "core/phishing-list.js",
+      "hash": "sha256-Uo0JCuNHhqEBFxLdDmO+Hhkq//Q851QNir+l4z0/Qok=",
+      "bytes": 1048
     },
     {
       "path": "core/phrase-check.js",
@@ -458,5 +493,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-z4R9BYi6Hc9PnZ+WdUQSrh82UAlrMi1nRrDEoUAv6Ng="
+  "filesHash": "sha256-OLtTPqWiwXjUPOLFId2Iq1zxqljXC1ls90Bs9B36Rns="
 }

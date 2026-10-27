@@ -450,3 +450,25 @@ ol.steps {
   background: var(--green);
   color: var(--paper);
 }
+/* Before there's a wallet (ui.ts setupPrompt). */
+.setup {
+  align-items: center;
+  text-align: center;
+  gap: 12px;
+}
+.setup img {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  margin-top: 24px;
+}
+.setup button {
+  width: 100%;
+}
+.setup button + button {
+  margin-top: -2px;
+}
+button.big {
+  padding: 13px 18px;
+  font-size: 15px;
+}

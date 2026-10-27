@@ -1,5 +1,5 @@
 // What the popup and the approval window share: a tiny element builder, the
-// call to the background worker, and the form that brings a wallet in.
+// call to the background worker, and the way in before there's a wallet.
 // Plain DOM: the extension's pages are small, and Chrome's extension CSP
 // allows no inline script, which plain DOM never needs.
 
@@ -40,63 +40,41 @@ export const header = () =>
 
 export const errorBox = (text: string) => h("p", { class: "error", role: "alert" }, text);
 
-/** Bringing a wallet into this browser. Calls `done` once it's sealed and stored. */
-export function setupForm(done: () => void) {
-  const secret = h("textarea", {
-    autocomplete: "off",
-    spellcheck: "false",
-    placeholder: "12 or 24 words, or a private key",
-  }) as HTMLTextAreaElement;
-  const password = h("input", {
-    type: "password",
-    autocomplete: "new-password",
-  }) as HTMLInputElement;
-  const repeat = h("input", { type: "password", autocomplete: "new-password" }) as HTMLInputElement;
-  const status = h("div");
-  const submit = h(
-    "button",
-    { class: "primary", type: "submit" },
-    "Add wallet",
-  ) as HTMLButtonElement;
-
-  const form = h(
-    "form",
-    {
-      class: "card",
-      onsubmit: async (event: Event) => {
-        event.preventDefault();
-        status.replaceChildren();
-        if (password.value !== repeat.value)
-          return status.append(errorBox("The passwords don't match."));
-        submit.disabled = true;
-        submit.textContent = "Sealing…";
-        const answer = await ask({
-          type: "wallet:add",
-          secret: secret.value,
-          password: password.value,
-        });
-        submit.disabled = false;
-        submit.textContent = "Add wallet";
-        if (answer?.error) return status.append(errorBox(answer.error));
-        secret.value = "";
-        done();
-      },
-    },
-    h("label", {}, "Recovery phrase or private key", secret),
-    h("label", {}, "Password for this browser (8+ characters)", password),
-    h("label", {}, "Password again", repeat),
-    status,
-    submit,
-  );
+/**
+ * Before there's a wallet: the two ways in, each opening the welcome tab
+ * (welcome.ts), since the popup closes whenever it loses focus. `done` runs
+ * once a wallet has been added there.
+ */
+export function setupPrompt(done: () => void) {
+  const listener = (changes: Record<string, unknown>, area: string) => {
+    if (area !== "local" || !("vault" in changes)) return;
+    chrome.storage.onChanged.removeListener(listener);
+    done();
+  };
+  chrome.storage.onChanged.addListener(listener);
+  const open = (start: "create" | "import") => async () => {
+    await chrome.tabs.create({ url: chrome.runtime.getURL(`welcome.html?start=${start}`) });
+    if (document.body.classList.contains("popup")) window.close();
+  };
   return h(
     "div",
-    { class: "stack" },
-    h("h1", {}, "Bring your wallet to this browser"),
+    { class: "stack setup" },
+    h("img", { src: "icons/icon-128.png", alt: "" }),
+    h("h1", {}, "Welcome to Tera"),
     h(
       "p",
       { class: "muted" },
-      "Use the same recovery phrase as your Tera app. It's sealed with your password on this computer and never sent anywhere.",
+      "Set up a wallet to hold, send and swap on Robinhood Chain and connect to sites.",
     ),
-    form,
+    h(
+      "button",
+      { class: "primary big", type: "button", onclick: open("create") },
+      "Create a new wallet",
+    ),
+    h(
+      "button",
+      { class: "big", type: "button", onclick: open("import") },
+      "I already have a wallet",
+    ),
   );
 }

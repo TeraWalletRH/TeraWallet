@@ -38,6 +38,7 @@ const entries: [string, "iife" | "esm"][] = [
   ["background", "esm"],
   ["popup", "esm"],
   ["approve", "esm"],
+  ["welcome", "esm"],
 ];
 
 for (const [name, format] of entries) {
@@ -70,7 +71,15 @@ for (const [name, format] of entries) {
   }
 }
 
-for (const file of ["manifest.json", "popup.html", "approve.html", "popup.css", "icons"])
+for (const file of [
+  "manifest.json",
+  "popup.html",
+  "approve.html",
+  "welcome.html",
+  "popup.css",
+  "welcome.css",
+  "icons",
+])
   await cp(join(src, file), join(out, file), { recursive: true });
 
 const manifest = JSON.parse(await readFile(join(src, "manifest.json"), "utf8"));

@@ -3,7 +3,7 @@
 // sees who is asking and exactly what it does, in words, and approves with
 // their password.
 
-import { ask, errorBox, h, header, setupForm, short } from "./ui";
+import { ask, errorBox, h, header, setupPrompt, short } from "./ui";
 import { originLabel } from "./shared";
 import { knownName, depositWarning, LABEL_NOTE } from "../../public/tera/core/address-labels.js";
 
@@ -71,7 +71,7 @@ async function render(notice?: string) {
     return;
   }
   if (!approval.address) {
-    root.replaceChildren(header(), setupForm(render));
+    root.replaceChildren(header(), setupPrompt(render));
     return;
   }
   if (approval.kind === "send" && approval.request)

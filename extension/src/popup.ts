@@ -30,7 +30,7 @@ import {
 import { FIXED_TERMS, fixedReward } from "../../public/tera/core/staking.js";
 import { swapPair, tradable } from "../../public/tera/core/wallet-swap.js";
 import { originLabel } from "./shared";
-import { ask, errorBox, h, header, setupForm, short } from "./ui";
+import { ask, errorBox, h, header, setupPrompt, short } from "./ui";
 
 const root = document.getElementById("root")!;
 
@@ -129,7 +129,7 @@ function go(next: View) {
 async function render() {
   state = await ask<State>({ type: "state" });
   if (!state.address) {
-    root.replaceChildren(header(), setupForm(render));
+    root.replaceChildren(setupPrompt(render));
     return;
   }
   draw();
