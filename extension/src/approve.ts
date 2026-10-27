@@ -49,6 +49,7 @@ type Approval = {
   kind?: "connect" | "sign" | "send" | "swap" | "stake-sign";
   origin?: string;
   address?: string | null;
+  watch?: boolean;
   request?: SignRequest | SendRequest | SwapRequest | StakeSignRequest;
 };
 
@@ -83,7 +84,9 @@ async function render(notice?: string) {
   if (approval.kind === "stake-sign" && approval.request)
     return renderStakeSign(approval.request as StakeSignRequest);
   const origin = approval.origin!;
-  const { form, password } = decide("Connect", "approval:connect");
+  const { form, password } = decide("Connect", "approval:connect", undefined, {
+    noPassword: approval.watch,
+  });
   const local = origin.startsWith("http://");
 
   const parts: (HTMLElement | null)[] = [
@@ -115,6 +118,13 @@ async function render(notice?: string) {
       h("strong", {}, "It won't be able to"),
       h("ul", { class: "facts" }, h("li", {}, "Move funds or sign anything on its own")),
     ),
+    approval.watch
+      ? h(
+          "p",
+          { class: "note" },
+          "This wallet is watch-only, so Tera will refuse anything the site asks you to sign or send.",
+        )
+      : null,
     form,
     h(
       "p",
@@ -131,7 +141,12 @@ function decide(
   label: string,
   type: string,
   gate?: HTMLInputElement,
-  options: { extra?: () => Record<string, unknown>; progress?: HTMLElement } = {},
+  options: {
+    extra?: () => Record<string, unknown>;
+    progress?: HTMLElement;
+    /** A watched wallet's connection: nothing to unlock. */
+    noPassword?: boolean;
+  } = {},
 ) {
   const password = h("input", {
     type: "password",
@@ -175,7 +190,7 @@ function decide(
         window.close();
       },
     },
-    h("label", {}, "Password", password),
+    options.noPassword ? null : h("label", {}, "Password", password),
     status,
     h(
       "div",
@@ -312,13 +327,18 @@ function renderSend(origin: string, request: SendRequest, notice?: string) {
       ...described.rows.flatMap(([label, value]) => [
         h("dt", {}, label),
         h("dd", { class: ADDRESS.test(value) ? "mono" : "" }, value),
-        ...(ADDRESS.test(value) && knownName(value) ? [h("dt", {}, "Built-in label"), h("dd", {}, knownName(value))] : []),
+        ...(ADDRESS.test(value) && knownName(value)
+          ? [h("dt", {}, "Built-in label"), h("dd", {}, knownName(value))]
+          : []),
       ]),
       ...(fee ? [h("dt", {}, "Network fee"), h("dd", {}, `Up to ${fee.maxFee} ETH`)] : []),
     ),
-    ...described.rows.filter(([label, value]) => label === "To" && ADDRESS.test(value) && depositWarning(value))
+    ...described.rows
+      .filter(([label, value]) => label === "To" && ADDRESS.test(value) && depositWarning(value))
       .map(([, value]) => h("p", { class: "note" }, depositWarning(value))),
-    described.rows.some(([, value]) => knownName(value)) ? h("p", { class: "muted small" }, LABEL_NOTE) : null,
+    described.rows.some(([, value]) => knownName(value))
+      ? h("p", { class: "muted small" }, LABEL_NOTE)
+      : null,
     tx.data !== "0x"
       ? h(
           "details",

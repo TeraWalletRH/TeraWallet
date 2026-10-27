@@ -36,7 +36,8 @@ const CREATE_URL = `${__TERA_WEB__}/app`;
 const TERMS_URL = "https://www.terawallet.app/legal/terms-of-service/";
 const PRIVACY_URL = "https://www.terawallet.app/legal/privacy-policy/";
 
-type Step = "welcome" | "create" | "import" | "phrase" | "key" | "password" | "done" | "ready";
+type Step =
+  "welcome" | "create" | "import" | "phrase" | "key" | "watch" | "password" | "done" | "ready";
 
 const root = document.getElementById("root")!;
 const WORDS = new Set(wordlist);
@@ -53,6 +54,8 @@ let from: Step = "phrase";
 let invite: Invite | null = null;
 let inviteKey: CryptoKey | null = null;
 let handoffError = "";
+/** The wallet set up here is watch-only (vault.ts WatchVault). */
+let watching = false;
 
 function go(next: Step) {
   if (next === "welcome" || next === "import" || next === "create") secret = "";
@@ -257,6 +260,9 @@ function importChoice() {
           from = "key";
           go("key");
         }),
+        option("◉", "Watch an address", "See balances and activity, without a key", () =>
+          go("watch"),
+        ),
       ),
       h(
         "p",
@@ -477,6 +483,61 @@ function key() {
   ];
 }
 
+function watch() {
+  const status = h("div", { class: "status" });
+  const next = h(
+    "button",
+    { class: "primary big", type: "button", disabled: true },
+    "Watch this wallet",
+  ) as HTMLButtonElement;
+  const field = h("input", {
+    type: "text",
+    autocomplete: "off",
+    spellcheck: "false",
+    placeholder: "0x…",
+    class: "mono",
+    "data-focus": "",
+  }) as HTMLInputElement;
+  const valid = () =>
+    /^0x[0-9a-fA-F]{40}$/.test(field.value.trim()) && !/^0x0{40}$/i.test(field.value.trim());
+  field.addEventListener("input", () => {
+    status.replaceChildren();
+    next.disabled = !valid();
+    const text = field.value.trim();
+    if (text.length >= 42 && !valid())
+      status.append(errorBox("That isn't a wallet address. It's 0x and 40 letters and numbers."));
+  });
+  field.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && !next.disabled) next.click();
+  });
+  next.addEventListener("click", async () => {
+    next.disabled = true;
+    const answer = await ask({ type: "wallet:watch", address: field.value.trim() });
+    if (answer?.error) {
+      next.disabled = false;
+      return status.replaceChildren(errorBox(answer.error));
+    }
+    address = answer.address;
+    watching = true;
+    go("done");
+  });
+  return [
+    topBar("import", 2),
+    panel(
+      h("div", { class: "glyph", "aria-hidden": "true" }, "◉"),
+      h("h1", {}, "Watch an address"),
+      h(
+        "p",
+        { class: "lede" },
+        "Follow any wallet's balances and activity, and connect it to sites to look around. With no key, Tera can't send, swap or sign for it, so there's no password to set.",
+      ),
+      field,
+      status,
+      next,
+    ),
+  ];
+}
+
 function password() {
   if (!secret) {
     queueMicrotask(() => go("import"));
@@ -615,7 +676,11 @@ function done(again = false) {
     h(
       "p",
       { class: "lede" },
-      again ? "This browser has a wallet: " : "Your wallet is ready in this browser: ",
+      again
+        ? "This browser has a wallet: "
+        : watching
+          ? "Tera is watching "
+          : "Your wallet is ready in this browser: ",
       h("span", { class: "mono", title: address }, short(address)),
     ),
     pin,
@@ -645,13 +710,15 @@ function draw() {
           ? phrase()
           : step === "key"
             ? key()
-            : step === "password"
-              ? password()
-              : step === "done"
-                ? done()
-                : step === "ready"
-                  ? done(true)
-                  : welcome();
+            : step === "watch"
+              ? watch()
+              : step === "password"
+                ? password()
+                : step === "done"
+                  ? done()
+                  : step === "ready"
+                    ? done(true)
+                    : welcome();
   root.replaceChildren(...(Array.isArray(body) ? body : [body]));
 }
 

@@ -45,6 +45,8 @@ type Sent = {
 };
 type State = {
   address: string | null;
+  /** Watch-only: an address with no key (vault.ts WatchVault). */
+  watch?: boolean;
   sites: { origin: string; connectedAt: number }[];
   signatures: Signed[];
   transactions: Sent[];
@@ -149,6 +151,8 @@ async function loadStaking() {
 }
 
 function draw() {
+  // A watched wallet has nothing to send with, even from a view kept from before.
+  if (state.watch && (view === "send" || view === "swap" || view === "stake")) view = "home";
   const body =
     view === "send"
       ? sendView()
@@ -208,6 +212,53 @@ function copyButton(text: string) {
 
 // ---------------------------------------------------------------- home ----
 
+/** Send, Receive, Swap and Stake; a watched wallet only gets Receive. */
+function homeActions() {
+  const receive = h(
+    "button",
+    { class: "act", type: "button", onclick: () => go("receive") },
+    icon("receive"),
+    "Receive",
+  );
+  if (state.watch) return [h("div", { class: "actions" }, receive)];
+  return [
+    h(
+      "div",
+      { class: "actions" },
+      h(
+        "button",
+        { class: "primary act", type: "button", onclick: () => go("send") },
+        icon("send"),
+        "Send",
+      ),
+      receive,
+    ),
+    h(
+      "div",
+      { class: "actions" },
+      h(
+        "button",
+        { class: "act", type: "button", onclick: () => go("swap") },
+        icon("swap"),
+        "Swap",
+      ),
+      h(
+        "button",
+        {
+          class: "act",
+          type: "button",
+          onclick: () => {
+            stakeState = null;
+            go("stake");
+          },
+        },
+        icon("stake"),
+        "Stake",
+      ),
+    ),
+  ];
+}
+
 function homeView() {
   const list = rows();
   const total = totalValue(
@@ -233,47 +284,17 @@ function homeView() {
         "div",
         { class: "row" },
         h("span", { class: "mono grow", title: state.address! }, short(state.address!)),
+        state.watch ? h("span", { class: "badge" }, "Watching") : null,
         copyButton(state.address!),
       ),
-      h(
-        "div",
-        { class: "actions" },
-        h(
-          "button",
-          { class: "primary act", type: "button", onclick: () => go("send") },
-          icon("send"),
-          "Send",
-        ),
-        h(
-          "button",
-          { class: "act", type: "button", onclick: () => go("receive") },
-          icon("receive"),
-          "Receive",
-        ),
-      ),
-      h(
-        "div",
-        { class: "actions" },
-        h(
-          "button",
-          { class: "act", type: "button", onclick: () => go("swap") },
-          icon("swap"),
-          "Swap",
-        ),
-        h(
-          "button",
-          {
-            class: "act",
-            type: "button",
-            onclick: () => {
-              stakeState = null;
-              go("stake");
-            },
-          },
-          icon("stake"),
-          "Stake",
-        ),
-      ),
+      state.watch
+        ? h(
+            "p",
+            { class: "muted small" },
+            "Watch-only: Tera shows this wallet's balances and activity, and can't send, swap or sign for it.",
+          )
+        : null,
+      ...homeActions(),
     ),
     h(
       "section",
@@ -994,7 +1015,13 @@ function activityView() {
                 rel: "noreferrer",
               },
               h("span", { class: "title" }, entry.title),
-              knownName(entry.recipient) ? h("span", { class: "muted small" }, `${knownName(entry.recipient)} · ${entry.recipient}`) : null,
+              knownName(entry.recipient)
+                ? h(
+                    "span",
+                    { class: "muted small" },
+                    `${knownName(entry.recipient)} · ${entry.recipient}`,
+                  )
+                : null,
               h(
                 "span",
                 { class: `muted small status-${entry.status}` },
@@ -1111,6 +1138,7 @@ function removeSection(address: string) {
           autocomplete: "current-password",
         }) as HTMLInputElement;
         const status = h("div");
+        const watch = Boolean(state.watch);
         box.replaceChildren(
           h(
             "form",
@@ -1129,9 +1157,11 @@ function removeSection(address: string) {
             h(
               "p",
               { class: "small" },
-              `Removes ${short(address)} and every site connection from this browser. Your funds stay on chain; your recovery phrase brings them back anywhere.`,
+              watch
+                ? `Stops watching ${short(address)} and removes every site connection from this browser.`
+                : `Removes ${short(address)} and every site connection from this browser. Your funds stay on chain; your recovery phrase brings them back anywhere.`,
             ),
-            h("label", {}, "Password", password),
+            watch ? null : h("label", {}, "Password", password),
             status,
             h(
               "div",
@@ -1144,7 +1174,7 @@ function removeSection(address: string) {
         password.focus();
       },
     },
-    "Remove wallet from this browser",
+    state.watch ? "Stop watching this wallet" : "Remove wallet from this browser",
   );
   box.append(open);
   return box;

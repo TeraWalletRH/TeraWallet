@@ -71,7 +71,15 @@ import {
 import { isSlippageBps } from "../../public/tera/core/slippage.js";
 import { policyFor } from "../../android/src/policy";
 import { proposalVerdicts, verifyProposal } from "../../android/src/proposals";
-import { createVault, openSecret, signer, type Vault } from "./vault";
+import {
+  createVault,
+  isWatch,
+  openSecret,
+  signer,
+  watchVault,
+  WATCH_ONLY,
+  type Vault,
+} from "./vault";
 import { OWN } from "./shared";
 import { isSealed } from "../../android/src/handoff";
 
@@ -218,8 +226,13 @@ async function handle(origin: string, request: { method: string; params?: unknow
   const invalid = checkRequest(request);
   if (invalid) throw invalid;
   const { method, params } = request;
-  const { sites } = await load();
-  switch (classify(method)) {
+  const { sites, vault } = await load();
+  // A watched wallet connects and reads like any other, and refuses to sign
+  // before any window opens.
+  const kind = classify(method);
+  if ((kind === "signing" || kind === "send") && isWatch(vault))
+    throw rpcError(ERRORS.unauthorized, WATCH_ONLY);
+  switch (kind) {
     case "chain":
       return CHAIN_HEX;
     case "accounts": {
@@ -440,6 +453,7 @@ async function tryPassword(
 ): Promise<{ ok: true; vault: Vault; secret: string } | { ok: false; error: string }> {
   const { vault, failures, failedAt } = await load();
   if (!vault) return { ok: false, error: "There's no wallet in this browser yet." };
+  if (isWatch(vault)) return { ok: false, error: WATCH_ONLY };
   const wait = failedAt + passwordWait(failures) - Date.now();
   if (wait > 0)
     return { ok: false, error: `Too many wrong tries. Wait ${Math.ceil(wait / 1000)}s.` };
@@ -508,6 +522,7 @@ type PageMessage = {
   type?: string;
   id?: string;
   secret?: unknown;
+  address?: unknown;
   password?: unknown;
   origin?: unknown;
   asset?: unknown;
@@ -522,7 +537,11 @@ type PageMessage = {
   consent?: unknown;
 };
 
+const NEEDS_KEY = new Set(["wallet:send", "wallet:swap", "wallet:stake", "wallet:stake-sign"]);
+
 async function page(message: PageMessage) {
+  if (NEEDS_KEY.has(String(message?.type)) && isWatch((await load()).vault))
+    return { error: WATCH_ONLY };
   switch (message?.type) {
     case "ping":
       return { ok: true };
@@ -531,6 +550,7 @@ async function page(message: PageMessage) {
       const { signatures } = await chrome.storage.local.get("signatures");
       return {
         address: vault?.address ?? null,
+        watch: isWatch(vault),
         sites: listSites(sites),
         signatures: ((signatures as { items?: unknown[] } | undefined)?.items ?? []).slice(0, 10),
         transactions: (await refreshSent()).slice(0, 10),
@@ -543,9 +563,19 @@ async function page(message: PageMessage) {
       await chrome.storage.local.set({ vault, failures: 0, failedAt: 0 });
       return { address: vault.address };
     }
+    case "wallet:watch": {
+      if ((await load()).vault)
+        return { error: "This browser already has a wallet. Remove it first." };
+      const vault = watchVault(String(message.address ?? ""));
+      await chrome.storage.local.set({ vault, failures: 0, failedAt: 0 });
+      return { address: vault.address };
+    }
     case "wallet:remove": {
-      const tried = await tryPassword(String(message.password ?? ""));
-      if (!tried.ok) return { error: tried.error };
+      // A watched wallet has no password: there's nothing in it to protect.
+      if (!isWatch((await load()).vault)) {
+        const tried = await tryPassword(String(message.password ?? ""));
+        if (!tried.ok) return { error: tried.error };
+      }
       await chrome.storage.local.remove([
         "vault",
         "sites",
@@ -608,15 +638,22 @@ async function page(message: PageMessage) {
         kind: approval.kind,
         origin: approval.origin,
         address: vault?.address ?? null,
+        watch: isWatch(vault),
         request: approval.request,
       };
     }
     case "approval:connect": {
       const approval = approvals.get(String(message.id));
       if (!approval || approval.kind !== "connect") return { expired: true };
-      const tried = await tryPassword(String(message.password ?? ""));
-      if (!tried.ok) return { error: tried.error };
-      const accounts = [tried.vault.address];
+      // Connecting a watched wallet shares only its address, so no password.
+      const { vault } = await load();
+      let accounts: string[];
+      if (isWatch(vault)) accounts = [vault.address];
+      else {
+        const tried = await tryPassword(String(message.password ?? ""));
+        if (!tried.ok) return { error: tried.error };
+        accounts = [tried.vault.address];
+      }
       await setSites(grant((await load()).sites, approval.origin, accounts));
       // Other tabs of the same site hear about it; this one gets the answer.
       broadcast(approval.origin, "accountsChanged", accounts);
