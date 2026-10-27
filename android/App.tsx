@@ -1161,6 +1161,29 @@ function Wallet() {
     // the owner's glance, same as a wallet avatar (storage.ts) -- never a
     // check, since anyone can set any avatar on any name they own.
     [ensAvatar, setEnsAvatar] = useState<string | null>(null),
+    // The supervisor leaderboard, read fresh each time the screen opens.
+    // Idle until then, loading while in flight, error if the read failed,
+    // ready with exactly what the server counted -- an empty board is a
+    // real state and is never filled in with an invented rank or points.
+    [leaderboard, setLeaderboard] = useState<
+      | { state: "idle" }
+      | { state: "loading" }
+      | { state: "error"; message: string }
+      | {
+          state: "ready";
+          totalSupervisors: number;
+          totalIntentsSigned: number;
+          entries: Array<{
+            rank: number;
+            tag: string;
+            address: string;
+            tier: string;
+            points: number;
+            intentsSigned: number;
+            referrals: number;
+          }>;
+        }
+    >({ state: "idle" }),
     [myTag, setMyTag] = useState<string | null>(null),
     [claimInput, setClaimInput] = useState(""),
     [, setTagsOn] = useState(false),
@@ -2062,6 +2085,32 @@ function Wallet() {
   const scheduleAnnounced = useRef(new Set<string>());
   useEffect(() => {
     if (page !== "send" && page !== "swap") setScheduleRun(null);
+  }, [page]);
+  useEffect(() => {
+    if (page !== "leaderboard") return;
+    setLeaderboard({ state: "loading" });
+    let cancelled = false;
+    void (async () => {
+      try {
+        const result = await api("/api/leaderboard");
+        if (cancelled) return;
+        setLeaderboard({
+          state: "ready",
+          totalSupervisors: Number(result?.totalSupervisors) || 0,
+          totalIntentsSigned: Number(result?.totalIntentsSigned) || 0,
+          entries: Array.isArray(result?.leaderboard) ? result.leaderboard : [],
+        });
+      } catch (e) {
+        if (!cancelled)
+          setLeaderboard({
+            state: "error",
+            message: e instanceof Error ? e.message : t("The board could not be read.", "无法读取榜单。"),
+          });
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [page]);
   // One reminder per due payment per session, from the browser's own
   // notifications when the app is in the background. The home card shows them
@@ -10845,26 +10894,25 @@ function Wallet() {
       );
     }
     if (page === "leaderboard") {
-      const myTagHandle = myTag || "@tera_owner";
-      // TODO(leaderboard): these figures are placeholders. They must come from
-      // /api/leaderboard before this screen is shown to anyone, because a rank
-      // the app made up and labelled as the owner's is a false statement about
-      // them, not a placeholder.
-      const standing = {
-        rank: 1,
-        tier: "Grandmaster",
-        points: "3,450",
-        intents: "142",
-        referrals: "38",
-      };
-      const board = [
-        { rank: 1, tag: "@astra", pts: "3,450", badge: "Grandmaster" },
-        { rank: 2, tag: "@robin_god", pts: "2,890", badge: "Grandmaster" },
-        { rank: 3, tag: "@orbit_whale", pts: "2,150", badge: "Master" },
-        { rank: 4, tag: "@cyber_rwa", pts: "1,780", badge: "Master" },
-        { rank: 5, tag: "@nexus_alpha", pts: "1,240", badge: "Senior" },
-        { rank: 6, tag: "@tera_guard", pts: "980", badge: "Senior" },
-      ];
+      const lb = leaderboard;
+      const you =
+        lb.state === "ready" && myTag
+          ? lb.entries.find((entry) => entry.tag.toLowerCase() === myTag.toLowerCase()) || null
+          : null;
+      const dash = "—";
+      const rankNote =
+        lb.state === "loading"
+          ? t("Reading the board…", "正在读取榜单…")
+          : lb.state === "error"
+            ? lb.message
+            : you
+              ? t(`${you.tier} supervisor`, `${you.tier} 监督者`)
+              : lb.state === "ready" && lb.entries.length === 0
+                ? t("Nobody has been ranked yet.", "尚无人上榜。")
+                : t("You are not on this board yet.", "你尚未上榜。");
+      const shareUrl = myTag
+        ? `https://terawallet.app/dashboard/?ref=${encodeURIComponent(myTag)}`
+        : null;
       return (
         <>
           <Header
@@ -10874,8 +10922,8 @@ function Wallet() {
           />
           <Text style={[s.small, { textAlign: "center" }]}>
             {t(
-              "Points are earned by reviewing an agent's proposal and signing it yourself.",
-              "通过审核代理提议并亲自签名来赚取积分。",
+              "Points are earned by reviewing an agent's proposal and signing it yourself. Nothing here counts an action an agent took alone.",
+              "通过审核代理提议并亲自签名来赚取积分。此处不计入代理单独执行的操作。",
             )}
           </Text>
 
@@ -10929,18 +10977,22 @@ function Wallet() {
                   {t("Your standing", "你的排名")}
                 </Text>
                 <Text style={{ color: colors.ink, fontSize: 32, fontWeight: "800" }}>
-                  #{standing.rank}
+                  {you ? `#${you.rank}` : dash}
                 </Text>
                 <Text style={[s.small, { color: colors.ink }]}>
-                  {myTagHandle} · {t(`${standing.tier} supervisor`, `${standing.tier} 监督者`)}
+                  {myTag ? `${myTag} · ` : ""}
+                  {rankNote}
                 </Text>
               </View>
             </View>
             <View style={{ flexDirection: "row", gap: 8 }}>
               {[
-                [t("Points", "积分"), standing.points],
-                [t("Intents signed", "已签名意图"), standing.intents],
-                [t("Referrals", "推荐人数"), standing.referrals],
+                [t("Points", "积分"), you ? String(you.points) : dash],
+                [t("Intents signed", "已签名意图"), you ? String(you.intentsSigned) : dash],
+                [
+                  t("Supervisors", "监督者总数"),
+                  lb.state === "ready" ? String(lb.totalSupervisors) : dash,
+                ],
               ].map(([label, value]) => (
                 <View
                   key={label}
@@ -10966,15 +11018,17 @@ function Wallet() {
           <View style={{ flexDirection: "row", gap: 8 }}>
             <Pressable
               accessibilityRole="button"
+              disabled={!you || !shareUrl}
               onPress={() => {
+                if (!you || !shareUrl) return;
                 const text =
-                  `Ranked #${standing.rank} supervising agent actions on Tera.
+                  `Ranked #${you.rank} supervising agent actions on Tera.
 
 ` +
-                  `${standing.points} supervisor points · ${standing.intents} intents reviewed and signed by me, not for me.
+                  `${you.points} supervisor points · ${you.intentsSigned} intents reviewed and signed by me, not for me.
 
 ` +
-                  `https://terawallet.app/dashboard/?ref=${encodeURIComponent(myTagHandle)}`;
+                  shareUrl;
                 void Linking.openURL(`https://x.com/intent/tweet?text=${encodeURIComponent(text)}`);
               }}
               style={({ pressed }) => [
@@ -10985,7 +11039,7 @@ function Wallet() {
                   alignItems: "center",
                   justifyContent: "center",
                   gap: 8,
-                  opacity: pressed ? 0.7 : 1,
+                  opacity: !you || !shareUrl ? 0.4 : pressed ? 0.7 : 1,
                 },
               ]}
             >
@@ -10994,10 +11048,10 @@ function Wallet() {
             </Pressable>
             <Pressable
               accessibilityRole="button"
+              disabled={!you || !shareUrl}
               onPress={async () => {
-                await Clipboard.setStringAsync(
-                  `https://terawallet.app/dashboard/?ref=${encodeURIComponent(myTagHandle)}`,
-                );
+                if (!you || !shareUrl) return;
+                await Clipboard.setStringAsync(shareUrl);
                 setNotice({
                   title: t("Referral link copied", "推荐链接已复制"),
                   body: t(
@@ -11015,7 +11069,7 @@ function Wallet() {
                   alignItems: "center",
                   justifyContent: "center",
                   gap: 8,
-                  opacity: pressed ? 0.7 : 1,
+                  opacity: !you || !shareUrl ? 0.4 : pressed ? 0.7 : 1,
                 },
               ]}
             >
@@ -11023,35 +11077,60 @@ function Wallet() {
               <Text style={[s.label, { color: colors.green }]}>{t("Copy link", "复制链接")}</Text>
             </Pressable>
           </View>
+          {!you && (
+            <Text style={[s.small, { textAlign: "center", opacity: 0.7 }]}>
+              {t(
+                "Sign an agent's proposal to get a rank and a link to share.",
+                "审核并签署一次代理提议即可上榜并获得可分享的链接。",
+              )}
+            </Text>
+          )}
 
           <Group title={t("Ranked supervisors", "监督者排行")}>
-            {board.map((item) => (
-              <View
-                key={item.tag}
-                style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12 }}
-              >
-                <Image
-                  accessibilityLabel={item.tag}
-                  source={{
-                    uri: `https://api.dicebear.com/9.x/thumbs/png?seed=${encodeURIComponent(item.tag)}&size=76`,
-                  }}
-                  style={[
-                    { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.raised },
-                    item.rank <= 3 && {
-                      borderWidth: 2,
-                      borderColor: item.rank === 1 ? colors.yellow : colors.green,
-                    },
-                  ]}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text style={s.label}>{item.tag}</Text>
-                  <Text style={s.small}>{item.badge}</Text>
+            {lb.state === "loading" ? (
+              <Text style={[s.small, { textAlign: "center", paddingVertical: 16 }]}>
+                {t("Reading the board…", "正在读取榜单…")}
+              </Text>
+            ) : lb.state === "error" ? (
+              <Text style={[s.small, { textAlign: "center", paddingVertical: 16 }]}>
+                {lb.message}
+              </Text>
+            ) : lb.state === "ready" && lb.entries.length === 0 ? (
+              <Text style={[s.small, { textAlign: "center", paddingVertical: 16 }]}>
+                {t(
+                  "Nobody is on the board yet. The first reviewed and signed proposal puts someone here — it may as well be yours.",
+                  "目前尚无人上榜。第一个审核并签署的提议就能让你上榜。",
+                )}
+              </Text>
+            ) : lb.state === "ready" ? (
+              lb.entries.map((item) => (
+                <View
+                  key={item.tag}
+                  style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12 }}
+                >
+                  <Image
+                    accessibilityLabel={item.tag}
+                    source={{
+                      uri: `https://api.dicebear.com/9.x/thumbs/png?seed=${encodeURIComponent(item.tag)}&size=76`,
+                    }}
+                    style={[
+                      { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.raised },
+                      item.rank <= 3 && {
+                        borderWidth: 2,
+                        borderColor: item.rank === 1 ? colors.yellow : colors.green,
+                      },
+                    ]}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={s.label}>{item.tag}</Text>
+                    <Text style={s.small}>{item.tier}</Text>
+                  </View>
+                  <Text style={[s.label, { color: colors.green }]}>
+                    {t(`${item.points} pts`, `${item.points} 分`)}
+                  </Text>
                 </View>
-                <Text style={[s.label, { color: colors.green }]}>
-                  {t(`${item.pts} pts`, `${item.pts} 分`)}
-                </Text>
-              </View>
-            ))}
+              ))
+            ) : null}
           </Group>
         </>
       );
