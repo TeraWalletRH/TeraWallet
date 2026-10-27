@@ -4,14 +4,24 @@ The Tera wallet as a browser extension: a wallet in the toolbar, and one
 that sites on Robinhood Chain can find (`window.ethereum` and EIP-6963) and
 ask to connect, with the owner deciding.
 
-**This version (0.6) is the wallet in the popup, with swaps and staking,
+**This version (0.7) is the wallet in the popup, with swaps and staking,
 and a new setup.** Installing Tera opens a welcome tab (`welcome.html`,
 `src/welcome.ts`), and so does the popup until there's a wallet: Chrome
 closes the popup whenever it loses focus, which is every time someone
 switches to the note their phrase is in.
 
 - **Create a new wallet** opens the Tera web wallet, where the phrase is made
-  and backed up, then comes back to bring it in.
+  and backed up, and the web wallet hands it straight back
+  (`android/src/handoff.ts`). The welcome tab makes a one-time P-256 key pair
+  (the private half can't be exported) and opens
+  `/app#tera-extension=<extension id>.<public key>.<session>`. After the
+  backup check, the web wallet seals the phrase to that key (ECDH, HKDF,
+  AES-GCM) and sends it with `chrome.runtime.sendMessage`, which Chrome only
+  allows from terawallet.app (`externally_connectable`). The background
+  worker keeps it, in memory, only if a welcome tab is waiting for that
+  session, and only that tab can open it. The web wallet keeps nothing,
+  unless the owner also chooses to use the wallet there, and Tera's servers
+  are never involved.
 - **I already have a wallet** offers a recovery phrase (12 or 24 numbered
   boxes; paste the whole phrase into the first and it fills them, numbering
   and all; misspelt words show in red) or a private key. Either shows the

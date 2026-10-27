@@ -52,6 +52,9 @@ for (const [name, format] of entries) {
     plugins: [webKdf],
     define: {
       __TERA_ICON__: JSON.stringify(icon),
+      // TERA_EXTENSION_WEB points a test build's "Create a new wallet" at a
+      // local web wallet, and lets that origin hand wallets over.
+      __TERA_WEB__: JSON.stringify(process.env.TERA_EXTENSION_WEB || "https://www.terawallet.app"),
       // config.ts reads EXPO_PUBLIC_* overrides; the extension ships the
       // defaults. TERA_EXTENSION_RPC points a test build at one node (a local
       // chain), for both reads and sending; never set it for a release.
@@ -85,11 +88,14 @@ for (const file of [
 const manifest = JSON.parse(await readFile(join(src, "manifest.json"), "utf8"));
 // A test build says so wherever Chrome shows its name, and CI refuses to
 // package one (.github/workflows/extension.yml).
-if (process.env.TERA_EXTENSION_RPC) {
+const testBuild = process.env.TERA_EXTENSION_RPC || process.env.TERA_EXTENSION_WEB;
+if (process.env.TERA_EXTENSION_WEB)
+  manifest.externally_connectable.matches.push(`${process.env.TERA_EXTENSION_WEB}/*`);
+if (testBuild) {
   manifest.name = "Tera Wallet (TEST BUILD)";
   await writeFile(join(out, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
 }
 await writeFile(join(out, "VERSION"), `${manifest.version}\n`);
 console.log(
-  `dist-extension/ built (Tera Wallet ${manifest.version})${process.env.TERA_EXTENSION_RPC ? ` TEST BUILD against ${process.env.TERA_EXTENSION_RPC}` : ""}`,
+  `dist-extension/ built (Tera Wallet ${manifest.version})${testBuild ? ` TEST BUILD (${[process.env.TERA_EXTENSION_RPC, process.env.TERA_EXTENSION_WEB].filter(Boolean).join(", ")})` : ""}`,
 );

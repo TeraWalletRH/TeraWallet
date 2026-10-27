@@ -15,6 +15,14 @@
 import { wordlist } from "@scure/bip39/wordlists/english";
 import { walletFromSecret } from "../../android/src/crypto";
 import {
+  inviteHash,
+  makeInvite,
+  openSealed,
+  sessionId,
+  type Invite,
+  type Sealed,
+} from "../../android/src/handoff";
+import {
   MIN_PASSWORD,
   PHRASE_LENGTHS,
   fillBoxes,
@@ -23,8 +31,8 @@ import {
 } from "../../public/tera/core/onboarding.js";
 import { ask, errorBox, h, short } from "./ui";
 
-/** Where a new wallet is made, until the extension can make one itself. */
-const CREATE_URL = "https://www.terawallet.app/app";
+/** Where a new wallet is made: the web wallet, which hands it back (android/src/handoff.ts). */
+const CREATE_URL = `${__TERA_WEB__}/app`;
 const TERMS_URL = "https://www.terawallet.app/legal/terms-of-service/";
 const PRIVACY_URL = "https://www.terawallet.app/legal/privacy-policy/";
 
@@ -39,9 +47,15 @@ let kind: "phrase" | "key" = "phrase";
 let address = "";
 let boxes: string[] = Array(12).fill("");
 let shown = false;
+/** The step the password step goes back to. */
+let from: Step = "phrase";
+/** While a new wallet is being made in the web wallet: the invite and its key. */
+let invite: Invite | null = null;
+let inviteKey: CryptoKey | null = null;
+let handoffError = "";
 
 function go(next: Step) {
-  if (next === "welcome" || next === "import") secret = "";
+  if (next === "welcome" || next === "import" || next === "create") secret = "";
   step = next;
   draw();
   root.querySelector<HTMLElement>("[data-focus]")?.focus();
@@ -128,23 +142,80 @@ function welcome() {
   );
 }
 
+/**
+ * A wallet arriving from the web wallet: opened with this tab's key, checked
+ * to be a real phrase, and taken on to the password step.
+ */
+async function receive(sealed: unknown) {
+  if (!invite || !inviteKey || !sealed) return;
+  try {
+    const phrase = await openSealed(sealed as Sealed, invite, inviteKey);
+    address = walletFromSecret(phrase).address;
+    secret = phrase;
+    kind = "phrase";
+    from = "create";
+    invite = inviteKey = null;
+    await chrome.storage.session.remove(["handoff", "handoffWaiting"]);
+    const tab = await chrome.tabs.getCurrent();
+    if (tab?.id !== undefined) {
+      await chrome.tabs.update(tab.id, { active: true });
+      await chrome.windows.update(tab.windowId, { focused: true }).catch(() => {});
+    }
+    go("password");
+  } catch (error) {
+    await chrome.storage.session.remove("handoff");
+    handoffError = (error as Error).message;
+    draw();
+  }
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "session" && changes.handoff?.newValue) void receive(changes.handoff.newValue);
+});
+// The key goes with this tab; a wallet sent after it closes is refused.
+addEventListener("pagehide", () => {
+  if (invite) void chrome.storage.session.remove("handoffWaiting");
+});
+
+async function startCreate() {
+  handoffError = "";
+  const made = await makeInvite(chrome.runtime.id);
+  invite = made.invite;
+  inviteKey = made.privateKey;
+  await chrome.storage.session.remove("handoff");
+  await chrome.storage.session.set({ handoffWaiting: sessionId(invite) });
+  await chrome.tabs.create({ url: `${CREATE_URL}${inviteHash(invite)}` });
+  draw();
+}
+
 function create() {
+  const waiting = Boolean(invite);
   return [
-    topBar("welcome"),
+    topBar("welcome", 1),
     panel(
-      h("div", { class: "glyph", "aria-hidden": "true" }, "✦"),
-      h("h1", {}, "Create your wallet in Tera"),
+      h("div", { class: `glyph${waiting ? " spin" : ""}`, "aria-hidden": "true" }, "✦"),
+      h("h1", {}, waiting ? "Waiting for your new wallet" : "Create a new wallet"),
       h(
         "p",
         { class: "lede" },
-        "New wallets are made in the Tera web wallet, where you'll see your recovery phrase and back it up. It takes about a minute.",
+        waiting
+          ? "Finish in the Tera tab: write down the 12 words, check them, then choose Send to Tera for Chrome. Keep this tab open."
+          : "Tera opens its web wallet in a new tab, where you'll see your recovery phrase and back it up. Then the wallet comes straight back here.",
       ),
+      waiting
+        ? null
+        : h(
+            "ol",
+            { class: "steps" },
+            h("li", {}, "Write down the 12 words Tera shows you."),
+            h("li", {}, "Check three of them, so you know your copy is right."),
+            h("li", {}, "Send the wallet to Tera for Chrome and set a password here."),
+          ),
+      handoffError ? errorBox(handoffError) : null,
       h(
-        "ol",
-        { class: "steps" },
-        h("li", {}, "Create a wallet in the tab that opens and write down its 12 words."),
-        h("li", {}, "Come back to this tab."),
-        h("li", {}, "Choose ", h("strong", {}, "Recovery phrase"), " and type the same words."),
+        "p",
+        { class: "fine" },
+        "The wallet comes back encrypted to a key only this tab holds. Tera's servers never see it, and the web wallet keeps nothing.",
       ),
       h(
         "div",
@@ -154,14 +225,9 @@ function create() {
           {
             class: "primary big",
             type: "button",
-            onclick: () => chrome.tabs.create({ url: CREATE_URL }),
+            onclick: () => void startCreate(),
           },
-          "Open Tera to create a wallet",
-        ),
-        h(
-          "button",
-          { class: "big", type: "button", onclick: () => go("import") },
-          "I've made one, bring it in",
+          waiting ? "Open the Tera tab again" : "Create my wallet",
         ),
       ),
     ),
@@ -183,10 +249,12 @@ function importChoice() {
         { class: "options" },
         option("⌗", "Recovery phrase", "12 or 24 words", () => {
           kind = "phrase";
+          from = "phrase";
           go("phrase");
         }),
         option("⚿", "Private key", "A 64-character key from one account", () => {
           kind = "key";
+          from = "key";
           go("key");
         }),
       ),
@@ -444,7 +512,7 @@ function password() {
   again.addEventListener("input", update);
 
   return [
-    topBar(kind, 3),
+    topBar(from, 3),
     panel(
       h("div", { class: "glyph", "aria-hidden": "true" }, "⚷"),
       h("h1", {}, "Create a password"),
@@ -453,6 +521,14 @@ function password() {
         { class: "lede" },
         `It unlocks Tera on this computer, and every send and signature asks for it. Tera can't reset it, but your ${kind === "key" ? "private key" : "recovery phrase"} can always bring the wallet back.`,
       ),
+      from === "create"
+        ? h(
+            "p",
+            { class: "found" },
+            "Your new wallet is here · ",
+            h("span", { class: "mono" }, short(address)),
+          )
+        : null,
       h(
         "form",
         {

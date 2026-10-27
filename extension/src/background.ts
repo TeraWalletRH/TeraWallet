@@ -73,6 +73,7 @@ import { policyFor } from "../../android/src/policy";
 import { proposalVerdicts, verifyProposal } from "../../android/src/proposals";
 import { createVault, openSecret, signer, type Vault } from "./vault";
 import { OWN } from "./shared";
+import { isSealed } from "../../android/src/handoff";
 
 type Sites = Record<string, { accounts: string[]; connectedAt: number }>;
 type RpcErr = { code: number; message: string; data?: unknown };
@@ -456,6 +457,36 @@ async function tryPassword(
 }
 
 // ------------------------------------------------------- extension pages ----
+
+// The web wallet handing over a wallet it just made (android/src/handoff.ts).
+// Chrome delivers these only from the sites in externally_connectable, and
+// the sender is checked against that list again here. One is kept only when
+// a welcome tab is waiting for that very session, and only in session
+// storage (memory) until that tab, the one holding the key, takes it.
+const handoffOrigins = () =>
+  (chrome.runtime.getManifest().externally_connectable?.matches ?? []).map((m) =>
+    m.replace(/\/\*$/, ""),
+  );
+
+chrome.runtime.onMessageExternal.addListener((message, sender, reply) => {
+  const origin = sender.origin ?? (sender.url ? new URL(sender.url).origin : "");
+  if (!handoffOrigins().includes(origin) || message?.type !== "tera:handoff") return false;
+  if (!isSealed(message.sealed)) {
+    reply({ error: "That wallet didn't arrive in one piece. Try again." });
+    return false;
+  }
+  void (async () => {
+    const { handoffWaiting } = await chrome.storage.session.get("handoffWaiting");
+    if (handoffWaiting !== message.sealed.session)
+      return reply({
+        error: "Tera for Chrome isn't waiting for this wallet. Start again from the extension.",
+      });
+    if ((await load()).vault) return reply({ error: "Tera for Chrome already has a wallet." });
+    await chrome.storage.session.set({ handoff: message.sealed });
+    reply({ ok: true });
+  })().catch(() => reply({ error: "Tera for Chrome couldn't take the wallet. Try again." }));
+  return true;
+});
 
 // A fresh install opens the welcome tab, as most wallets do; an update doesn't.
 chrome.runtime.onInstalled.addListener(async ({ reason }) => {

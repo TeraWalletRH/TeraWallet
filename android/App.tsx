@@ -48,6 +48,7 @@ import { ClaimsScreen } from "./src/ClaimsScreen";
 import { claimAmount } from "../public/tera/core/claim-links.js";
 import * as notify from "./src/notify";
 import * as push from "./src/push";
+import * as handoff from "./src/handoff";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
 import {
@@ -1059,9 +1060,13 @@ function Wallet() {
   const [propose, setPropose] = useState(false),
     [sessions, setSessions] = useState<any[]>([]),
     [tokenInput, setTokenInput] = useState("");
-  const [setup, setSetup] = useState<"start" | "phrase" | "backup" | "import" | "password">(
-    "start",
-  );
+  const [setup, setSetup] = useState<
+    "start" | "phrase" | "backup" | "import" | "password" | "handoff"
+  >("start");
+  // Tera for Chrome asked for a new wallet (src/handoff.ts): the web wallet
+  // makes one and hands it over, whether or not this browser has its own.
+  const [handoffInvite, setHandoffInvite] = useState<handoff.Invite | null>(null),
+    [handoffSent, setHandoffSent] = useState(false);
   // The trail of steps taken to reach the current one, so a swipe or a back
   // control can retrace it — this is a plain wizard, not a navigation stack,
   // so there is nothing else recording how `setup` got here.
@@ -2593,6 +2598,16 @@ function Wallet() {
       if (key) setIncomingClaim(key);
     };
     if (Platform.OS === "web" && typeof window !== "undefined") {
+      const invite = handoff.parseInvite(window.location.hash);
+      if (invite) {
+        setHandoffInvite(invite);
+        setSetup("start");
+        setSetupHistory([]);
+        const url = new URL(window.location.href);
+        url.hash = "";
+        window.history.replaceState(null, "", url.toString());
+        return;
+      }
       accept(window.location.href);
       if (window.location.hash.startsWith("#claim=")) {
         const url = new URL(window.location.href);
@@ -5620,6 +5635,127 @@ function Wallet() {
       </Text>
     </Pressable>
   ) : null;
+  // The new wallet for Tera for Chrome: made and backed up here with the
+  // usual phrase and backup steps, then sealed to the extension's one-time
+  // key and given to it (src/handoff.ts). This browser keeps nothing unless
+  // the owner also chooses to use the wallet here.
+  async function sendToExtension() {
+    const invite = handoffInvite;
+    if (!invite) return;
+    const runtime = (globalThis as any).chrome?.runtime;
+    if (!runtime?.sendMessage)
+      throw new Error(
+        t(
+          "Tera for Chrome isn't installed in this browser, or it's turned off. Open this from the extension's setup tab.",
+          "此浏览器未安装或已停用 Tera Chrome 扩展。请从扩展的设置页打开。",
+        ),
+      );
+    const sealed = await handoff.sealFor(invite, mnemonic);
+    const reply = await new Promise<any>((resolve) => {
+      try {
+        runtime.sendMessage(invite.extension, { type: "tera:handoff", sealed }, (answer: any) =>
+          resolve(answer ?? { error: runtime.lastError?.message }),
+        );
+      } catch (e: any) {
+        resolve({ error: e?.message });
+      }
+    });
+    if (!reply?.ok)
+      throw new Error(
+        reply?.error ||
+          t(
+            "Tera for Chrome didn't answer. Keep its setup tab open and try again.",
+            "Tera 扩展没有响应。请保持其设置页打开后重试。",
+          ),
+      );
+    setHandoffSent(true);
+  }
+  function endHandoff() {
+    setHandoffInvite(null);
+    setHandoffSent(false);
+    setMnemonic("");
+    setSetup("start");
+    setSetupHistory([]);
+  }
+  function handoffScreen() {
+    if (setup === "start")
+      return (
+        <>
+          {authHeader(
+            <WelcomeHero />,
+            title(
+              "A new wallet for\nTera for Chrome.",
+              "为 Tera Chrome 扩展\n创建新钱包。",
+              t(
+                "Make it here and write down its recovery phrase. Then it goes straight to the extension, encrypted so only it can open it. Nothing is kept in this browser.",
+                "在这里创建并记下助记词，然后加密直接交给扩展，只有扩展能打开。此浏览器不会保存任何内容。",
+              ),
+            ),
+          )}
+          <View style={{ flex: 1 }} />
+          <Button
+            primary
+            disabled={busy}
+            onPress={() => {
+              setMnemonic(vault.newPhrase());
+              goSetup("phrase");
+            }}
+          >
+            {t("Create wallet", "创建钱包")}
+          </Button>
+          <Button onPress={endHandoff}>{t("Cancel", "取消")}</Button>
+        </>
+      );
+    if (handoffSent)
+      return (
+        <>
+          {authHeader(
+            <Illustration />,
+            title(
+              "Sent to Tera for Chrome.",
+              "已发送到 Tera 扩展。",
+              t(
+                "Go back to the Tera tab and set a password for the extension. You can close this tab.",
+                "回到 Tera 标签页，为扩展设置密码。你可以关闭此标签页。",
+              ),
+            ),
+          )}
+          <View style={{ flex: 1 }} />
+          {!exists && (
+            <Button
+              onPress={() => {
+                setHandoffInvite(null);
+                setHandoffSent(false);
+                setSetup("password");
+                setSetupHistory([]);
+              }}
+            >
+              {t("Also use this wallet here", "也在这里使用此钱包")}
+            </Button>
+          )}
+          <Button primary onPress={endHandoff}>
+            {t("Done", "完成")}
+          </Button>
+        </>
+      );
+    return (
+      <>
+        {authHeader(
+          <Illustration />,
+          title(
+            "Send it to\nTera for Chrome.",
+            "发送到\nTera 扩展。",
+            t(
+              "Your backup checks out. The wallet goes to the extension in this browser, sealed so only its setup tab can open it. Tera's servers never see it.",
+              "备份已确认。钱包将加密发送到此浏览器中的扩展，只有其设置页能打开，Tera 服务器永远看不到。",
+            ),
+          ),
+        )}
+        <View style={{ flex: 1 }} />
+        {action("Send to Tera for Chrome", "发送到 Tera 扩展", async () => sendToExtension())}
+      </>
+    );
+  }
   function onboarding() {
     if (!ready)
       return (
@@ -5628,7 +5764,8 @@ function Wallet() {
           <Text style={s.text}>{t("Opening wallet…", "正在打开钱包…")}</Text>
         </View>
       );
-    if (exists)
+    if (handoffInvite && (setup === "start" || setup === "handoff")) return handoffScreen();
+    if (exists && !handoffInvite)
       return (
         <>
           {authHeader(
@@ -5965,7 +6102,7 @@ function Wallet() {
                     setAnswers(["", "", ""]);
                     setPickedChips([null, null, null]);
                     setActiveAnswerSlot(-1);
-                    goSetup("password");
+                    goSetup(handoffInvite ? "handoff" : "password");
                   } else
                     setError(t("Those words do not match. Try again.", "单词不匹配，请重试。"));
                 }}

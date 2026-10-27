@@ -38,7 +38,8 @@ body.welcome main {
 }
 @media (prefers-reduced-motion: reduce) {
   .panel,
-  .mark img {
+  .mark img,
+  .glyph.spin {
     animation: none;
   }
 }
@@ -95,6 +96,14 @@ body.welcome main {
   font-size: 26px;
   color: var(--green);
   background: color-mix(in srgb, var(--green) 16%, transparent);
+}
+.glyph.spin {
+  animation: turn 2.4s linear infinite;
+}
+@keyframes turn {
+  to {
+    transform: rotate(360deg);
+  }
 }
 .glyph.ok {
   color: var(--paper);

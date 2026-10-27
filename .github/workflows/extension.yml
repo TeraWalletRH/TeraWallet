@@ -6,6 +6,7 @@ on:
       - "extension/**"
       - "public/tera/core/**"
       - "android/src/crypto.ts"
+      - "android/src/handoff.ts"
       - "android/src/kdf.web.ts"
       - "android/src/config.ts"
       - "android/src/policy.ts"
