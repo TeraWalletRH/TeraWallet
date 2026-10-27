@@ -4,7 +4,7 @@ The Tera wallet as a browser extension: a wallet in the toolbar, and one
 that sites on Robinhood Chain can find (`window.ethereum` and EIP-6963) and
 ask to connect, with the owner deciding.
 
-**This version (0.9) is the wallet in the popup, with swaps and staking,
+**This version (0.10) is the wallet in the popup, with swaps and staking,
 and a new setup.** Installing Tera opens a welcome tab (`welcome.html`,
 `src/welcome.ts`), and so does the popup until there's a wallet: Chrome
 closes the popup whenever it loses focus, which is every time someone
@@ -26,6 +26,17 @@ switches to the note their phrase is in.
   boxes; paste the whole phrase into the first and it fills them, numbering
   and all; misspelt words show in red) or a private key. Either shows the
   wallet's address once it's valid, before anything is stored.
+- **Ledger** keeps the key on the device (`src/ledger.ts`,
+  `core/ledger-apdu.js`). Chrome's picker grants the Ledger once, then the
+  background worker talks to it over WebHID (Chrome 117+): it lists the
+  first five accounts (Ledger Live or standard paths), and the one picked is
+  shown on the device's screen to confirm. Every send, signature, swap and
+  staking request is approved on the Ledger instead of with a password, and
+  every signature it returns is checked to recover to the wallet's address
+  before it's used, so a different Ledger or a garbled answer is refused.
+  The protocol is written out here rather than taken from Ledger's
+  libraries, and tested against a stand-in Ledger that signs with a real
+  key (`tests/ledger.test.ts`).
 - **Watch an address** follows any wallet with no key at all
   (`vault.ts` WatchVault): balances, activity and Receive work, and sites
   can connect (no password, since there's nothing to unlock) to read it.

@@ -15,7 +15,15 @@ export type SealedVault = { v: 1; kdf: number; salt: string; box: Box; address: 
  * activity read as usual; anything that needs the key is refused.
  */
 export type WatchVault = { v: 1; watch: true; address: string };
-export type Vault = SealedVault | WatchVault;
+/**
+ * A wallet on a Ledger: its address and derivation path. The key stays on
+ * the device; ledger.ts signs there, and nothing here needs a password.
+ */
+export type LedgerVault = { v: 1; ledger: true; address: string; path: string };
+export type Vault = SealedVault | WatchVault | LedgerVault;
+
+export const isLedger = (vault: Vault | null | undefined): vault is LedgerVault =>
+  Boolean(vault && "ledger" in vault && vault.ledger);
 
 export const isWatch = (vault: Vault | null | undefined): vault is WatchVault =>
   Boolean(vault && "watch" in vault && vault.watch);
@@ -55,7 +63,7 @@ export async function createVault(secret: string, password: string): Promise<Sea
  * address; otherwise null. Callers use it at once and keep no copy.
  */
 export async function openSecret(vault: Vault, password: string): Promise<string | null> {
-  if (isWatch(vault)) return null;
+  if (isWatch(vault) || isLedger(vault)) return null;
   try {
     const key = await passwordKey(password, unhex(vault.salt), vault.kdf);
     const secret = open(key, vault.box);

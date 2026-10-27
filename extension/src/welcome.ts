@@ -29,6 +29,7 @@ import {
   passwordStrength,
   phraseWords,
 } from "../../public/tera/core/onboarding.js";
+import { allowLedger, NO_LEDGER } from "./ledger";
 import { ask, errorBox, h, short, themePicker } from "./ui";
 
 /** Where a new wallet is made: the web wallet, which hands it back (android/src/handoff.ts). */
@@ -37,7 +38,16 @@ const TERMS_URL = "https://www.terawallet.app/legal/terms-of-service/";
 const PRIVACY_URL = "https://www.terawallet.app/legal/privacy-policy/";
 
 type Step =
-  "welcome" | "create" | "import" | "phrase" | "key" | "watch" | "password" | "done" | "ready";
+  | "welcome"
+  | "create"
+  | "import"
+  | "phrase"
+  | "key"
+  | "watch"
+  | "ledger"
+  | "password"
+  | "done"
+  | "ready";
 
 const root = document.getElementById("root")!;
 const WORDS = new Set(wordlist);
@@ -56,6 +66,10 @@ let inviteKey: CryptoKey | null = null;
 let handoffError = "";
 /** The wallet set up here is watch-only (vault.ts WatchVault). */
 let watching = false;
+/** The wallet set up here is on a Ledger. */
+let onLedger = false;
+let ledgerScheme: "live" | "standard" = "live";
+let ledgerList: { path: string; address: string }[] = [];
 
 function go(next: Step) {
   if (next === "welcome" || next === "import" || next === "create") secret = "";
@@ -259,6 +273,10 @@ function importChoice() {
           kind = "key";
           from = "key";
           go("key");
+        }),
+        option("⎔", "Ledger", "Your key stays on the device", () => {
+          ledgerList = [];
+          go("ledger");
         }),
         option("◉", "Watch an address", "See balances and activity, without a key", () =>
           go("watch"),
@@ -483,6 +501,107 @@ function key() {
   ];
 }
 
+function ledger() {
+  const status = h("div", { class: "status" });
+  const list = h("div", { class: "options" });
+  const connect = h(
+    "button",
+    { class: "primary big", type: "button" },
+    ledgerList.length ? "Look again" : "Connect Ledger",
+  ) as HTMLButtonElement;
+
+  const pick = async (account: { path: string; address: string }) => {
+    status.replaceChildren(
+      h("p", { class: "note" }, "Check the address on your Ledger's screen and approve it there."),
+    );
+    for (const b of list.querySelectorAll("button")) (b as HTMLButtonElement).disabled = true;
+    const answer = await ask({ type: "wallet:ledger", ...account });
+    if (answer?.error) {
+      for (const b of list.querySelectorAll("button")) (b as HTMLButtonElement).disabled = false;
+      return status.replaceChildren(errorBox(answer.error));
+    }
+    address = answer.address;
+    onLedger = true;
+    go("done");
+  };
+
+  const drawList = () =>
+    list.replaceChildren(
+      ...ledgerList.map((account, i) =>
+        option(
+          String(i + 1),
+          short(account.address),
+          `Account ${i + 1} · ${account.path}`,
+          () => void pick(account),
+        ),
+      ),
+    );
+  drawList();
+
+  connect.addEventListener("click", async () => {
+    status.replaceChildren();
+    connect.disabled = true;
+    connect.textContent = "Looking for your Ledger…";
+    try {
+      // The click is what lets Chrome show its device picker the first time.
+      if (!(await allowLedger())) throw new Error(NO_LEDGER);
+      const answer = await ask({ type: "ledger:accounts", scheme: ledgerScheme });
+      if (answer?.error) throw new Error(answer.error);
+      ledgerList = answer.accounts;
+      drawList();
+    } catch (error) {
+      status.replaceChildren(errorBox(String((error as Error).message || error)));
+    }
+    connect.disabled = false;
+    connect.textContent = ledgerList.length ? "Look again" : "Connect Ledger";
+  });
+
+  return [
+    topBar("import", 2),
+    panel(
+      h("div", { class: "glyph", "aria-hidden": "true" }, "⎔"),
+      h("h1", {}, "Connect your Ledger"),
+      h(
+        "p",
+        { class: "lede" },
+        "Plug it in, unlock it and open the Ethereum app. Tera reads your addresses; every send and signature is approved on the Ledger, and the key never leaves it.",
+      ),
+      h(
+        "div",
+        { class: "row between" },
+        h(
+          "div",
+          { class: "segmented", role: "group", "aria-label": "Accounts" },
+          ...(["live", "standard"] as const).map((scheme) =>
+            h(
+              "button",
+              {
+                type: "button",
+                class: ledgerScheme === scheme ? "on" : "",
+                "aria-pressed": String(ledgerScheme === scheme),
+                onclick: () => {
+                  ledgerScheme = scheme;
+                  ledgerList = [];
+                  go("ledger");
+                },
+              },
+              scheme === "live" ? "Ledger Live" : "Standard",
+            ),
+          ),
+        ),
+      ),
+      list,
+      status,
+      connect,
+      h(
+        "p",
+        { class: "fine" },
+        "Swaps and contract calls may need Blind signing turned on in the Ethereum app's settings.",
+      ),
+    ),
+  ];
+}
+
 function watch() {
   const status = h("div", { class: "status" });
   const next = h(
@@ -680,7 +799,9 @@ function done(again = false) {
         ? "This browser has a wallet: "
         : watching
           ? "Tera is watching "
-          : "Your wallet is ready in this browser: ",
+          : onLedger
+            ? "Your Ledger wallet is ready: "
+            : "Your wallet is ready in this browser: ",
       h("span", { class: "mono", title: address }, short(address)),
     ),
     pin,
@@ -712,13 +833,15 @@ function draw() {
             ? key()
             : step === "watch"
               ? watch()
-              : step === "password"
-                ? password()
-                : step === "done"
-                  ? done()
-                  : step === "ready"
-                    ? done(true)
-                    : welcome();
+              : step === "ledger"
+                ? ledger()
+                : step === "password"
+                  ? password()
+                  : step === "done"
+                    ? done()
+                    : step === "ready"
+                      ? done(true)
+                      : welcome();
   root.replaceChildren(...(Array.isArray(body) ? body : [body]));
 }
 

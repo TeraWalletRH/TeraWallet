@@ -71,8 +71,10 @@ import {
 import { isSlippageBps } from "../../public/tera/core/slippage.js";
 import { policyFor } from "../../android/src/policy";
 import { proposalVerdicts, verifyProposal } from "../../android/src/proposals";
+import { ledgerAccount, ledgerAccounts, ledgerAddress, type LedgerAccount } from "./ledger";
 import {
   createVault,
+  isLedger,
   isWatch,
   openSecret,
   signer,
@@ -470,6 +472,19 @@ async function tryPassword(
   };
 }
 
+/** What signs: the key opened with the password, or the Ledger, which needs none. */
+type Account = ReturnType<typeof signer> | LedgerAccount;
+
+async function unlock(
+  password: string,
+): Promise<{ ok: true; vault: Vault; account: Account } | { ok: false; error: string }> {
+  const { vault } = await load();
+  if (isLedger(vault))
+    return { ok: true, vault, account: ledgerAccount(vault.path, vault.address) };
+  const tried = await tryPassword(password);
+  return tried.ok ? { ok: true, vault: tried.vault, account: signer(tried.secret) } : tried;
+}
+
 // ------------------------------------------------------- extension pages ----
 
 // The web wallet handing over a wallet it just made (android/src/handoff.ts).
@@ -523,6 +538,8 @@ type PageMessage = {
   id?: string;
   secret?: unknown;
   address?: unknown;
+  path?: unknown;
+  scheme?: unknown;
   password?: unknown;
   origin?: unknown;
   asset?: unknown;
@@ -551,6 +568,7 @@ async function page(message: PageMessage) {
       return {
         address: vault?.address ?? null,
         watch: isWatch(vault),
+        ledger: isLedger(vault),
         sites: listSites(sites),
         signatures: ((signatures as { items?: unknown[] } | undefined)?.items ?? []).slice(0, 10),
         transactions: (await refreshSent()).slice(0, 10),
@@ -570,9 +588,37 @@ async function page(message: PageMessage) {
       await chrome.storage.local.set({ vault, failures: 0, failedAt: 0 });
       return { address: vault.address };
     }
+    case "ledger:accounts": {
+      try {
+        const scheme = message.scheme === "standard" ? "standard" : "live";
+        return { accounts: await ledgerAccounts(scheme, 5) };
+      } catch (error) {
+        return { error: String((error as Error).message || error) };
+      }
+    }
+    case "wallet:ledger": {
+      if ((await load()).vault)
+        return { error: "This browser already has a wallet. Remove it first." };
+      const path = String(message.path ?? "");
+      try {
+        // Read again from the device, and shown on its screen to confirm.
+        const address = await ledgerAddress(path, true);
+        if (address.toLowerCase() !== String(message.address ?? "").toLowerCase())
+          return { error: "The Ledger gave a different address. Try again." };
+        await chrome.storage.local.set({
+          vault: { v: 1, ledger: true, address, path },
+          failures: 0,
+          failedAt: 0,
+        });
+        return { address };
+      } catch (error) {
+        return { error: String((error as Error).message || error) };
+      }
+    }
     case "wallet:remove": {
-      // A watched wallet has no password: there's nothing in it to protect.
-      if (!isWatch((await load()).vault)) {
+      // A watched wallet has no password, nor does a Ledger's: the key isn't here.
+      const held = (await load()).vault;
+      if (!isWatch(held) && !isLedger(held)) {
         const tried = await tryPassword(String(message.password ?? ""));
         if (!tried.ok) return { error: tried.error };
       }
@@ -618,9 +664,14 @@ async function page(message: PageMessage) {
         return { expired: true };
       return exclusively(id, approval, async () => {
         const request = approval.request as StakeSignRequest;
-        const tried = await tryPassword(String(message.password ?? ""));
+        const tried = await unlock(String(message.password ?? ""));
         if (!tried.ok) return { error: tried.error };
-        const signature = await signer(tried.secret).signMessage({ message: request.message });
+        let signature: string;
+        try {
+          signature = await tried.account.signMessage({ message: request.message });
+        } catch (error) {
+          return { error: String((error as Error).message || error) };
+        }
         try {
           await api(request.submit.path, { ...request.submit.body, signature });
         } catch (error) {
@@ -639,6 +690,7 @@ async function page(message: PageMessage) {
         origin: approval.origin,
         address: vault?.address ?? null,
         watch: isWatch(vault),
+        ledger: isLedger(vault),
         request: approval.request,
       };
     }
@@ -648,7 +700,7 @@ async function page(message: PageMessage) {
       // Connecting a watched wallet shares only its address, so no password.
       const { vault } = await load();
       let accounts: string[];
-      if (isWatch(vault)) accounts = [vault.address];
+      if (isWatch(vault) || isLedger(vault)) accounts = [vault.address];
       else {
         const tried = await tryPassword(String(message.password ?? ""));
         if (!tried.ok) return { error: tried.error };
@@ -670,10 +722,15 @@ async function page(message: PageMessage) {
           finish(id, undefined, rpcError(ERRORS.unauthorized, "The site was disconnected."));
           return { expired: true };
         }
-        const tried = await tryPassword(String(message.password ?? ""));
+        const tried = await unlock(String(message.password ?? ""));
         if (!tried.ok) return { error: tried.error };
         const request = approval.request as SignRequest;
-        const signature = await sign(tried.secret, request);
+        let signature: string;
+        try {
+          signature = await sign(tried.account, request);
+        } catch (error) {
+          return { error: String((error as Error).message || error) };
+        }
         await logSignature(approval.origin, request, signature);
         finish(id, signature);
         return { ok: true };
@@ -704,9 +761,9 @@ async function page(message: PageMessage) {
             };
           request = fresh;
         }
-        const tried = await tryPassword(String(message.password ?? ""));
+        const tried = await unlock(String(message.password ?? ""));
         if (!tried.ok) return { error: tried.error };
-        const outcome = await send(tried.secret, approval.origin, request);
+        const outcome = await send(tried.account, approval.origin, request);
         if (outcome.hash && request.stake) await rememberStake(request.stake, outcome.hash);
         if (outcome.hash) finish(id, outcome.hash);
         else finish(id, undefined, outcome.error);
@@ -723,8 +780,7 @@ async function page(message: PageMessage) {
 
 // ------------------------------------------------------------- signing ----
 
-async function sign(secret: string, request: SignRequest): Promise<string> {
-  const account = signer(secret);
+async function sign(account: Account, request: SignRequest): Promise<string> {
   if (request.kind === "message")
     return account.signMessage({ message: request.sign as string | { raw: `0x${string}` } });
   const { domain, types, primaryType, message } = request.typed as {
@@ -734,9 +790,9 @@ async function sign(secret: string, request: SignRequest): Promise<string> {
     message: Record<string, unknown>;
   };
   // The site's own EIP712Domain type is used when it sends one, as the spec says.
-  return account.signTypedData({ domain, types, primaryType, message } as Parameters<
-    typeof account.signTypedData
-  >[0]);
+  // Both signers take the same { domain, types, primaryType, message }.
+  const signTyped = account.signTypedData as (data: unknown) => Promise<string>;
+  return signTyped({ domain, types, primaryType, message });
 }
 
 // The signature log (core/signature-log.js): a record on this computer of
@@ -884,24 +940,30 @@ const maxFee = (request: SendRequest) =>
 
 /** Sign, record, broadcast once. Never retried: a node may have accepted it. */
 async function send(
-  secret: string,
+  account: Account,
   origin: string,
   request: SendRequest,
 ): Promise<{ hash?: string; error?: RpcErr }> {
   const { tx, fee, described } = request;
   if (!fee) return { error: rpcError(ERRORS.internal, "No fee was prepared.") };
   const nonce = Number(BigInt(await node("eth_getTransactionCount", [tx.from, "pending"])));
-  const serialized = await signer(secret).signTransaction({
-    type: "eip1559",
-    chainId: CHAIN_ID,
-    nonce,
-    to: tx.to as `0x${string}`,
-    value: BigInt(tx.value),
-    data: tx.data as `0x${string}`,
-    gas: BigInt(fee.gas),
-    maxFeePerGas: BigInt(fee.maxFeePerGas),
-    maxPriorityFeePerGas: BigInt(fee.maxPriorityFeePerGas),
-  });
+  let serialized: `0x${string}`;
+  try {
+    serialized = (await account.signTransaction({
+      type: "eip1559",
+      chainId: CHAIN_ID,
+      nonce,
+      to: tx.to as `0x${string}`,
+      value: BigInt(tx.value),
+      data: tx.data as `0x${string}`,
+      gas: BigInt(fee.gas),
+      maxFeePerGas: BigInt(fee.maxFeePerGas),
+      maxPriorityFeePerGas: BigInt(fee.maxPriorityFeePerGas),
+    })) as `0x${string}`;
+  } catch (error) {
+    // Nothing was signed (a Ledger said no, or wasn't there): nothing to record.
+    return { error: rpcError(ERRORS.rejected, String((error as Error).message || error)) };
+  }
   const hash = keccak256(serialized);
   const recipient = described.rows.find(([label]) => label === "To")?.[1] ?? tx.to;
   // The hash is written down before the broadcast, so an uncertain send can
@@ -1266,7 +1328,7 @@ async function runSwap(id: string, approval: Approval, message: PageMessage) {
       error: "The quote expired, so here's a fresh one. Check the numbers and confirm again.",
     };
   }
-  const tried = await tryPassword(String(message.password ?? ""));
+  const tried = await unlock(String(message.password ?? ""));
   if (!tried.ok) return { error: tried.error };
   // Checked again at the moment of signing: the quote's age and every byte.
   try {
@@ -1301,7 +1363,7 @@ async function runSwap(id: string, approval: Approval, message: PageMessage) {
       ...prepared.described,
       title: last ? request.review.title : `Approval for swap: ${request.labels[index]}`,
     };
-    const outcome = await send(tried.secret, OWN, prepared);
+    const outcome = await send(tried.account, OWN, prepared);
     if (!outcome.hash) {
       approval.request = { ...request, progress: undefined };
       finish(id, undefined, outcome.error);

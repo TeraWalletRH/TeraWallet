@@ -47,6 +47,8 @@ type State = {
   address: string | null;
   /** Watch-only: an address with no key (vault.ts WatchVault). */
   watch?: boolean;
+  /** On a Ledger: approved on the device, never with a password. */
+  ledger?: boolean;
   sites: { origin: string; connectedAt: number }[];
   signatures: Signed[];
   transactions: Sent[];
@@ -285,6 +287,7 @@ function homeView() {
         { class: "row" },
         h("span", { class: "mono grow", title: state.address! }, short(state.address!)),
         state.watch ? h("span", { class: "badge" }, "Watching") : null,
+        state.ledger ? h("span", { class: "badge" }, "Ledger") : null,
         copyButton(state.address!),
       ),
       state.watch
@@ -503,7 +506,7 @@ function sendView() {
     h(
       "p",
       { class: "muted small" },
-      "Robinhood Chain only. You'll see exactly what's sent, and the fee, before you confirm with your password.",
+      `Robinhood Chain only. You'll see exactly what's sent, and the fee, before you ${state.ledger ? "approve it on your Ledger" : "confirm with your password"}.`,
     ),
   ];
 }
@@ -1114,7 +1117,9 @@ function settingsView() {
     h(
       "p",
       { class: "note" },
-      "Tera never stays unlocked: every transaction and signature asks for your password, and the key is opened only for that one step.",
+      state.ledger
+        ? "Every transaction and signature is approved on your Ledger. The key never leaves it."
+        : "Tera never stays unlocked: every transaction and signature asks for your password, and the key is opened only for that one step.",
     ),
     removeSection(state.address!),
     h(
@@ -1139,6 +1144,7 @@ function removeSection(address: string) {
         }) as HTMLInputElement;
         const status = h("div");
         const watch = Boolean(state.watch);
+        const keyless = watch || Boolean(state.ledger);
         box.replaceChildren(
           h(
             "form",
@@ -1161,7 +1167,7 @@ function removeSection(address: string) {
                 ? `Stops watching ${short(address)} and removes every site connection from this browser.`
                 : `Removes ${short(address)} and every site connection from this browser. Your funds stay on chain; your recovery phrase brings them back anywhere.`,
             ),
-            watch ? null : h("label", {}, "Password", password),
+            keyless ? null : h("label", {}, "Password", password),
             status,
             h(
               "div",

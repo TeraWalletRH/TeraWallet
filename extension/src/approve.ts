@@ -3,6 +3,7 @@
 // sees who is asking and exactly what it does, in words, and approves with
 // their password.
 
+import { allowLedger, NO_LEDGER } from "./ledger";
 import { ask, errorBox, h, header, setupPrompt, short } from "./ui";
 import { originLabel } from "./shared";
 import { knownName, depositWarning, LABEL_NOTE } from "../../public/tera/core/address-labels.js";
@@ -50,10 +51,13 @@ type Approval = {
   origin?: string;
   address?: string | null;
   watch?: boolean;
+  ledger?: boolean;
   request?: SignRequest | SendRequest | SwapRequest | StakeSignRequest;
 };
 
 const root = document.getElementById("root")!;
+/** The wallet is on a Ledger: every request is approved there, not with a password. */
+let onLedger = false;
 const id = new URLSearchParams(location.search).get("id") || "";
 
 // The background worker sleeps when idle; while the owner decides, this
@@ -71,6 +75,7 @@ async function render(notice?: string) {
     );
     return;
   }
+  onLedger = Boolean(approval.ledger);
   if (!approval.address) {
     root.replaceChildren(header(), setupPrompt(render));
     return;
@@ -153,7 +158,12 @@ function decide(
     autocomplete: "current-password",
   }) as HTMLInputElement;
   const status = h("div");
-  const go = h("button", { class: "primary", type: "submit" }, label) as HTMLButtonElement;
+  const ledger = onLedger && !options.noPassword && type !== "approval:connect";
+  const go = h(
+    "button",
+    { class: "primary", type: "submit" },
+    ledger ? `${label} on Ledger` : label,
+  ) as HTMLButtonElement;
   if (gate) {
     go.disabled = true;
     gate.addEventListener("change", () => (go.disabled = !gate.checked));
@@ -167,6 +177,23 @@ function decide(
         if (gate && !gate.checked) return;
         status.replaceChildren();
         go.disabled = true;
+        if (ledger) {
+          // This click is what lets Chrome offer the Ledger, if it was never granted here.
+          try {
+            if (!(await allowLedger())) throw new Error(NO_LEDGER);
+          } catch (error) {
+            go.disabled = false;
+            return status.append(errorBox(String((error as Error).message || error)));
+          }
+          go.textContent = "Check your Ledger…";
+          status.append(
+            h(
+              "p",
+              { class: "note" },
+              "Check the details on your Ledger's screen, then approve there.",
+            ),
+          );
+        }
         // A swap's steps take a while; the window shows which one is going out.
         const { progress } = options;
         const watch = progress
@@ -180,6 +207,10 @@ function decide(
         if (watch) clearInterval(watch);
         progress?.replaceChildren();
         go.disabled = false;
+        if (ledger) {
+          go.textContent = `${label} on Ledger`;
+          status.replaceChildren();
+        }
         if (answer?.expired) return render();
         // The chain was read again and the numbers changed: shown afresh.
         if (answer?.refreshed) return render(answer.error);
@@ -190,7 +221,15 @@ function decide(
         window.close();
       },
     },
-    options.noPassword ? null : h("label", {}, "Password", password),
+    options.noPassword || onLedger
+      ? onLedger && !options.noPassword && type !== "approval:connect"
+        ? h(
+            "p",
+            { class: "muted small" },
+            "Connect your Ledger, unlock it and open the Ethereum app.",
+          )
+        : null
+      : h("label", {}, "Password", password),
     status,
     h(
       "div",
