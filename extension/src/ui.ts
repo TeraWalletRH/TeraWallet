@@ -1,7 +1,10 @@
 // What the popup and the approval window share: a tiny element builder, the
-// call to the background worker, and the way in before there's a wallet.
+// call to the background worker, the way in before there's a wallet, and
+// the theme picker.
 // Plain DOM: the extension's pages are small, and Chrome's extension CSP
 // allows no inline script, which plain DOM never needs.
+
+import { THEMES, currentTheme, setTheme, type Theme } from "./theme";
 
 type Child = Node | string | null | undefined | false;
 type Props = Record<string, unknown>;
@@ -77,4 +80,57 @@ export function setupPrompt(done: () => void) {
       "I already have a wallet",
     ),
   );
+}
+
+const THEME_NAMES: Record<Theme, string> = {
+  system: "System",
+  light: "Light",
+  dark: "Dark",
+  black: "Black",
+};
+
+/** The four looks side by side, each with a little preview; picking one applies it at once. */
+export function themePicker() {
+  const row = h("div", { class: "themes", role: "radiogroup", "aria-label": "Theme" });
+  const draw = () =>
+    row.replaceChildren(
+      ...THEMES.map((theme) =>
+        h(
+          "button",
+          {
+            type: "button",
+            role: "radio",
+            "aria-checked": String(currentTheme() === theme),
+            class: currentTheme() === theme ? "on" : "",
+            onclick: () => {
+              setTheme(theme);
+              draw();
+            },
+          },
+          h("span", { class: `swatch ${theme}`, "aria-hidden": "true" }),
+          THEME_NAMES[theme],
+        ),
+      ),
+    );
+  draw();
+  return row;
+}
+
+const ICONS: Record<string, string> = {
+  send: "M7 17 17 7M9 7h8v8",
+  receive: "M17 7 7 17M15 17H7V9",
+  swap: "M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7",
+  stake: "m12 3 9 5-9 5-9-5 9-5ZM3 13l9 5 9-5",
+};
+
+/** A small line icon, drawn in the text colour. */
+export function icon(name: keyof typeof ICONS) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("class", "icon");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", ICONS[name]);
+  svg.append(path);
+  return svg;
 }

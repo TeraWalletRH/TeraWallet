@@ -4,7 +4,7 @@ The Tera wallet as a browser extension: a wallet in the toolbar, and one
 that sites on Robinhood Chain can find (`window.ethereum` and EIP-6963) and
 ask to connect, with the owner deciding.
 
-**This version (0.7) is the wallet in the popup, with swaps and staking,
+**This version (0.8) is the wallet in the popup, with swaps and staking,
 and a new setup.** Installing Tera opens a welcome tab (`welcome.html`,
 `src/welcome.ts`), and so does the popup until there's a wallet: Chrome
 closes the popup whenever it loses focus, which is every time someone
@@ -33,6 +33,13 @@ switches to the note their phrase is in.
 
 The secret stays in the welcome tab's memory between the step it's typed in
 and the password step, which hands it to the background worker to seal.
+
+**The look.** Settings → Appearance (and the last setup step) picks System,
+Light, Dark or Black (true black, for OLED screens). `src/theme.ts` runs in
+each page's `<head>` before it paints, so nothing flashes the wrong colours,
+and a change reaches every open Tera page at once. Buttons and type follow
+the app: the mark's gold-to-copper gradient for the main action, and Plus
+Jakarta Sans (SIL OFL), shipped inside the extension.
 
 Click the toolbar icon:
 

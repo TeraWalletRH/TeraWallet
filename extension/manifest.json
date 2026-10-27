@@ -3,7 +3,7 @@
   "name": "Tera Wallet",
   "short_name": "Tera",
   "description": "The Tera wallet for Robinhood Chain, in your browser. Connect to sites without handing them anything you didn't approve.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "minimum_chrome_version": "116",
   "icons": {
     "16": "icons/icon-16.png",

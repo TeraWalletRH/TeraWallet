@@ -39,6 +39,8 @@ const entries: [string, "iife" | "esm"][] = [
   ["popup", "esm"],
   ["approve", "esm"],
   ["welcome", "esm"],
+  // In each page's <head>, before the page paints: a plain script, not a module.
+  ["theme", "iife"],
 ];
 
 for (const [name, format] of entries) {
@@ -84,6 +86,15 @@ for (const file of [
   "icons",
 ])
   await cp(join(src, file), join(out, file), { recursive: true });
+
+// The app's typeface, Plus Jakarta Sans (SIL OFL), shipped with the extension.
+await mkdir(join(out, "fonts"), { recursive: true });
+for (const weight of ["Regular", "Medium", "SemiBold", "Bold", "ExtraBold"])
+  await cp(
+    join(root, `android/assets/fonts/PlusJakartaSans-${weight}.ttf`),
+    join(out, `fonts/PlusJakartaSans-${weight}.ttf`),
+  );
+await cp(join(root, "android/assets/fonts/OFL.txt"), join(out, "fonts/OFL.txt"));
 
 const manifest = JSON.parse(await readFile(join(src, "manifest.json"), "utf8"));
 // A test build says so wherever Chrome shows its name, and CI refuses to

@@ -30,7 +30,7 @@ import {
 import { FIXED_TERMS, fixedReward } from "../../public/tera/core/staking.js";
 import { swapPair, tradable } from "../../public/tera/core/wallet-swap.js";
 import { originLabel } from "./shared";
-import { ask, errorBox, h, header, setupPrompt, short } from "./ui";
+import { ask, errorBox, h, header, icon, setupPrompt, short, themePicker } from "./ui";
 
 const root = document.getElementById("root")!;
 
@@ -238,22 +238,39 @@ function homeView() {
       h(
         "div",
         { class: "actions" },
-        h("button", { class: "primary", type: "button", onclick: () => go("send") }, "Send"),
-        h("button", { type: "button", onclick: () => go("receive") }, "Receive"),
+        h(
+          "button",
+          { class: "primary act", type: "button", onclick: () => go("send") },
+          icon("send"),
+          "Send",
+        ),
+        h(
+          "button",
+          { class: "act", type: "button", onclick: () => go("receive") },
+          icon("receive"),
+          "Receive",
+        ),
       ),
       h(
         "div",
         { class: "actions" },
-        h("button", { type: "button", onclick: () => go("swap") }, "Swap"),
+        h(
+          "button",
+          { class: "act", type: "button", onclick: () => go("swap") },
+          icon("swap"),
+          "Swap",
+        ),
         h(
           "button",
           {
+            class: "act",
             type: "button",
             onclick: () => {
               stakeState = null;
               go("stake");
             },
           },
+          icon("stake"),
           "Stake",
         ),
       ),
@@ -1060,6 +1077,7 @@ function settingsView() {
         "No sites connected. When a site asks, Tera opens a window so you can decide.",
       );
   return [
+    h("section", { class: "card" }, h("strong", {}, "Appearance"), themePicker()),
     h(
       "section",
       { class: "card" },

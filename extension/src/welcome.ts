@@ -29,7 +29,7 @@ import {
   passwordStrength,
   phraseWords,
 } from "../../public/tera/core/onboarding.js";
-import { ask, errorBox, h, short } from "./ui";
+import { ask, errorBox, h, short, themePicker } from "./ui";
 
 /** Where a new wallet is made: the web wallet, which hands it back (android/src/handoff.ts). */
 const CREATE_URL = `${__TERA_WEB__}/app`;
@@ -619,6 +619,7 @@ function done(again = false) {
       h("span", { class: "mono", title: address }, short(address)),
     ),
     pin,
+    h("div", { class: "look" }, h("strong", {}, "Pick a look"), themePicker()),
     h(
       "div",
       { class: "choices" },

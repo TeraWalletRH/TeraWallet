@@ -1,37 +1,110 @@
-/* Tera's palette (android/src/ui.tsx), dark by default, light when the system is. */
+/* Tera's palette (android/src/ui.tsx). The look follows the computer unless
+   the owner picked one in Settings (theme.ts sets data-theme on <html>):
+   dark is the default, light when the system is, and black is true black. */
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("fonts/PlusJakartaSans-Regular.ttf") format("truetype");
+  font-weight: 400;
+}
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("fonts/PlusJakartaSans-Medium.ttf") format("truetype");
+  font-weight: 500;
+}
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("fonts/PlusJakartaSans-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+}
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("fonts/PlusJakartaSans-Bold.ttf") format("truetype");
+  font-weight: 700;
+}
+@font-face {
+  font-family: "Plus Jakarta Sans";
+  src: url("fonts/PlusJakartaSans-ExtraBold.ttf") format("truetype");
+  font-weight: 800;
+}
 :root {
   --bg: #171e19;
   --ink: #f5ecd7;
   --muted: #a79a80;
+  --faint: #6e6555;
   --line: #3a3428;
   --wash: #211d19;
   --raised: #2b2620;
   --green: #97a85c;
   --green-hover: #7e8f49;
+  --gold: #d3a44f;
+  --copper: #b4632f;
   --paper: #171e19;
   --danger: #e2604a;
   --danger-tint: #34201b;
   --warn-tint: #362a16;
+  --tint: #22301f;
   --yellow: #e0b24f;
+  --shadow: rgb(0 0 0 / 0.45);
+  --glow: rgb(211 164 79 / 0.35);
   color-scheme: dark;
 }
 @media (prefers-color-scheme: light) {
-  :root {
+  :root:not([data-theme]) {
     --bg: #f6efdd;
     --ink: #2a2117;
     --muted: #83765f;
+    --faint: #a99c82;
     --line: #e3d7ba;
     --wash: #ffffff;
     --raised: #f1e7d0;
     --green: #6c7f3c;
     --green-hover: #5a6931;
-    --paper: #ffffff;
+    --gold: #b98a38;
+    --copper: #93502a;
     --danger: #c1432e;
     --danger-tint: #f8ddd6;
     --warn-tint: #f6e7c4;
+    --tint: #e7edd2;
     --yellow: #a8791f;
+    --shadow: rgb(74 52 20 / 0.18);
+    --glow: rgb(185 138 56 / 0.3);
     color-scheme: light;
   }
+}
+:root[data-theme="light"] {
+  --bg: #f6efdd;
+  --ink: #2a2117;
+  --muted: #83765f;
+  --faint: #a99c82;
+  --line: #e3d7ba;
+  --wash: #ffffff;
+  --raised: #f1e7d0;
+  --green: #6c7f3c;
+  --green-hover: #5a6931;
+  --gold: #b98a38;
+  --copper: #93502a;
+  --danger: #c1432e;
+  --danger-tint: #f8ddd6;
+  --warn-tint: #f6e7c4;
+  --tint: #e7edd2;
+  --yellow: #a8791f;
+  --shadow: rgb(74 52 20 / 0.18);
+  --glow: rgb(185 138 56 / 0.3);
+  color-scheme: light;
+}
+:root[data-theme="black"] {
+  --bg: #000000;
+  --ink: #f5ecd7;
+  --muted: #9b8f77;
+  --faint: #5f5849;
+  --line: #24211c;
+  --wash: #0c0b0a;
+  --raised: #171512;
+  --tint: #141c10;
+  --danger-tint: #261410;
+  --warn-tint: #251c0e;
+  --shadow: rgb(0 0 0 / 0.8);
+  color-scheme: dark;
 }
 * {
   box-sizing: border-box;
@@ -41,14 +114,20 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
+  font:
+    14px/1.45 "Plus Jakarta Sans",
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 body.popup {
   width: 360px;
   min-height: 480px;
 }
 main {
-  padding: 18px 16px 20px;
+  padding: 16px 16px 20px;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -59,23 +138,41 @@ header {
   gap: 10px;
 }
 header img {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  box-shadow: 0 4px 12px -4px var(--glow);
 }
 header strong {
   font-size: 16px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
 }
 header .net {
   margin-left: auto;
-  font-size: 12px;
+  font-size: 11.5px;
+  font-weight: 600;
   color: var(--muted);
+  background: var(--wash);
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 2px 10px;
+  padding: 3px 10px 3px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+header .net::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 25%, transparent);
 }
 h1 {
-  font-size: 19px;
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.015em;
   margin: 4px 0 0;
 }
 p {
@@ -90,11 +187,12 @@ p {
 .card {
   background: var(--wash);
   border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 12px 14px;
+  border-radius: 16px;
+  padding: 13px 14px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  box-shadow: 0 1px 0 color-mix(in srgb, var(--ink) 4%, transparent) inset;
 }
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -102,7 +200,7 @@ p {
   word-break: break-all;
 }
 .site {
-  font-weight: 600;
+  font-weight: 700;
   font-size: 15px;
   word-break: break-all;
 }
@@ -111,6 +209,7 @@ label {
   flex-direction: column;
   gap: 6px;
   font-size: 13px;
+  font-weight: 500;
   color: var(--muted);
 }
 input,
@@ -118,10 +217,22 @@ textarea {
   font: inherit;
   color: var(--ink);
   background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 11px 13px;
   width: 100%;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--faint);
+}
+input:hover,
+textarea:hover {
+  border-color: var(--line);
 }
 textarea {
   min-height: 84px;
@@ -129,42 +240,100 @@ textarea {
 }
 input:focus-visible,
 textarea:focus-visible,
-button:focus-visible {
+select:focus-visible {
+  outline: none;
+  border-color: var(--green);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--green) 22%, transparent);
+}
+button:focus-visible,
+a:focus-visible {
   outline: 2px solid var(--green);
   outline-offset: 2px;
 }
 button {
   font: inherit;
-  font-weight: 600;
+  font-weight: 700;
+  letter-spacing: 0.005em;
   border-radius: 999px;
   border: 1px solid var(--line);
-  background: transparent;
+  background: var(--wash);
   color: var(--ink);
   padding: 10px 16px;
   cursor: pointer;
+  transition:
+    transform 0.12s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease,
+    border-color 0.15s ease,
+    filter 0.15s ease;
 }
+button:not(:disabled):hover {
+  border-color: color-mix(in srgb, var(--ink) 22%, var(--line));
+}
+button:not(:disabled):active {
+  transform: scale(0.97);
+}
+/* The app's primary: the mark's own gold-to-copper fold, lit from above. */
 button.primary {
-  background: var(--green);
-  border-color: var(--green);
+  position: relative;
+  border: 0;
   color: var(--paper);
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.18), rgb(255 255 255 / 0) 55%),
+    linear-gradient(135deg, var(--gold), var(--copper));
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.25) inset,
+    0 8px 20px -10px var(--glow),
+    0 2px 6px -2px var(--shadow);
 }
-button.primary:hover {
-  background: var(--green-hover);
+button.primary:not(:disabled):hover {
+  filter: brightness(1.06) saturate(1.05);
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.25) inset,
+    0 12px 26px -10px var(--glow),
+    0 2px 6px -2px var(--shadow);
 }
 button.link {
   border: 0;
+  background: none;
   padding: 4px 0;
   color: var(--muted);
-  font-weight: 500;
+  font-weight: 600;
   text-decoration: underline;
+  text-underline-offset: 3px;
+}
+button.link:not(:disabled):hover {
+  color: var(--ink);
 }
 button.small {
-  padding: 5px 12px;
+  padding: 6px 13px;
   font-size: 12.5px;
 }
+button.act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 11px 14px;
+}
+button.act:not(.primary) {
+  background: var(--raised);
+  border-color: transparent;
+}
+svg.icon {
+  width: 17px;
+  height: 17px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
 button:disabled {
-  opacity: 0.55;
+  opacity: 0.45;
   cursor: default;
+  box-shadow: none;
 }
 .row {
   display: flex;
@@ -340,25 +509,31 @@ a.tx:hover .title {
 }
 nav.tabs {
   display: flex;
-  gap: 4px;
+  gap: 2px;
   background: var(--wash);
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 3px;
+  padding: 4px;
 }
 nav.tabs button {
   flex: 1;
   border: 0;
-  padding: 6px 8px;
-  font-size: 13px;
+  background: none;
+  padding: 7px 6px;
+  font-size: 12.5px;
   color: var(--muted);
+}
+nav.tabs button:not(:disabled):hover {
+  color: var(--ink);
 }
 nav.tabs button.on {
   background: var(--raised);
   color: var(--ink);
+  box-shadow: 0 1px 3px var(--shadow);
 }
 .hero .total {
-  font-size: 30px;
+  font-size: 32px;
+  font-weight: 800;
   line-height: 1.15;
   letter-spacing: -0.01em;
 }
@@ -401,14 +576,10 @@ select {
   font: inherit;
   color: var(--ink);
   background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 12px;
+  border: 1px solid transparent;
+  border-radius: 12px;
+  padding: 11px 13px;
   width: 100%;
-}
-select:focus-visible {
-  outline: 2px solid var(--green);
-  outline-offset: 2px;
 }
 .card.center {
   align-items: center;
@@ -447,7 +618,7 @@ ol.steps {
   color: var(--muted);
 }
 .seg button.on {
-  background: var(--green);
+  background: linear-gradient(135deg, var(--gold), var(--copper));
   color: var(--paper);
 }
 /* Before there's a wallet (ui.ts setupPrompt). */
@@ -471,4 +642,58 @@ ol.steps {
 button.big {
   padding: 13px 18px;
   font-size: 15px;
+}
+/* Settings → Appearance, and the last setup step (ui.ts themePicker). */
+.themes {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+.themes button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 4px 7px;
+  border-radius: 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  background: var(--raised);
+  border: 1.5px solid transparent;
+}
+.themes button.on {
+  color: var(--ink);
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px var(--glow);
+}
+.swatch {
+  width: 100%;
+  height: 34px;
+  border-radius: 9px;
+  border: 1px solid rgb(127 127 127 / 0.25);
+  position: relative;
+  overflow: hidden;
+}
+.swatch::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  bottom: 7px;
+  width: 22px;
+  height: 7px;
+  border-radius: 999px;
+  background: linear-gradient(135deg, #d3a44f, #b4632f);
+}
+.swatch.system {
+  background: linear-gradient(135deg, #f6efdd 50%, #171e19 50%);
+}
+.swatch.light {
+  background: #f6efdd;
+}
+.swatch.dark {
+  background: #171e19;
+}
+.swatch.black {
+  background: #000;
 }
