@@ -66,7 +66,17 @@ export async function serveSitePage(pathname: string): Promise<Response> {
     );
   }
 
-  const headers: Record<string, string> = { "content-type": "text/html; charset=utf-8" };
+  const headers: Record<string, string> = {
+    "content-type": "text/html; charset=utf-8",
+    // Never let the browser guess a content type from a response body.
+    "x-content-type-options": "nosniff",
+    // The full URL (which can carry a tag, a referral code, a wallet address
+    // in a share link) is never sent to a site a link on this page opens --
+    // only the origin is, and nothing at all cross-scheme.
+    "referrer-policy": "strict-origin-when-cross-origin",
+    // Nothing on these pages asks for a camera, microphone or location.
+    "permissions-policy": "camera=(), microphone=(), geolocation=()",
+  };
   // /app and the dashboard hold a wallet: limit what they may load and run.
   const surface = found ? surfaceFor(pathname) : null;
   if (surface)
