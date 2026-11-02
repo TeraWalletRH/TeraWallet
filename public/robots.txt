@@ -13,4 +13,4 @@ Allow: /
 User-agent: *
 Allow: /
 
-Sitemap: https://terawallet.app/sitemap.xml
+Sitemap: https://www.terawallet.app/sitemap.xml

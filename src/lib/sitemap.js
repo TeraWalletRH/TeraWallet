@@ -6,7 +6,8 @@
 // to find), the 404 page, anything marked noindex, and pages that only
 // redirect elsewhere.
 
-export const SITE = "https://terawallet.app";
+// The bare domain redirects here, so this is the address search engines keep.
+export const SITE = "https://www.terawallet.app";
 
 const PRIVATE = /^\/(?:admin|dashboard|404)(?:\/|$)/;
 
