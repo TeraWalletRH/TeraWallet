@@ -4466,6 +4466,15 @@ function Wallet() {
     const typed = spendTo.trim();
     const destination = isAddress(typed) ? typed : (await resolveName(typed)).address;
     guard();
+    if (dataRef.current.trustedOnlyMode) {
+      check(
+        isTrustedRecipient(destination, book),
+        t(
+          "Trusted only mode is active. Recipient address must be saved in your contacts.",
+          "受信任模式已启用。收款地址必须保存到联系人中。",
+        ),
+      );
+    }
     const link = spendLink;
     if (link) {
       // Read again: the merchant may have cancelled it, or someone paid it, since it opened.
@@ -4880,6 +4889,15 @@ function Wallet() {
       recipientKind === "tag" ? (await resolveName(recipient)).address : recipient.trim();
     guard();
     check(isAddress(destination), t("Enter a valid recipient address.", "请输入有效收款地址。"));
+    if (dataRef.current.trustedOnlyMode) {
+      check(
+        isTrustedRecipient(destination, book),
+        t(
+          "Trusted only mode is active. Recipient address must be saved in your contacts.",
+          "受信任模式已启用。收款地址必须保存到联系人中。",
+        ),
+      );
+    }
     const spendUsd = paymentUsd(asset, raw, decimals);
     enforceLimits(spendUsd);
     const created = await api("/api/private-send/jobs", {
@@ -4933,6 +4951,15 @@ function Wallet() {
       dest.id === 792703809 ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(destAddr) : isAddress(destAddr),
       t("Enter a valid destination wallet address.", "请输入有效目标钱包地址。"),
     );
+    if (dataRef.current.trustedOnlyMode) {
+      check(
+        isTrustedRecipient(destAddr, book),
+        t(
+          "Trusted only mode is active. Recipient address must be saved in your contacts.",
+          "受信任模式已启用。收款地址必须保存到联系人中。",
+        ),
+      );
+    }
     const raw = units(amount, source.decimals);
     const quoteRes = await api("/api/bridge/private/quote", {
       ownerAddress: owner,
@@ -5005,6 +5032,15 @@ function Wallet() {
       recipient: recipient.trim(),
       amount: units(amount, source.decimals),
     };
+    if (dataRef.current.trustedOnlyMode) {
+      check(
+        isTrustedRecipient(input.recipient, book),
+        t(
+          "Trusted only mode is active. Recipient address must be saved in your contacts.",
+          "受信任模式已启用。收款地址必须保存到联系人中。",
+        ),
+      );
+    }
     const { quote } = await api("/api/bridge/quote", input);
     guard();
     const steps = verifyBridge(quote, input);
@@ -5037,6 +5073,15 @@ function Wallet() {
     try {
       const recipient = recipientText.trim();
       check(isAddress(recipient), t("Enter a valid recipient address.", "请输入有效的收款地址。"));
+      if (dataRef.current.trustedOnlyMode) {
+        check(
+          isTrustedRecipient(recipient, book),
+          t(
+            "Trusted only mode is active. Recipient address must be saved in your contacts.",
+            "受信任模式已启用。收款地址必须保存到联系人中。",
+          ),
+        );
+      }
       const step = nft.transferCall(token, owner, recipient);
       const reviewed = { ...step, chainId: chain.id } as Tx;
       void presentReview({
