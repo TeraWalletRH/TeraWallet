@@ -1,5 +1,6 @@
 // Serves the exported Tera Wallet static pages (src/site/**) at pretty URLs.
 import { policyFor, surfaceFor } from "./csp.js";
+import { listed, pathFor, sitemapXml } from "./sitemap.js";
 
 const pages = import.meta.glob("../site/**/index.html", {
   query: "?raw",
@@ -9,6 +10,25 @@ const pages = import.meta.glob("../site/**/index.html", {
 function keyFor(pathname: string) {
   const clean = pathname.replace(/^\/+|\/+$/g, "");
   return clean ? `../site/${clean}/index.html` : "../site/index.html";
+}
+
+let sitemap: Promise<string> | null = null;
+
+/** /sitemap.xml, built once per server from the pages this file serves. */
+export async function serveSitemap(): Promise<Response> {
+  sitemap ??= Promise.all(
+    Object.entries(pages).map(async ([key, load]) => {
+      const path = pathFor(key);
+      return listed(path, await load()) ? path : null;
+    }),
+  ).then((paths) => sitemapXml(paths.filter((path): path is string => path !== null)));
+  return new Response(await sitemap, {
+    headers: {
+      "content-type": "application/xml; charset=utf-8",
+      "x-content-type-options": "nosniff",
+      "cache-control": "public, max-age=3600",
+    },
+  });
 }
 
 export async function serveSitePage(pathname: string): Promise<Response> {
