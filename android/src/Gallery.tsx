@@ -210,24 +210,29 @@ export function Gallery({
               {selected.metadata.description}
             </Text>
           ) : null}
-          {selectedFloor ? (
+          {selectedFloor || selectedAlerts.length ? (
             <View style={{ gap: 8 }}>
-              <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-                <Text style={s.small}>
-                  {t("Collection floor", "合集地板价")}{" "}
-                  {selectedFloor.usd != null
-                    ? shown(`$${selectedFloor.usd.toLocaleString()}`)
-                    : t("unavailable", "暂不可用")}
-                </Text>
-                <Pressable
-                  accessibilityRole="button"
-                  onPress={() => onSetFloorAlert(selectedContract, selectedFloor.name, selectedFloor.usd)}
-                >
-                  <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
-                    {t("Set floor alert", "设置地板价预警")}
+              {selectedFloor ? (
+                <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
+                  <Text style={s.small}>
+                    {t("Collection floor", "合集地板价")}{" "}
+                    {selectedFloor.usd != null
+                      ? shown(`$${selectedFloor.usd.toLocaleString()}`)
+                      : t("unavailable", "暂不可用")}
                   </Text>
-                </Pressable>
-              </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => onSetFloorAlert(selectedContract, selectedFloor.name, selectedFloor.usd)}
+                  >
+                    <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                      {t("Set floor alert", "设置地板价预警")}
+                    </Text>
+                  </Pressable>
+                </View>
+              ) : null}
+              {/* An existing alert and its Remove button need nothing but
+                  floorAlerts, already in hand -- never hidden behind a live
+                  quote that "No market data" or a failed fetch can withhold. */}
               {selectedAlerts.map((alert) => (
                 <View
                   key={alert.id}
