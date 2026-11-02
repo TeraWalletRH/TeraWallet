@@ -50,6 +50,7 @@ import * as notify from "./src/notify";
 import * as push from "./src/push";
 import * as handoff from "./src/handoff";
 import * as ledgerCore from "./src/ledger";
+import * as mainnetBalance from "./src/mainnet-balance";
 const tagsAvailable = () => tags.tagsAvailable();
 import * as upd from "./src/update";
 import {
@@ -1200,6 +1201,9 @@ function Wallet() {
     // the owner's glance, same as a wallet avatar (storage.ts) -- never a
     // check, since anyone can set any avatar on any name they own.
     [ensAvatar, setEnsAvatar] = useState<string | null>(null),
+    // This same address's native ETH balance on Ethereum mainnet, read-only
+    // and shown only when it's actually nonzero -- web only (src/mainnet-balance.ts).
+    [mainnetEth, setMainnetEth] = useState<string | null>(null),
     // The supervisor leaderboard, read fresh each time the screen opens.
     // Idle until then, loading while in flight, error if the read failed,
     // ready with exactly what the server counted -- an empty board is a
@@ -1308,6 +1312,17 @@ function Wallet() {
     return () => {
       clearInterval(interval);
       subscription.remove();
+    };
+  }, [owner]);
+  useEffect(() => {
+    setMainnetEth(null);
+    if (!owner || Platform.OS !== "web") return;
+    let alive = true;
+    void mainnetBalance.mainnetEthBalance(owner).then((wei) => {
+      if (alive) setMainnetEth(wei);
+    });
+    return () => {
+      alive = false;
     };
   }, [owner]);
   // Reads rotate across public nodes unless the owner turned it off.
@@ -8823,6 +8838,14 @@ function Wallet() {
               </Text>
             </View>
           </View>
+          {mainnetEth && Number(mainnetEth) > 0 ? (
+            <Text style={[s.small, { textAlign: "center" }]}>
+              {t(
+                `This address also holds ${shownValue(`${shortAmount(mainnetEth)} ETH`)} on Ethereum mainnet -- a different network, read-only, not part of your Robinhood Chain balance.`,
+                `此地址在以太坊主网（另一条不同的网络）上还持有 ${shownValue(`${shortAmount(mainnetEth)} ETH`)}，仅供查看，不计入你的 Robinhood Chain 余额。`,
+              )}
+            </Text>
+          ) : null}
           {action("Copy address", "复制地址", async () => {
             await Clipboard.setStringAsync(owner);
             setNotice({
