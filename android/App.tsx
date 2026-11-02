@@ -1201,9 +1201,9 @@ function Wallet() {
     // the owner's glance, same as a wallet avatar (storage.ts) -- never a
     // check, since anyone can set any avatar on any name they own.
     [ensAvatar, setEnsAvatar] = useState<string | null>(null),
-    // This same address's native ETH balance on Ethereum mainnet, read-only
-    // and shown only when it's actually nonzero -- web only (src/mainnet-balance.ts).
-    [mainnetEth, setMainnetEth] = useState<string | null>(null),
+    // This same address's nonzero holdings (ETH, USDC, USDT) on Ethereum
+    // mainnet, read-only -- web only (src/mainnet-balance.ts).
+    [mainnetHoldings, setMainnetHoldings] = useState<mainnetBalance.MainnetHolding[]>([]),
     // The supervisor leaderboard, read fresh each time the screen opens.
     // Idle until then, loading while in flight, error if the read failed,
     // ready with exactly what the server counted -- an empty board is a
@@ -1315,11 +1315,11 @@ function Wallet() {
     };
   }, [owner]);
   useEffect(() => {
-    setMainnetEth(null);
+    setMainnetHoldings([]);
     if (!owner || Platform.OS !== "web") return;
     let alive = true;
-    void mainnetBalance.mainnetEthBalance(owner).then((wei) => {
-      if (alive) setMainnetEth(wei);
+    void mainnetBalance.mainnetHoldings(owner).then((found) => {
+      if (alive) setMainnetHoldings(found);
     });
     return () => {
       alive = false;
@@ -8838,11 +8838,17 @@ function Wallet() {
               </Text>
             </View>
           </View>
-          {mainnetEth && Number(mainnetEth) > 0 ? (
+          {mainnetHoldings.length ? (
             <Text style={[s.small, { textAlign: "center" }]}>
               {t(
-                `This address also holds ${shownValue(`${shortAmount(mainnetEth)} ETH`)} on Ethereum mainnet -- a different network, read-only, not part of your Robinhood Chain balance.`,
-                `此地址在以太坊主网（另一条不同的网络）上还持有 ${shownValue(`${shortAmount(mainnetEth)} ETH`)}，仅供查看，不计入你的 Robinhood Chain 余额。`,
+                `This address also holds ${shownValue(
+                  mainnetHoldings
+                    .map((h) => `${shortAmount(h.amount)} ${h.symbol}`)
+                    .join(mainnetHoldings.length > 1 ? ", " : ""),
+                )} on Ethereum mainnet -- a different network, read-only, not part of your Robinhood Chain balance.`,
+                `此地址在以太坊主网（另一条不同的网络）上还持有 ${shownValue(
+                  mainnetHoldings.map((h) => `${shortAmount(h.amount)} ${h.symbol}`).join("、"),
+                )}，仅供查看，不计入你的 Robinhood Chain 余额。`,
               )}
             </Text>
           ) : null}
