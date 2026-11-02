@@ -4961,6 +4961,7 @@ function Wallet() {
       );
     }
     const raw = units(amount, source.decimals);
+    enforceLimits(paymentUsd(source.symbol, raw, source.decimals));
     const quoteRes = await api("/api/bridge/private/quote", {
       ownerAddress: owner,
       recipient: destAddr,
@@ -5041,6 +5042,7 @@ function Wallet() {
         ),
       );
     }
+    enforceLimits(paymentUsd(source.symbol, input.amount, source.decimals));
     const { quote } = await api("/api/bridge/quote", input);
     guard();
     const steps = verifyBridge(quote, input);

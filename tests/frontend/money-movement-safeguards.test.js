@@ -49,3 +49,29 @@ test("every money-movement path checks trusted-only mode before it builds a tran
     );
   }
 });
+
+// Same shape of gap, different setting: a per-payment/daily/monthly spending
+// limit the owner set has to be checked everywhere a dollar-denominated
+// amount leaves the wallet, or the limit is fiction past the paths that
+// remember to call enforceLimits(). sendNft is deliberately not in this list
+// -- an NFT send has no dollar amount computed anywhere in that function
+// (floor price isn't what a specific NFT is worth), so there is nothing
+// honest to check it against yet.
+const SPENDING_LIMIT_FUNCTIONS = [
+  "proposeTransfer",
+  "prepareBatch",
+  "preparePayment",
+  "preparePrivateSend",
+  "preparePrivateBridge",
+  "prepareBridge",
+];
+
+test("every dollar-denominated money-movement path enforces the owner's spending limit", () => {
+  for (const name of SPENDING_LIMIT_FUNCTIONS) {
+    assert.match(
+      functionBody(name),
+      /enforceLimits\(/,
+      `${name} doesn't call enforceLimits() -- a per-payment/daily/monthly spending limit would silently not apply to it`,
+    );
+  }
+});
