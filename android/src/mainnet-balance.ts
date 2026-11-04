@@ -24,6 +24,19 @@ const BALANCE_OF = [
 
 export type MainnetHolding = { symbol: string; amount: string };
 
+/**
+ * Each chain's own public block explorer, for an owner to check a glance's
+ * figures themselves rather than take this app's word for them -- the same
+ * trust model as the "View on explorer" link already shown for a Robinhood
+ * Chain transaction. URLs are each chain's own default explorer as viem
+ * itself lists it (viem/chains), not a guess.
+ */
+export const EXPLORERS = {
+  mainnet: { name: "Etherscan", url: "https://etherscan.io" },
+  base: { name: "Basescan", url: "https://basescan.org" },
+  arc: { name: "Arc Explorer", url: "https://explorer.arc.io" },
+};
+
 type Glance = {
   client: PublicClient;
   /** What this chain's native balance is actually denominated in -- "ETH" on most chains, but not every one (see ARC below). */

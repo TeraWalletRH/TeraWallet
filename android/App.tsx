@@ -8855,31 +8855,55 @@ function Wallet() {
           {(() => {
             const joined = (list: mainnetBalance.MainnetHolding[], sep: string) =>
               shownValue(list.map((h) => `${shortAmount(h.amount)} ${h.symbol}`).join(sep));
+            // A link to each chain's own public explorer, so checking this
+            // address's real balance there never has to take this screen's
+            // word for it -- the same trust model as "View on explorer"
+            // already offers for a Robinhood Chain transaction.
+            const explorerLink = (explorer: { name: string; url: string }) => (
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => void Linking.openURL(`${explorer.url}/address/${owner}`)}
+                style={({ pressed }) => ({ alignSelf: "center", opacity: pressed ? 0.6 : 1 })}
+              >
+                <Text style={[s.small, { color: colors.green, fontWeight: "600" }]}>
+                  {t(`View on ${explorer.name} ↗`, `在 ${explorer.name} 查看 ↗`)}
+                </Text>
+              </Pressable>
+            );
             return (
               <>
                 {mainnetHoldings.length ? (
-                  <Text style={[s.small, { textAlign: "center" }]}>
-                    {t(
-                      `This address also holds ${joined(mainnetHoldings, ", ")} on Ethereum mainnet -- a different network, read-only, not part of your Robinhood Chain balance.`,
-                      `此地址在以太坊主网（另一条不同的网络）上还持有 ${joined(mainnetHoldings, "、")}，仅供查看，不计入你的 Robinhood Chain 余额。`,
-                    )}
-                  </Text>
+                  <View style={{ gap: 4 }}>
+                    <Text style={[s.small, { textAlign: "center" }]}>
+                      {t(
+                        `This address also holds ${joined(mainnetHoldings, ", ")} on Ethereum mainnet -- a different network, read-only, not part of your Robinhood Chain balance.`,
+                        `此地址在以太坊主网（另一条不同的网络）上还持有 ${joined(mainnetHoldings, "、")}，仅供查看，不计入你的 Robinhood Chain 余额。`,
+                      )}
+                    </Text>
+                    {explorerLink(mainnetBalance.EXPLORERS.mainnet)}
+                  </View>
                 ) : null}
                 {baseHoldings.length ? (
-                  <Text style={[s.small, { textAlign: "center" }]}>
-                    {t(
-                      `It also holds ${joined(baseHoldings, ", ")} on Base -- same idea, a different network, read-only.`,
-                      `在 Base（另一条不同的网络）上还持有 ${joined(baseHoldings, "、")}，仅供查看。`,
-                    )}
-                  </Text>
+                  <View style={{ gap: 4 }}>
+                    <Text style={[s.small, { textAlign: "center" }]}>
+                      {t(
+                        `It also holds ${joined(baseHoldings, ", ")} on Base -- same idea, a different network, read-only.`,
+                        `在 Base（另一条不同的网络）上还持有 ${joined(baseHoldings, "、")}，仅供查看。`,
+                      )}
+                    </Text>
+                    {explorerLink(mainnetBalance.EXPLORERS.base)}
+                  </View>
                 ) : null}
                 {arcHoldings.length ? (
-                  <Text style={[s.small, { textAlign: "center" }]}>
-                    {t(
-                      `And ${joined(arcHoldings, ", ")} on Arc -- same idea, a different network, read-only.`,
-                      `在 Arc（另一条不同的网络）上还持有 ${joined(arcHoldings, "、")}，仅供查看。`,
-                    )}
-                  </Text>
+                  <View style={{ gap: 4 }}>
+                    <Text style={[s.small, { textAlign: "center" }]}>
+                      {t(
+                        `And ${joined(arcHoldings, ", ")} on Arc -- same idea, a different network, read-only.`,
+                        `在 Arc（另一条不同的网络）上还持有 ${joined(arcHoldings, "、")}，仅供查看。`,
+                      )}
+                    </Text>
+                    {explorerLink(mainnetBalance.EXPLORERS.arc)}
+                  </View>
                 ) : null}
               </>
             );
