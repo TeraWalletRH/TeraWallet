@@ -40,6 +40,10 @@ export const APP_CONNECT = [
   "https://cloudflare-eth.com",
   // NFT collection floor prices (src/nft-prices.ts), free and keyless.
   "https://api.coingecko.com",
+  // Base mainnet nodes, for the read-only Base glance on Receive
+  // (src/mainnet-balance.ts) -- a real bridge destination, not Robinhood Chain.
+  "https://mainnet.base.org",
+  "https://base-rpc.publicnode.com",
 ];
 
 // WalletConnect's verify and embedded-wallet frames, and Coinbase's popup host.

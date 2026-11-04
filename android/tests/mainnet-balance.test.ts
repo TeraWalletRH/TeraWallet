@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mainnetEthBalance, mainnetHoldings } from "../src/mainnet-balance";
+import { baseHoldings, mainnetEthBalance, mainnetHoldings } from "../src/mainnet-balance";
 
 describe("mainnetEthBalance", () => {
   test(
@@ -38,6 +38,30 @@ describe("mainnetHoldings", () => {
         expect(["ETH", "USDC", "USDT"]).toContain(holding.symbol);
         expect(Number(holding.amount)).toBeGreaterThan(0);
       }
+    },
+    30_000,
+  );
+});
+
+describe("baseHoldings", () => {
+  test(
+    "a real, long-funded address shows real nonzero holdings on Base, each a plain decimal string",
+    async () => {
+      const holdings = await baseHoldings("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045");
+      expect(holdings.length).toBeGreaterThan(0);
+      for (const holding of holdings) {
+        expect(["ETH", "USDC"]).toContain(holding.symbol);
+        expect(Number(holding.amount)).toBeGreaterThan(0);
+      }
+    },
+    30_000,
+  );
+
+  test(
+    "never throws -- every node failing resolves to an empty list, not a rejection",
+    async () => {
+      const holdings = await baseHoldings("0x0000000000000000000000000000000000000000");
+      expect(Array.isArray(holdings)).toBe(true);
     },
     30_000,
   );

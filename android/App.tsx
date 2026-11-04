@@ -1204,6 +1204,10 @@ function Wallet() {
     // This same address's nonzero holdings (ETH, USDC, USDT) on Ethereum
     // mainnet, read-only -- web only (src/mainnet-balance.ts).
     [mainnetHoldings, setMainnetHoldings] = useState<mainnetBalance.MainnetHolding[]>([]),
+    // Same idea, on Base -- a real bridge destination this app already
+    // offers (src/config.ts's `destinations`), not a second chain picked
+    // at random.
+    [baseHoldings, setBaseHoldings] = useState<mainnetBalance.MainnetHolding[]>([]),
     // The supervisor leaderboard, read fresh each time the screen opens.
     // Idle until then, loading while in flight, error if the read failed,
     // ready with exactly what the server counted -- an empty board is a
@@ -1316,10 +1320,14 @@ function Wallet() {
   }, [owner]);
   useEffect(() => {
     setMainnetHoldings([]);
+    setBaseHoldings([]);
     if (!owner || Platform.OS !== "web") return;
     let alive = true;
     void mainnetBalance.mainnetHoldings(owner).then((found) => {
       if (alive) setMainnetHoldings(found);
+    });
+    void mainnetBalance.baseHoldings(owner).then((found) => {
+      if (alive) setBaseHoldings(found);
     });
     return () => {
       alive = false;
@@ -8838,20 +8846,30 @@ function Wallet() {
               </Text>
             </View>
           </View>
-          {mainnetHoldings.length ? (
-            <Text style={[s.small, { textAlign: "center" }]}>
-              {t(
-                `This address also holds ${shownValue(
-                  mainnetHoldings
-                    .map((h) => `${shortAmount(h.amount)} ${h.symbol}`)
-                    .join(mainnetHoldings.length > 1 ? ", " : ""),
-                )} on Ethereum mainnet -- a different network, read-only, not part of your Robinhood Chain balance.`,
-                `此地址在以太坊主网（另一条不同的网络）上还持有 ${shownValue(
-                  mainnetHoldings.map((h) => `${shortAmount(h.amount)} ${h.symbol}`).join("、"),
-                )}，仅供查看，不计入你的 Robinhood Chain 余额。`,
-              )}
-            </Text>
-          ) : null}
+          {(() => {
+            const joined = (list: mainnetBalance.MainnetHolding[], sep: string) =>
+              shownValue(list.map((h) => `${shortAmount(h.amount)} ${h.symbol}`).join(sep));
+            return (
+              <>
+                {mainnetHoldings.length ? (
+                  <Text style={[s.small, { textAlign: "center" }]}>
+                    {t(
+                      `This address also holds ${joined(mainnetHoldings, ", ")} on Ethereum mainnet -- a different network, read-only, not part of your Robinhood Chain balance.`,
+                      `此地址在以太坊主网（另一条不同的网络）上还持有 ${joined(mainnetHoldings, "、")}，仅供查看，不计入你的 Robinhood Chain 余额。`,
+                    )}
+                  </Text>
+                ) : null}
+                {baseHoldings.length ? (
+                  <Text style={[s.small, { textAlign: "center" }]}>
+                    {t(
+                      `It also holds ${joined(baseHoldings, ", ")} on Base -- same idea, a different network, read-only.`,
+                      `在 Base（另一条不同的网络）上还持有 ${joined(baseHoldings, "、")}，仅供查看。`,
+                    )}
+                  </Text>
+                ) : null}
+              </>
+            );
+          })()}
           {action("Copy address", "复制地址", async () => {
             await Clipboard.setStringAsync(owner);
             setNotice({
