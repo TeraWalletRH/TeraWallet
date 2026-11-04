@@ -9,7 +9,7 @@
 // Chain.
 
 import { createPublicClient, fallback, formatEther, formatUnits, http, type Address, type PublicClient } from "viem";
-import { base, mainnet } from "viem/chains";
+import { arc, base, mainnet } from "viem/chains";
 import { ENS_RPCS } from "./config";
 
 const BALANCE_OF = [
@@ -26,6 +26,8 @@ export type MainnetHolding = { symbol: string; amount: string };
 
 type Glance = {
   client: PublicClient;
+  /** What this chain's native balance is actually denominated in -- "ETH" on most chains, but not every one (see ARC below). */
+  nativeSymbol: string;
   /**
    * Known ERC-20s to check, deliberately short -- a specific, verified list,
    * not an open-ended token scan. Reading an unbounded set of tokens for a
@@ -44,6 +46,7 @@ const MAINNET: Glance = {
     chain: mainnet,
     transport: fallback(ENS_RPCS.map((url) => http(url, { timeout: 8000, retryCount: 1 }))),
   }) as unknown as PublicClient,
+  nativeSymbol: "ETH",
   // USDC and USDT: the two stablecoins an owner is overwhelmingly likely to
   // have held on mainnet. Addresses confirmed against Circle's and Tether's
   // own published contract addresses and a live balanceOf read, not guessed.
@@ -61,9 +64,27 @@ const BASE: Glance = {
       http("https://base-rpc.publicnode.com", { timeout: 8000, retryCount: 1 }),
     ]),
   }) as unknown as PublicClient,
+  nativeSymbol: "ETH",
   // The same USDC contract address this app's own bridge already sends ETH
   // and USDG to (src/config.ts's `destinations[0]`), not a second guess.
   tokens: [{ symbol: "USDC", address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", decimals: 6 }],
+};
+
+const ARC: Glance = {
+  client: createPublicClient({
+    chain: arc,
+    transport: fallback(arc.rpcUrls.default.http.map((url) => http(url, { timeout: 8000, retryCount: 1 }))),
+  }) as unknown as PublicClient,
+  // Circle's Arc (chain ID 5042, src/config.ts's `destinations[1]`) pays gas
+  // in USDC rather than a separate native coin -- getBalance() reads that
+  // USDC balance directly, confirmed against a live read of the address
+  // src/config.ts already names as Arc's USDC (0x3600...0000): the two agree
+  // to the last decimal on every address tried, because that address is a
+  // view onto the same native balance, not a second, separate holding. Never
+  // listed as a token here too -- that would double-count the one real
+  // balance as two.
+  nativeSymbol: "USDC",
+  tokens: [],
 };
 
 async function nativeBalance(glance: Glance, address: Address): Promise<string | null> {
@@ -80,15 +101,16 @@ export async function mainnetEthBalance(address: Address): Promise<string | null
 }
 
 /**
- * Every nonzero balance this address holds on a chain Tera checks: native
- * ETH plus the tokens listed above. One token's node call failing (or the
- * token not being enabled) is not a reason to hide the others -- each is
- * read and judged on its own.
+ * Every nonzero balance this address holds on a chain Tera checks: its
+ * native balance (whatever that chain actually denominates it in) plus the
+ * tokens listed above. One token's node call failing (or the token not
+ * being enabled) is not a reason to hide the others -- each is read and
+ * judged on its own.
  */
 async function holdingsOn(glance: Glance, address: Address): Promise<MainnetHolding[]> {
   const holdings: MainnetHolding[] = [];
-  const eth = await nativeBalance(glance, address);
-  if (eth && Number(eth) > 0) holdings.push({ symbol: "ETH", amount: eth });
+  const native = await nativeBalance(glance, address);
+  if (native && Number(native) > 0) holdings.push({ symbol: glance.nativeSymbol, amount: native });
   for (const token of glance.tokens) {
     try {
       const raw = await glance.client.readContract({
@@ -114,4 +136,9 @@ export async function mainnetHoldings(address: Address): Promise<MainnetHolding[
 /** This address's nonzero holdings on Base (ETH, USDC) -- a real bridge destination this app already offers. */
 export async function baseHoldings(address: Address): Promise<MainnetHolding[]> {
   return holdingsOn(BASE, address);
+}
+
+/** This address's nonzero USDC balance on Arc -- a real bridge destination this app already offers. */
+export async function arcHoldings(address: Address): Promise<MainnetHolding[]> {
+  return holdingsOn(ARC, address);
 }

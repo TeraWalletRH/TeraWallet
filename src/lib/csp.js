@@ -44,6 +44,12 @@ export const APP_CONNECT = [
   // (src/mainnet-balance.ts) -- a real bridge destination, not Robinhood Chain.
   "https://mainnet.base.org",
   "https://base-rpc.publicnode.com",
+  // Arc (Circle's chain, src/mainnet-balance.ts), the same way -- another
+  // real bridge destination. viem's own listed nodes for it.
+  "https://rpc.mainnet.arc.io",
+  "https://rpc.blockdaemon.mainnet.arc.io",
+  "https://rpc.drpc.mainnet.arc.io",
+  "https://rpc.quicknode.mainnet.arc.io",
 ];
 
 // WalletConnect's verify and embedded-wallet frames, and Coinbase's popup host.

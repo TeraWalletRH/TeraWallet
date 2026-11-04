@@ -1208,6 +1208,8 @@ function Wallet() {
     // offers (src/config.ts's `destinations`), not a second chain picked
     // at random.
     [baseHoldings, setBaseHoldings] = useState<mainnetBalance.MainnetHolding[]>([]),
+    // Same idea again, on Arc -- also a real bridge destination.
+    [arcHoldings, setArcHoldings] = useState<mainnetBalance.MainnetHolding[]>([]),
     // The supervisor leaderboard, read fresh each time the screen opens.
     // Idle until then, loading while in flight, error if the read failed,
     // ready with exactly what the server counted -- an empty board is a
@@ -1321,6 +1323,7 @@ function Wallet() {
   useEffect(() => {
     setMainnetHoldings([]);
     setBaseHoldings([]);
+    setArcHoldings([]);
     if (!owner || Platform.OS !== "web") return;
     let alive = true;
     void mainnetBalance.mainnetHoldings(owner).then((found) => {
@@ -1328,6 +1331,9 @@ function Wallet() {
     });
     void mainnetBalance.baseHoldings(owner).then((found) => {
       if (alive) setBaseHoldings(found);
+    });
+    void mainnetBalance.arcHoldings(owner).then((found) => {
+      if (alive) setArcHoldings(found);
     });
     return () => {
       alive = false;
@@ -8864,6 +8870,14 @@ function Wallet() {
                     {t(
                       `It also holds ${joined(baseHoldings, ", ")} on Base -- same idea, a different network, read-only.`,
                       `在 Base（另一条不同的网络）上还持有 ${joined(baseHoldings, "、")}，仅供查看。`,
+                    )}
+                  </Text>
+                ) : null}
+                {arcHoldings.length ? (
+                  <Text style={[s.small, { textAlign: "center" }]}>
+                    {t(
+                      `And ${joined(arcHoldings, ", ")} on Arc -- same idea, a different network, read-only.`,
+                      `在 Arc（另一条不同的网络）上还持有 ${joined(arcHoldings, "、")}，仅供查看。`,
                     )}
                   </Text>
                 ) : null}
