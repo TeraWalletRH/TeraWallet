@@ -6,6 +6,15 @@ import {
   CSV_PRESETS,
 } from "../../public/tera/core/csv-export.js";
 
+test("an unrecorded fee stays blank -- never guessed, a tax import must not invent a number", () => {
+  assert.equal(parseRecordTransaction({}).fee, "");
+  // gasUsed being present used to fabricate a flat "0.0001" fee regardless
+  // of what was actually paid; it must not, whatever else is on the row.
+  assert.equal(parseRecordTransaction({ gasUsed: "21000" }).fee, "");
+  assert.equal(parseRecordTransaction({ fee: "0.00042" }).fee, "0.00042");
+  assert.equal(parseRecordTransaction({ gasFee: "0.0003" }).fee, "0.0003");
+});
+
 test("generateActivityCsv formats records and history into standard CSV", () => {
   const records = [
     {

@@ -43,7 +43,9 @@ export function parseRecordTransaction(row) {
   }
   if (!symbol) symbol = "USDG";
 
-  const fee = row.fee || row.gasFee || (row.gasUsed ? "0.0001" : "");
+  // No fallback for an unrecorded fee: a transaction tax software imports
+  // this for must show its real fee or none, never a guessed one.
+  const fee = row.fee || row.gasFee || "";
   const feeCurrency = fee ? "ETH" : "";
 
   const isIncoming =
