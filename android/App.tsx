@@ -9252,8 +9252,8 @@ function Wallet() {
                         ? t(`STAKED · ${position.lock_tier}`, `质押 · ${position.lock_tier}`)
                         : t("FLEXIBLE STAKE", "活期质押")}
                     </Text>
-                    <Row label={t("Staked", "质押数量")} value={`${tera(staked)} TERA`} />
-                    <Row label={t("Rewards to claim", "可领取奖励")} value={`${tera(claimable)} TERA`} />
+                    <Row label={t("Staked", "质押数量")} value={shownValue(`${tera(staked)} TERA`)} />
+                    <Row label={t("Rewards to claim", "可领取奖励")} value={shownValue(`${tera(claimable)} TERA`)} />
                     {position.is_locked ? (
                       <Text style={s.small}>
                         {t(
@@ -9317,8 +9317,8 @@ function Wallet() {
               {(stakeData.locks || []).map((lock: any) => (
                 <View key={lock.id} style={[s.panel, { gap: 8 }]}>
                   <Text style={s.eyebrow}>{t(`${lock.term_days}-DAY LOCK`, `${lock.term_days} 天锁定`)}</Text>
-                  <Row label={t("Principal", "本金")} value={`${tera(lock.principal_amount)} TERA`} />
-                  <Row label={t("Reward at maturity", "到期奖励")} value={`${tera(lock.reward_amount)} TERA`} />
+                  <Row label={t("Principal", "本金")} value={shownValue(`${tera(lock.principal_amount)} TERA`)} />
+                  <Row label={t("Reward at maturity", "到期奖励")} value={shownValue(`${tera(lock.reward_amount)} TERA`)} />
                   <Row
                     label={t("Status", "状态")}
                     value={
@@ -9358,7 +9358,7 @@ function Wallet() {
                     <Row
                       key={payout.id}
                       label={`${payout.kind === "claim" ? t("Claim", "领取") : t("Unstake", "解押")} · ${new Date(payout.created_at).toLocaleDateString()}`}
-                      value={`${tera(BigInt(payout.principal_amount || "0") + BigInt(payout.reward_amount || "0"))} TERA · ${t(...(statusLabel[payout.status] || ["—", "—"]))}`}
+                      value={`${shownValue(`${tera(BigInt(payout.principal_amount || "0") + BigInt(payout.reward_amount || "0"))} TERA`)} · ${t(...(statusLabel[payout.status] || ["—", "—"]))}`}
                     />
                   ))}
                 </View>
@@ -9378,7 +9378,7 @@ function Wallet() {
                     <View key={entry.txHash} style={{ gap: 4 }}>
                       <Row
                         label={entry.kind === "fixed" ? t(`${entry.termDays}-day lock`, `${entry.termDays} 天锁定`) : t("Flexible", "活期")}
-                        value={`${tera(entry.amount)} TERA`}
+                        value={shownValue(`${tera(entry.amount)} TERA`)}
                       />
                       <Text style={s.small}>
                         {state === "waiting" || state === undefined
