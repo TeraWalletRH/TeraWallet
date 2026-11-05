@@ -12,9 +12,11 @@ const appSource = readFileSync(join(root, "android/App.tsx"), "utf8");
 // trustedOnlyMode before it builds anything, or "Trusted only mode" (which
 // Settings states without qualification: "Transfers restricted to saved
 // contacts") silently does not apply to it. A send, a private send, a
-// bridge, a private bridge, an NFT send and a dollar payment all reach a
-// recipient the owner chose; this list is every one of those paths as of
-// this test. A new one belongs in this list the same day it's written.
+// bridge, a private bridge, an NFT send, a dollar payment and the AI
+// assistant's own proposal path (a free-text prompt can build a transfer
+// too) all reach a recipient the owner chose, or the agent picked for them;
+// this list is every one of those paths as of this test. A new one belongs
+// in this list the same day it's written.
 const MONEY_MOVEMENT_FUNCTIONS = [
   "proposeTransfer",
   "prepareBatch",
@@ -23,6 +25,7 @@ const MONEY_MOVEMENT_FUNCTIONS = [
   "preparePrivateBridge",
   "prepareBridge",
   "sendNft",
+  "deliverAssistantMessage",
 ];
 
 function functionBody(name) {
@@ -64,6 +67,7 @@ const SPENDING_LIMIT_FUNCTIONS = [
   "preparePrivateSend",
   "preparePrivateBridge",
   "prepareBridge",
+  "deliverAssistantMessage",
 ];
 
 test("every dollar-denominated money-movement path enforces the owner's spending limit", () => {

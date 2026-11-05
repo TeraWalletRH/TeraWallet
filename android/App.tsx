@@ -5510,6 +5510,34 @@ function Wallet() {
         // Fall back to unchecked intent if policy bundle is unavailable
       }
       guard();
+      // The agent can propose a transfer from a free-text prompt, the same
+      // as the Send screen or a batch -- so it owes the same two owner-set
+      // promises those already keep: a recipient trusted-only mode would
+      // refuse, or an amount a spending limit would refuse, must be refused
+      // here too, not just at every other door money can leave through.
+      if (checked.actionType === "TRANSFER") {
+        const recipients: string[] =
+          Array.isArray(checked.transfers) && checked.transfers.length
+            ? checked.transfers.map((tr: any) => tr.recipient).filter(Boolean)
+            : checked.recipient
+              ? [checked.recipient]
+              : [];
+        if (dataRef.current.trustedOnlyMode) {
+          for (const recipient of recipients) {
+            check(
+              isTrustedRecipient(recipient, book),
+              t(
+                "Trusted only mode is active. Recipient address must be saved in your contacts.",
+                "受信任模式已启用。收款地址必须保存到联系人中。",
+              ),
+            );
+          }
+        }
+        const asset = assets.find(
+          (a) => a.address?.toLowerCase() === String(checked.assetAddress ?? "").toLowerCase(),
+        );
+        if (asset) enforceLimits(paymentUsd(asset.symbol, checked.amount, asset.decimals));
+      }
       if (!prepared) {
         prepared = await api("/api/intent/prepare", checked);
         guard();
