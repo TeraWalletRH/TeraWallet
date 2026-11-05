@@ -11947,8 +11947,8 @@ function Wallet() {
                   {order.fill ? (
                     <Text style={s.small}>
                       {t(
-                        `Filled: ${order.side === "buy" ? `spent ${order.fill.spent} ${order.pair}, received ${shortAmount(order.fill.received || "0")} ${order.asset}` : `sold ${order.fill.spent} ${order.asset}, received ${shortAmount(order.fill.received || "0")} ${order.pair}`}${order.fill.estimated ? " (quoted)" : ""}`,
-                        `已成交：${order.side === "buy" ? `花费 ${order.fill.spent} ${order.pair}，收到 ${shortAmount(order.fill.received || "0")} ${order.asset}` : `卖出 ${order.fill.spent} ${order.asset}，收到 ${shortAmount(order.fill.received || "0")} ${order.pair}`}${order.fill.estimated ? "（报价）" : ""}`,
+                        `Filled: ${order.side === "buy" ? `spent ${shownValue(`${order.fill.spent} ${order.pair}`)}, received ${shownValue(`${shortAmount(order.fill.received || "0")} ${order.asset}`)}` : `sold ${shownValue(`${order.fill.spent} ${order.asset}`)}, received ${shownValue(`${shortAmount(order.fill.received || "0")} ${order.pair}`)}`}${order.fill.estimated ? " (quoted)" : ""}`,
+                        `已成交：${order.side === "buy" ? `花费 ${shownValue(`${order.fill.spent} ${order.pair}`)}，收到 ${shownValue(`${shortAmount(order.fill.received || "0")} ${order.asset}`)}` : `卖出 ${shownValue(`${order.fill.spent} ${order.asset}`)}，收到 ${shownValue(`${shortAmount(order.fill.received || "0")} ${order.pair}`)}`}${order.fill.estimated ? "（报价）" : ""}`,
                       )}
                     </Text>
                   ) : null}
