@@ -2150,6 +2150,28 @@ function Wallet() {
       );
     }
   }
+  /**
+   * Web only: a real file picker, reading the chosen file straight into the
+   * paste box -- the owner just downloaded this same export as a file
+   * (doExportContacts above), so asking them to open it themselves and
+   * paste its contents back in by hand was the one avoidable step left.
+   */
+  function pickContactFile() {
+    if (Platform.OS !== "web" || typeof document === "undefined") return;
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json,application/json";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      setContactImportError("");
+      void file
+        .text()
+        .then(setContactImportText)
+        .catch(() => setContactImportError(t("Couldn't read that file.", "无法读取该文件。")));
+    };
+    input.click();
+  }
   const scheduleToday = schedulesCore.today();
   const dueScheduled = owner ? schedulesCore.duePayments(data.schedules, scheduleToday) : [];
   const dueScheduledKey = dueScheduled.map(schedulesCore.reminderKey).join(",");
@@ -17529,6 +17551,9 @@ function Wallet() {
               }}
             >
               <Text style={s.title}>{t("Import contacts", "导入联系人")}</Text>
+              {Platform.OS === "web" && (
+                <Button onPress={pickContactFile}>{t("Choose file", "选择文件")}</Button>
+              )}
               <Field
                 label={t("Exported file's contents", "导出文件内容")}
                 value={contactImportText}
