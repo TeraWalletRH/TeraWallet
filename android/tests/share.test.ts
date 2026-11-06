@@ -24,3 +24,17 @@ test("shareText > blocks sensitive key shares", async () => {
     "Security policy violation: Cannot share private credentials.",
   );
 });
+
+test("shareText > reports a discriminated outcome, not a bare boolean", async () => {
+  // Outside a real RN/web runtime neither the native share sheet nor the
+  // clipboard module is available, so this lands on "failed" -- the point
+  // of this test is the *shape* of the result (one of the three named
+  // outcomes), which callers rely on to show a "copied" notice instead of
+  // looking like nothing happened. See the web Share buttons in App.tsx.
+  const outcome = await shareText({ text: "hello world" });
+  expect(["shared", "copied", "failed"]).toContain(outcome);
+});
+
+test("shareText > an empty message fails without throwing", async () => {
+  expect(await shareText({})).toBe("failed");
+});

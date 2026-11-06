@@ -4121,7 +4121,14 @@ function Wallet() {
     await claims.prepareClaim(gift.key, owner as Address);
     guard();
     check(held > 0n, t("This link has no confirmed funds to share. Check Activity.", "此链接没有可分享的已确认资金，请检查记录。"));
-    await shareText({ title: t("An ETH gift", "ETH 礼物"), url: claims.claimUrl(gift.key) });
+    const outcome = await shareText({ title: t("An ETH gift", "ETH 礼物"), url: claims.claimUrl(gift.key) });
+    if (outcome === "copied") {
+      setNotice({
+        title: t("Link copied", "链接已复制"),
+        body: t("No share sheet here, so the claim link went to your clipboard instead.", "此处没有分享菜单，领取链接已改为复制到剪贴板。"),
+        tone: "success",
+      });
+    }
   }
   async function prepareTransfer(guard: () => void) {
     // Resolved again here rather than reusing what the previous screen found.
@@ -13832,6 +13839,14 @@ function Wallet() {
                     title: t("Transaction Hash", "交易哈希"),
                     text: r.hash,
                     url: `https://robinhoodchain.blockscout.com/tx/${r.hash}`,
+                  }).then((outcome) => {
+                    if (outcome === "copied") {
+                      setNotice({
+                        title: t("Hash copied", "哈希已复制"),
+                        body: t("No share sheet here, so it went to your clipboard instead.", "此处没有分享菜单，已改为复制到剪贴板。"),
+                        tone: "success",
+                      });
+                    }
                   })
                 }
                 style={{ flexDirection: "row", alignItems: "center", gap: 4 }}
@@ -13945,6 +13960,17 @@ function Wallet() {
                     void shareText({
                       title: t("Tera Wallet Address", "Tera 钱包地址"),
                       text: owner,
+                    }).then((outcome) => {
+                      if (outcome === "copied") {
+                        setNotice({
+                          title: t("Address copied", "地址已复制"),
+                          body: t(
+                            "No share sheet here, so your Robinhood Chain wallet address went to your clipboard instead.",
+                            "此处没有分享菜单，你的 Robinhood Chain 钱包地址已改为复制到剪贴板。",
+                          ),
+                          tone: "success",
+                        });
+                      }
                     })
                   }
                   hitSlop={6}

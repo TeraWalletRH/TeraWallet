@@ -24,24 +24,34 @@ export async function copyToClipboard(text: string): Promise<boolean> {
   return false;
 }
 
-export async function shareText({ title = "Tera Wallet", text, url }: { title?: string; text?: string; url?: string }): Promise<boolean> {
+// "shared" means the OS share sheet actually handed it off; "copied" means
+// no share sheet was available (e.g. desktop web, where navigator.share
+// doesn't exist) and it landed on the clipboard instead -- callers need to
+// tell those two apart so a silent clipboard fallback doesn't look like
+// nothing happened, see the web Share buttons in App.tsx.
+export type ShareOutcome = "shared" | "copied" | "failed";
+
+export async function shareText({ title = "Tera Wallet", text, url }: { title?: string; text?: string; url?: string }): Promise<ShareOutcome> {
   if ((text && !isShareable(text)) || (url && !isShareable(url))) {
     throw new Error("Security policy violation: Cannot share private credentials.");
   }
   const message = [text?.trim(), url?.trim()].filter(Boolean).join("\n");
-  if (!message) return false;
+  if (!message) return "failed";
 
   try {
     const rn = require("react-native");
     if (rn?.Share?.share) {
       const result = await rn.Share.share({ title, message });
-      return result.action === rn.Share.sharedAction;
+      return result.action === rn.Share.sharedAction ? "shared" : "failed";
     }
   } catch (_) {
-    // Fallback if react-native Share isn't available
+    // Fallback if react-native Share isn't available (e.g. desktop web,
+    // where navigator.share doesn't exist) -- not reached once a native
+    // Share.share call has actually started, so a dismissed native share
+    // sheet above returns "failed" rather than falling through to here.
   }
 
-  return copyToClipboard(message);
+  return (await copyToClipboard(message)) ? "copied" : "failed";
 }
 
 export function generateActivityCsv(history: any[]): string {
