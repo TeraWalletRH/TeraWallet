@@ -7140,6 +7140,8 @@ function Wallet() {
             {message.trim() ? (
               <Pressable
                 disabled={busy}
+                accessibilityRole="button"
+                accessibilityLabel={t("Send message", "发送消息")}
                 onPress={startAssistantMessage}
                 style={{
                   width: 44,
@@ -11022,6 +11024,8 @@ function Wallet() {
                   {bridgeSourceAssets.map((asset) => (
                     <Pressable
                       key={asset.symbol}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: assetSymbol === asset.symbol }}
                       onPress={() => {
                         setAssetSymbol(asset.symbol);
                         clearAmount();
@@ -14825,6 +14829,8 @@ function Wallet() {
                     }}
                   />
                   <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={t(`Send to ${entry.name}`, `发送到 ${entry.name}`)}
                     onPress={() => sendTo(entry.address)}
                     style={({ pressed }) => ({ flex: 1, opacity: pressed ? 0.6 : 1 })}
                   >
