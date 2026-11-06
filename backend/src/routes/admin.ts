@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 import pool from "../db";
 import { env } from "../env";
+import { logger } from "../logging";
 import {
   ADMIN_COOKIE_NAME,
   createAdminSession,
@@ -54,7 +55,8 @@ router.post("/api/admin/auth/login", async (req: Request, res: Response): Promis
       message: "Admin authentication successful",
     });
   } catch (err: any) {
-    res.status(500).json({ success: false, error: err.message || "Login failed" });
+    logger.error(req, "admin.login_failed", err);
+    res.status(500).json({ success: false, error: "Login failed" });
   }
 });
 
