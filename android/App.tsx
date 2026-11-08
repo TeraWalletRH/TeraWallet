@@ -5532,12 +5532,7 @@ function Wallet() {
     ]);
     if (propose && result.intent) {
       let prepared = result.preparedTransaction;
-      let checked = result.intent;
-      try {
-        checked = await policyFor(result.intent);
-      } catch {
-        // Fall back to unchecked intent if policy bundle is unavailable
-      }
+      const checked = await policyFor(result.intent);
       guard();
       // The agent can propose a transfer from a free-text prompt, the same
       // as the Send screen or a batch -- so it owes the same two owner-set
