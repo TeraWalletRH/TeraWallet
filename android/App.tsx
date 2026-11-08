@@ -10170,6 +10170,8 @@ function Wallet() {
       const swapChip = (symbol: string, onPress?: () => void) => (
         <Pressable
           disabled={!onPress}
+          accessibilityRole={onPress ? "button" : undefined}
+          accessibilityLabel={onPress ? t(`Change token, currently ${symbol}`, `更换代币，当前为 ${symbol}`) : undefined}
           onPress={onPress}
           style={{
             flexDirection: "row",
@@ -10255,10 +10257,28 @@ function Wallet() {
               <Text style={s.eyebrow}>{t("YOU PAY", "你支付")}</Text>
               {payBalance && (
                 <Pressable
-                  onPress={() => {
+                  accessibilityRole="button"
+                  accessibilityLabel={t("Pay the full balance", "支付全部余额")}
+                  onPress={async () => {
+                    // Same reserve fillMax() keeps back on Send -- paying
+                    // with the entire ETH balance leaves nothing for this
+                    // swap's own network fee, so it would fail at signing.
+                    const native = paySymbol === "ETH";
+                    let reserve = maxAmountCore.FEE_CAP_WEI;
+                    if (native && owner) {
+                      try {
+                        const [gas, fees] = await Promise.all([
+                          client.estimateGas({ account: owner as Address, to: owner as Address, value: 0n }),
+                          client.estimateFeesPerGas(),
+                        ]);
+                        reserve = maxAmountCore.feeReserve(gas, fees.maxFeePerGas);
+                      } catch {}
+                    }
+                    const raw = maxAmountCore.maxSendable({ balance: balance?.[paySymbol] || "0", native, reserve });
                     setAmountInUsd(false);
                     setUsdAmountInput("");
-                    setAmount(payBalance);
+                    setAmount(raw === "0" ? "" : formatUnits(BigInt(raw), payAsset.decimals));
+                    setMaxReserve(native ? reserve : null);
                   }}
                 >
                   <Text style={s.small}>
@@ -10280,6 +10300,14 @@ function Wallet() {
               style={{ fontSize: 38, color: colors.ink, fontWeight: "700", paddingTop: 18 }}
             />
             <Text style={s.small}>{amountCounterpart(paySymbol)}</Text>
+            {maxReserve !== null && maxReserve > 0n && paySymbol === "ETH" ? (
+              <Text style={[s.small, { color: colors.muted }]}>
+                {t(
+                  `Keeps ${formatUnits(maxReserve, 18)} ETH back for the network fee.`,
+                  `已预留 ${formatUnits(maxReserve, 18)} ETH 作为网络手续费。`,
+                )}
+              </Text>
+            ) : null}
           </View>
           <Pressable
             accessibilityRole="button"
@@ -17880,6 +17908,8 @@ function Wallet() {
                 .map((a) => (
                   <Pressable
                     key={a.symbol}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: assetSymbol === a.symbol && trade === "SELL" }}
                     onPress={() => {
                       setAssetSymbol(a.symbol);
                       setTrade("SELL");
@@ -17924,6 +17954,8 @@ function Wallet() {
                 .map((a) => (
                   <Pressable
                     key={a.symbol}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: assetSymbol === a.symbol && trade === "BUY" }}
                     onPress={() => {
                       setAssetSymbol(a.symbol);
                       setTrade("BUY");
