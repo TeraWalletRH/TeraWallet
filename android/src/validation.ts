@@ -27,15 +27,32 @@ export function parseQrAddress(text: string): string | null {
   if (typeof text !== "string") return null;
   const raw = text.trim();
   if (!raw) return null;
-  const match = raw.match(/(0x[a-fA-F0-9]{40})/);
-  if (match && match[1] && isAddress(match[1], { strict: false })) {
+  // An EIP-681 ERC-20 transfer URI names the token contract being called in
+  // the path -- "ethereum:<token>/transfer?address=<recipient>&..." -- not
+  // who gets paid. Pulling the first 0x-string out of a URI like that would
+  // hand back the token contract as the "recipient". The actual payee is the
+  // address= query parameter, so that form is parsed on its own.
+  if (/^ethereum:0x[a-fA-F0-9]{40}\/transfer\?/i.test(raw)) {
+    const recipient = raw.match(/[?&]address=(0x[a-fA-F0-9]{40})(?![a-fA-F0-9])/i);
+    if (!recipient) return null;
     try {
-      return getAddress(match[1]);
+      return getAddress(recipient[1]);
     } catch {
-      return match[1];
+      return null;
     }
   }
-  return null;
+  // Bounded so a longer hex blob (a tx hash, say) can't be mistaken for an
+  // address by just truncating it, and exactly one so pasted text naming two
+  // different addresses is refused rather than guessed at.
+  const matches = raw.match(/0x[a-fA-F0-9]{40}(?![a-fA-F0-9])/g);
+  if (!matches || matches.length !== 1) return null;
+  const candidate = matches[0];
+  if (!isAddress(candidate, { strict: false })) return null;
+  try {
+    return getAddress(candidate);
+  } catch {
+    return candidate;
+  }
 }
 export const same = (a: unknown, b: unknown) =>
   typeof a === "string" && typeof b === "string" && a.toLowerCase() === b.toLowerCase();
