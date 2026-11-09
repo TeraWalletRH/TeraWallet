@@ -3998,7 +3998,7 @@ function Wallet() {
       return;
     }
   }
-  function continueBridge() {
+  async function continueBridge() {
     if (bridgeStep === 0) {
       if (bridgeMode === "private" && assetSymbol !== "ETH" && assetSymbol !== "USDG") {
         setAssetSymbol("USDG");
@@ -4015,16 +4015,38 @@ function Wallet() {
         const source = sources.find((s) => s.symbol === assetSymbol) || sources[0];
         const decimals = source.decimals;
         const requested = BigInt(units(amount, decimals));
-        const available = BigInt(balance?.[source.symbol] || "0");
+        let available = BigInt(balance?.[source.symbol] || "0");
+        // The bridge deposit is its own transaction and needs its own gas --
+        // unlike Send/Swap, there's no Max shortcut steering people away from
+        // typing their exact full ETH balance, so this check has to be the
+        // one place that catches it, the same way Send's and Swap's own
+        // "insufficient balance" checks already do for native ETH.
+        if (source.symbol === "ETH" && owner) {
+          let reserve = maxAmountCore.FEE_CAP_WEI;
+          try {
+            const [gas, fees] = await Promise.all([
+              client.estimateGas({ account: owner as Address, to: owner as Address, value: 0n }),
+              client.estimateFeesPerGas(),
+            ]);
+            reserve = maxAmountCore.feeReserve(gas, fees.maxFeePerGas);
+          } catch {}
+          available = available > reserve ? available - reserve : 0n;
+        }
         if (requested > available) {
           setAmountInvalid(true);
           buzz("error");
           setNotice({
             title: t("Insufficient balance", "余额不足"),
-            body: t(
-              `You have ${formatUnits(available, decimals)} ${source.symbol} available.`,
-              `可用余额为 ${formatUnits(available, decimals)} ${source.symbol}。`,
-            ),
+            body:
+              source.symbol === "ETH"
+                ? t(
+                    `You have ${formatUnits(available, decimals)} ETH available after keeping some back for the network fee.`,
+                    `扣除预留的网络手续费后，可用余额为 ${formatUnits(available, decimals)} ETH。`,
+                  )
+                : t(
+                    `You have ${formatUnits(available, decimals)} ${source.symbol} available.`,
+                    `可用余额为 ${formatUnits(available, decimals)} ${source.symbol}。`,
+                  ),
             tone: "error",
           });
           return;
