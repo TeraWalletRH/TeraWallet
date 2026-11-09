@@ -5557,10 +5557,14 @@ function Wallet() {
             );
           }
         }
+        // An asset the registry hasn't resolved locally yet still owes this
+        // check -- enforceLimits(null) is how every other payment already
+        // says "can't price this", and it only refuses when a limit is
+        // actually set, same as the known-asset case right below it.
         const asset = assets.find(
           (a) => a.address?.toLowerCase() === String(checked.assetAddress ?? "").toLowerCase(),
         );
-        if (asset) enforceLimits(paymentUsd(asset.symbol, checked.amount, asset.decimals));
+        enforceLimits(asset ? paymentUsd(asset.symbol, checked.amount, asset.decimals) : null);
       }
       if (!prepared) {
         prepared = await api("/api/intent/prepare", checked);
