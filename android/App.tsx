@@ -5032,12 +5032,20 @@ function Wallet() {
       t("Enter a valid destination wallet address.", "请输入有效目标钱包地址。"),
     );
     if (dataRef.current.trustedOnlyMode) {
+      // The contact book only ever stores 0x addresses -- a Solana
+      // destination can never be "saved in your contacts", so the normal
+      // message would send the owner chasing a fix that doesn't exist.
       check(
         isTrustedRecipient(destAddr, book),
-        t(
-          "Trusted only mode is active. Recipient address must be saved in your contacts.",
-          "受信任模式已启用。收款地址必须保存到联系人中。",
-        ),
+        isAddress(destAddr)
+          ? t(
+              "Trusted only mode is active. Recipient address must be saved in your contacts.",
+              "受信任模式已启用。收款地址必须保存到联系人中。",
+            )
+          : t(
+              "Trusted only mode is active and doesn't support external-chain addresses like this one yet. Turn it off to bridge here.",
+              "受信任模式已启用，但暂不支持此类外部链地址。请先关闭该模式再跨链至此地址。",
+            ),
       );
     }
     const raw = units(amount, source.decimals);
@@ -5114,12 +5122,19 @@ function Wallet() {
       amount: units(amount, source.decimals),
     };
     if (dataRef.current.trustedOnlyMode) {
+      // Same reasoning as the private bridge above: the contact book can't
+      // hold a Solana address, so the normal message would be unsolvable.
       check(
         isTrustedRecipient(input.recipient, book),
-        t(
-          "Trusted only mode is active. Recipient address must be saved in your contacts.",
-          "受信任模式已启用。收款地址必须保存到联系人中。",
-        ),
+        isAddress(input.recipient)
+          ? t(
+              "Trusted only mode is active. Recipient address must be saved in your contacts.",
+              "受信任模式已启用。收款地址必须保存到联系人中。",
+            )
+          : t(
+              "Trusted only mode is active and doesn't support external-chain addresses like this one yet. Turn it off to bridge here.",
+              "受信任模式已启用，但暂不支持此类外部链地址。请先关闭该模式再跨链至此地址。",
+            ),
       );
     }
     enforceLimits(paymentUsd(source.symbol, input.amount, source.decimals));
