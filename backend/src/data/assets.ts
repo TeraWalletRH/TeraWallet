@@ -252,7 +252,7 @@ export const REAL_ROBINHOOD_RWA_ASSETS: RwaAsset[] = [
     symbol: "PLTR",
     name: "Palantir Technologies Inc. Token",
     underlyingTicker: "PLTR",
-    address: "0xd58319690185984605929F52745330e7ea20D0C4",
+    address: "0x894E1EC2D74FFE5AEF8Dc8A9e84686acCB964F2A",
     decimals: 18,
     tokenStandard: "ERC-20",
     issuer: "Robinhood RWA / Dinari",
