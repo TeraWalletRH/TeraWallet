@@ -2,9 +2,15 @@
   "registry": "Tera approved builds",
   "version": 1,
   "algorithm": "sha256",
-  "publishedAt": "2026-11-04T19:29:07.197Z",
+  "publishedAt": "2026-11-11T14:28:29.646Z",
   "note": "Every release this site has published, newest first. A receipt naming a release absent from this list was not produced by a build Tera shipped. Presence here does not establish that any particular page was running that build — check the file hashes yourself against the published source.",
   "builds": [
+    {
+      "release": "r-4aefe0743cea",
+      "filesHash": "sha256-Su/gdDzq8uLoYFdC5GGlO3zmF+U4p0dVs3KPJu3ZyW4=",
+      "publishedAt": "2026-11-11T14:28:29.633Z",
+      "files": 98
+    },
     {
       "release": "r-57c6688c5cef",
       "filesHash": "sha256-V8ZojFzvkTFggitwHO3mfPOGOpWNV8MBg1rQYHc9tpQ=",
