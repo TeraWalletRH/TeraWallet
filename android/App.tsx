@@ -875,9 +875,12 @@ function Wallet() {
     [stakingLockTier, setStakingLockTier] = useState<"flexible" | "30d" | "90d">("flexible"),
     [stakeAmount, setStakeAmount] = useState("");
   const { setting: themeSetting, effectiveTheme, updateSetting: updateThemeSetting } = useAppTheme();
-  useEffect(() => {
-    setColorTheme(effectiveTheme);
-  }, [effectiveTheme]);
+  // Same reasoning as setTextScale below: set before any child renders, so
+  // the same render that picks a new theme also paints with it. Doing this
+  // in an effect instead left the mutation and the render that would show
+  // it one step apart -- picking Light/Dark in Settings repainted nothing
+  // until whatever unrelated render happened to come along next.
+  setColorTheme(effectiveTheme);
   const [data, setData] = useState(vault.emptyData());
   // Larger text: set before any child renders, so every Text draws at it.
   setTextScale(textSizeCore.scaleFor(data.textSize));
