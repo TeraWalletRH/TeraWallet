@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { Image, Pressable, View } from "react-native";
+import { Image, Platform, Pressable, View } from "react-native";
 import { discretion, nft } from "./core";
 import { findTokens, type Token } from "./nfts";
 import { collectionFor, floorPriceUsd } from "./nft-prices";
@@ -130,7 +130,13 @@ export function Gallery({
       >
         {items.map((token) => {
           const uri = nft.imageUrl(token.metadata?.image || "");
-          const svg = /\.svg(?:$|[?#])|^data:image\/svg\+xml/i.test(uri);
+          // Bare RN's Image can't decode SVG on iOS/Android, but on web it
+          // renders through react-native-web as a real <img>, which the
+          // browser itself decodes -- excluding it there only hid art for
+          // every on-chain/generative NFT whose metadata is SVG, under a
+          // message that claimed the opposite ("shows on the web wallet").
+          const svg =
+            Platform.OS !== "web" && /\.svg(?:$|[?#])|^data:image\/svg\+xml/i.test(uri);
           const label = nft.tokenLabel(token, token.metadata);
           const isOpen = keyOf(token) === open;
           return (
