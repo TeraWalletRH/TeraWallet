@@ -3773,8 +3773,8 @@ function Wallet() {
         title: t("Nothing to send", "没有可发送的金额"),
         body: native
           ? t(
-              `Your ETH doesn't cover the network fee (about ${formatUnits(reserve, 18)} ETH).`,
-              `你的 ETH 不足以支付网络手续费（约 ${formatUnits(reserve, 18)} ETH）。`,
+              `Your ETH doesn't cover the network fee (about ${shortAmount(formatUnits(reserve, 18))} ETH).`,
+              `你的 ETH 不足以支付网络手续费（约 ${shortAmount(formatUnits(reserve, 18))} ETH）。`,
             )
           : t(`You have no ${asset.symbol} to send.`, `你没有可发送的 ${asset.symbol}。`),
         tone: "error",
@@ -9909,7 +9909,7 @@ function Wallet() {
                     <Text style={[s.text, { fontWeight: "700" }]}>{asset.symbol}</Text>
                     <Text style={s.small} numberOfLines={1}>
                       {balance?.[asset.symbol]
-                        ? `${formatUnits(BigInt(balance[asset.symbol]), asset.decimals)}`
+                        ? shortAmount(formatUnits(BigInt(balance[asset.symbol]), asset.decimals))
                         : "0.0"}
                     </Text>
                   </View>
@@ -9946,7 +9946,7 @@ function Wallet() {
                     ? t("Amount exceeds your on-chain balance", "金额超过链上余额")
                     : `${t("Available:", "可用:")} ${
                         balance?.[selectedAsset.symbol]
-                          ? formatUnits(BigInt(balance[selectedAsset.symbol]), selectedAsset.decimals)
+                          ? shortAmount(formatUnits(BigInt(balance[selectedAsset.symbol]), selectedAsset.decimals))
                           : "0"
                       } ${selectedAsset.symbol}`}
                 </Text>
@@ -9971,8 +9971,8 @@ function Wallet() {
                 <Text style={[s.small, { color: colors.muted, textAlign: "center" }]}>
                   {maxReserve > 0n
                     ? t(
-                        `Keeps ${formatUnits(maxReserve, 18)} ETH back for the network fee.`,
-                        `已预留 ${formatUnits(maxReserve, 18)} ETH 作为网络手续费。`,
+                        `Keeps ${shortAmount(formatUnits(maxReserve, 18))} ETH back for the network fee.`,
+                        `已预留 ${shortAmount(formatUnits(maxReserve, 18))} ETH 作为网络手续费。`,
                       )
                     : BigInt(balance?.ETH || "0") === 0n
                       ? t(
@@ -10342,8 +10342,8 @@ function Wallet() {
             {maxReserve !== null && maxReserve > 0n && paySymbol === "ETH" ? (
               <Text style={[s.small, { color: colors.muted }]}>
                 {t(
-                  `Keeps ${formatUnits(maxReserve, 18)} ETH back for the network fee.`,
-                  `已预留 ${formatUnits(maxReserve, 18)} ETH 作为网络手续费。`,
+                  `Keeps ${shortAmount(formatUnits(maxReserve, 18))} ETH back for the network fee.`,
+                  `已预留 ${shortAmount(formatUnits(maxReserve, 18))} ETH 作为网络手续费。`,
                 )}
               </Text>
             ) : null}
