@@ -83,6 +83,12 @@ export function directionOf(row, owner = "") {
   if (dir === "receive" || dir === "incoming" || dir === "in") return "incoming";
   if (dir === "send" || dir === "outgoing" || dir === "out") return "outgoing";
 
+  // A bridge debits this wallet no matter what address it's headed to --
+  // including, commonly, the owner's own address on the far chain, which
+  // the recipient-equals-owner fallback below would otherwise read as
+  // money coming in rather than going out.
+  if (String(row?.activityType || "").toLowerCase() === "bridge") return "outgoing";
+
   const action = String(row?.action || row?.activityType || row?.intent_type || "").toUpperCase();
   if (/RECEIVE|REWARD|CLAIM|REFUND|INCOMING/.test(action)) return "incoming";
   if (/SEND|TRANSFER|PAY|SPEND|WITHDRAW|OUTGOING|BUY|SWAP/.test(action)) return "outgoing";

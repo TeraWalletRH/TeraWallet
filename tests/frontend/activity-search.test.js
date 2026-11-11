@@ -162,6 +162,14 @@ test("directionOf accurately determines incoming vs outgoing", () => {
   assert.equal(directionOf({ payee: SHOP }, ME), "outgoing");
 });
 
+test("directionOf treats a bridge as outgoing even when bridging to your own address", () => {
+  // Bridging your own assets to the same wallet on another chain is a
+  // common pattern -- it still debits this wallet and must never be read
+  // as money coming in just because recipient === owner.
+  assert.equal(directionOf({ activityType: "bridge", recipient: ME }, ME), "outgoing");
+  assert.equal(directionOf({ activityType: "bridge", recipient: SHOP }, ME), "outgoing");
+});
+
 test("isRwaAsset correctly identifies Real World Asset tokens", () => {
   assert.equal(isRwaAsset("UST"), true);
   assert.equal(isRwaAsset("NVDA"), true);
