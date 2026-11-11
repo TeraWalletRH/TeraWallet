@@ -15,7 +15,11 @@ export function getPinnedAssets(): string[] {
     const raw =
       typeof localStorage !== "undefined" ? localStorage.getItem("tera_pinned_assets") : null;
     if (raw === null) {
-      return ["ETH", "USDG", "AAPL"];
+      // Shown pre-starred on a first run, so this default has to be written
+      // now, not just handed back -- otherwise it only ever exists here in
+      // memory, and the first tap on any of these stars reads an empty list
+      // back from storage, finds nothing to unpin, and pins it again instead.
+      return coreSetPinnedAssets(["ETH", "USDG", "AAPL"]);
     }
   } catch {}
   return coreGetPinnedAssets();
