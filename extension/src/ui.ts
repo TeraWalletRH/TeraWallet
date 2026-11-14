@@ -82,6 +82,22 @@ export function setupPrompt(done: () => void) {
   );
 }
 
+/**
+ * The keys that open Tera (manifest.json's _execute_action), as Chrome shows
+ * them; "" when none is set, as when another extension already has them.
+ */
+export async function openShortcut() {
+  try {
+    const commands = await chrome.commands.getAll();
+    return commands.find((command) => command.name === "_execute_action")?.shortcut ?? "";
+  } catch {
+    return "";
+  }
+}
+
+/** Chrome's own page for changing extension shortcuts. */
+export const changeShortcut = () => chrome.tabs.create({ url: "chrome://extensions/shortcuts" });
+
 const THEME_NAMES: Record<Theme, string> = {
   system: "System",
   light: "Light",

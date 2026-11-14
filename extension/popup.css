@@ -748,3 +748,23 @@ button.big {
   padding: 3px 9px;
   white-space: nowrap;
 }
+/* A keyboard shortcut (Settings, and the welcome tab's last step). */
+kbd {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  background: var(--raised);
+  color: var(--ink);
+  font: 600 12px/1.4 inherit;
+  white-space: nowrap;
+}
+.row.shortcut {
+  align-items: center;
+  gap: 10px;
+}
+.shortcut-tip {
+  text-align: center;
+  font-size: 13px;
+}

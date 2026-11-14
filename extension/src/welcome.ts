@@ -34,7 +34,7 @@ import {
   phraseWords,
 } from "../../public/tera/core/onboarding.js";
 import { allowLedger, NO_LEDGER } from "./ledger";
-import { ask, errorBox, h, short, themePicker } from "./ui";
+import { ask, errorBox, h, openShortcut, short, themePicker } from "./ui";
 
 /** Where a new wallet is made: the web wallet, which hands it back (android/src/handoff.ts). */
 const CREATE_URL = `${__TERA_WEB__}/app`;
@@ -862,6 +862,12 @@ function done(again = false) {
           ),
     );
   drawPin(null);
+  // The shortcut, once Chrome says what it is (none when another extension has it).
+  const keys = h("p", { class: "muted shortcut-tip" });
+  void openShortcut().then((shortcut) => {
+    if (shortcut)
+      keys.replaceChildren("Or press ", h("kbd", {}, shortcut), " to open Tera from any tab.");
+  });
   const poll = async () => {
     if (step !== "done" && step !== "ready") return;
     const on = await pinned();
@@ -890,6 +896,7 @@ function done(again = false) {
       h("span", { class: "mono", title: address }, short(address)),
     ),
     pin,
+    keys,
     h("div", { class: "look" }, h("strong", {}, "Pick a look"), themePicker()),
     h(
       "div",

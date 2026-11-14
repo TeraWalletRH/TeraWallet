@@ -32,7 +32,18 @@ import { FIXED_TERMS, fixedReward } from "../../public/tera/core/staking.js";
 import { swapPair, tradable } from "../../public/tera/core/wallet-swap.js";
 import { originLabel } from "./shared";
 import { STAY_CHOICES, stayLabel, type Stay } from "./stay";
-import { ask, errorBox, h, header, icon, setupPrompt, short, themePicker } from "./ui";
+import {
+  ask,
+  changeShortcut,
+  errorBox,
+  h,
+  header,
+  icon,
+  openShortcut,
+  setupPrompt,
+  short,
+  themePicker,
+} from "./ui";
 
 const root = document.getElementById("root")!;
 
@@ -1211,6 +1222,7 @@ function settingsView() {
   return [
     nameSection(),
     h("section", { class: "card" }, h("strong", {}, "Appearance"), themePicker()),
+    shortcutSection(),
     h(
       "section",
       { class: "card" },
@@ -1234,6 +1246,41 @@ function settingsView() {
       `Tera Wallet ${chrome.runtime.getManifest().version} for Robinhood Chain`,
     ),
   ].filter((part): part is HTMLElement => part !== null);
+}
+
+/** The keys that open Tera, and Chrome's page for changing them. */
+function shortcutSection() {
+  const keys = h("kbd", {}, "…");
+  const line = h("span", { class: "muted small grow" });
+  void openShortcut().then((shortcut) => {
+    keys.textContent = shortcut || "Not set";
+    line.textContent = shortcut
+      ? "Opens Tera from any tab."
+      : "Another extension may have these keys. Pick your own.";
+  });
+  return h(
+    "section",
+    { class: "card" },
+    h("strong", {}, "Keyboard shortcut"),
+    h(
+      "div",
+      { class: "row shortcut" },
+      keys,
+      line,
+      h(
+        "button",
+        {
+          class: "small",
+          type: "button",
+          onclick: async () => {
+            await changeShortcut();
+            window.close();
+          },
+        },
+        "Change",
+      ),
+    ),
+  );
 }
 
 /** Tokens added at sites' requests, each with a way to take it off the list. */
