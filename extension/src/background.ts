@@ -83,6 +83,7 @@ import {
   type Vault,
 } from "./vault";
 import { OWN } from "./shared";
+import { drop, heldSecret, hold, isStay, shorten, type Held, type Stay } from "./stay";
 import { isSealed } from "../../android/src/handoff";
 
 type Sites = Record<string, { accounts: string[]; connectedAt: number }>;
@@ -448,20 +449,71 @@ async function exclusively<T>(id: string, approval: Approval, work: () => Promis
   }
 }
 
+// ------------------------------------------------------- staying unlocked ----
+
+// stay.ts holds the rules. The secrets kept are in session storage (memory,
+// this extension only), and wiped when the time is up, when the computer
+// locks, and on Lock.
+void chrome.storage.session.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" });
+const LOCK_ALARM = "tera-lock";
+
+const stayMinutes = async (): Promise<Stay> => {
+  const { stayMinutes: minutes } = await chrome.storage.local.get("stayMinutes");
+  return isStay(minutes) ? minutes : 0;
+};
+
+async function held(): Promise<Held | null> {
+  const { unlocked } = await chrome.storage.session.get("unlocked");
+  return (unlocked as Held | undefined) ?? null;
+}
+
+async function keep(next: Held | null) {
+  if (!next) return lockNow();
+  await chrome.storage.session.set({ unlocked: next });
+  await chrome.alarms.create(LOCK_ALARM, { when: next.until });
+}
+
+async function lockNow() {
+  await chrome.storage.session.remove("unlocked");
+  await chrome.alarms.clear(LOCK_ALARM);
+}
+
+/** When `address` locks again, or null when it's locked now. */
+async function unlockedUntil(address: string | undefined) {
+  if (!address) return null;
+  const now = await held();
+  return heldSecret(now, address, Date.now()) ? now!.until : null;
+}
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === LOCK_ALARM) void lockNow();
+});
+// Locking the computer locks Tera.
+chrome.idle.onStateChanged.addListener((state) => {
+  if (state === "locked") void lockNow();
+});
+
 // ----------------------------------------------------------- passwords ----
+
+type Refused = { ok: false; error: string; locked?: boolean };
 
 async function tryPassword(
   password: string,
-): Promise<{ ok: true; vault: Vault; secret: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; vault: Vault; secret: string } | Refused> {
   const { vault, failures, failedAt } = await load();
   if (!vault) return { ok: false, error: "There's no wallet in this browser yet." };
   if (isWatch(vault)) return { ok: false, error: WATCH_ONLY };
+  // No password at all: the window thought Tera was unlocked, and it locked
+  // again meanwhile. That isn't a wrong try.
+  if (!password)
+    return { ok: false, error: "Tera locked again. Enter your password.", locked: true };
   const wait = failedAt + passwordWait(failures) - Date.now();
   if (wait > 0)
     return { ok: false, error: `Too many wrong tries. Wait ${Math.ceil(wait / 1000)}s.` };
   const secret = await openSecret(vault, String(password ?? ""));
   if (secret) {
     await chrome.storage.local.set({ failures: 0, failedAt: 0 });
+    await keep(hold(await held(), vault.address, secret, await stayMinutes(), Date.now()));
     return { ok: true, vault, secret };
   }
   await chrome.storage.local.set({ failures: failures + 1, failedAt: Date.now() });
@@ -477,10 +529,13 @@ type Account = ReturnType<typeof signer> | LedgerAccount;
 
 async function unlock(
   password: string,
-): Promise<{ ok: true; vault: Vault; account: Account } | { ok: false; error: string }> {
+): Promise<{ ok: true; vault: Vault; account: Account } | Refused> {
   const { vault } = await load();
   if (isLedger(vault))
     return { ok: true, vault, account: ledgerAccount(vault.path, vault.address) };
+  // Still unlocked from a password a few minutes ago: no password this time.
+  const kept = vault && heldSecret(await held(), vault.address, Date.now());
+  if (vault && kept) return { ok: true, vault, account: signer(kept) };
   const tried = await tryPassword(password);
   return tried.ok ? { ok: true, vault: tried.vault, account: signer(tried.secret) } : tried;
 }
@@ -552,6 +607,7 @@ type PageMessage = {
   epochId?: unknown;
   lockId?: unknown;
   consent?: unknown;
+  minutes?: unknown;
 };
 
 const NEEDS_KEY = new Set(["wallet:send", "wallet:swap", "wallet:stake", "wallet:stake-sign"]);
@@ -569,6 +625,8 @@ async function page(message: PageMessage) {
         address: vault?.address ?? null,
         watch: isWatch(vault),
         ledger: isLedger(vault),
+        stayMinutes: await stayMinutes(),
+        unlockedUntil: await unlockedUntil(vault?.address),
         sites: listSites(sites),
         signatures: ((signatures as { items?: unknown[] } | undefined)?.items ?? []).slice(0, 10),
         transactions: (await refreshSent()).slice(0, 10),
@@ -617,11 +675,14 @@ async function page(message: PageMessage) {
     }
     case "wallet:remove": {
       // A watched wallet has no password, nor does a Ledger's: the key isn't here.
-      const held = (await load()).vault;
-      if (!isWatch(held) && !isLedger(held)) {
+      const removing = (await load()).vault;
+      if (!isWatch(removing) && !isLedger(removing)) {
+        // Always the password: staying unlocked never covers taking a wallet out.
+        if (!message.password) return { error: "Enter your password." };
         const tried = await tryPassword(String(message.password ?? ""));
         if (!tried.ok) return { error: tried.error };
       }
+      if (removing) await keep(drop(await held(), removing.address, Date.now()));
       await chrome.storage.local.remove([
         "vault",
         "sites",
@@ -631,6 +692,16 @@ async function page(message: PageMessage) {
         "transactions",
       ]);
       broadcast(null, "accountsChanged", []);
+      return { ok: true };
+    }
+    case "lock":
+      await lockNow();
+      return { ok: true };
+    case "stay:set": {
+      const minutes = Number(message.minutes);
+      if (!isStay(minutes)) return { error: "Pick how long Tera stays unlocked." };
+      await chrome.storage.local.set({ stayMinutes: minutes });
+      await keep(shorten(await held(), minutes, Date.now()));
       return { ok: true };
     }
     case "site:disconnect": {
@@ -665,7 +736,7 @@ async function page(message: PageMessage) {
       return exclusively(id, approval, async () => {
         const request = approval.request as StakeSignRequest;
         const tried = await unlock(String(message.password ?? ""));
-        if (!tried.ok) return { error: tried.error };
+        if (!tried.ok) return { error: tried.error, locked: tried.locked };
         let signature: string;
         try {
           signature = await tried.account.signMessage({ message: request.message });
@@ -691,6 +762,8 @@ async function page(message: PageMessage) {
         address: vault?.address ?? null,
         watch: isWatch(vault),
         ledger: isLedger(vault),
+        unlockedUntil:
+          isWatch(vault) || isLedger(vault) ? null : await unlockedUntil(vault?.address),
         request: approval.request,
       };
     }
@@ -701,9 +774,10 @@ async function page(message: PageMessage) {
       const { vault } = await load();
       let accounts: string[];
       if (isWatch(vault) || isLedger(vault)) accounts = [vault.address];
+      else if (vault && (await unlockedUntil(vault.address))) accounts = [vault.address];
       else {
         const tried = await tryPassword(String(message.password ?? ""));
-        if (!tried.ok) return { error: tried.error };
+        if (!tried.ok) return { error: tried.error, locked: tried.locked };
         accounts = [tried.vault.address];
       }
       await setSites(grant((await load()).sites, approval.origin, accounts));
@@ -723,7 +797,7 @@ async function page(message: PageMessage) {
           return { expired: true };
         }
         const tried = await unlock(String(message.password ?? ""));
-        if (!tried.ok) return { error: tried.error };
+        if (!tried.ok) return { error: tried.error, locked: tried.locked };
         const request = approval.request as SignRequest;
         let signature: string;
         try {
@@ -762,7 +836,7 @@ async function page(message: PageMessage) {
           request = fresh;
         }
         const tried = await unlock(String(message.password ?? ""));
-        if (!tried.ok) return { error: tried.error };
+        if (!tried.ok) return { error: tried.error, locked: tried.locked };
         const outcome = await send(tried.account, approval.origin, request);
         if (outcome.hash && request.stake) await rememberStake(request.stake, outcome.hash);
         if (outcome.hash) finish(id, outcome.hash);
@@ -1329,7 +1403,7 @@ async function runSwap(id: string, approval: Approval, message: PageMessage) {
     };
   }
   const tried = await unlock(String(message.password ?? ""));
-  if (!tried.ok) return { error: tried.error };
+  if (!tried.ok) return { error: tried.error, locked: tried.locked };
   // Checked again at the moment of signing: the quote's age and every byte.
   try {
     verifyProposal(request.proposal, vault.address);

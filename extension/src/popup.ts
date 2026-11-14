@@ -30,6 +30,7 @@ import {
 import { FIXED_TERMS, fixedReward } from "../../public/tera/core/staking.js";
 import { swapPair, tradable } from "../../public/tera/core/wallet-swap.js";
 import { originLabel } from "./shared";
+import { STAY_CHOICES, stayLabel, type Stay } from "./stay";
 import { ask, errorBox, h, header, icon, setupPrompt, short, themePicker } from "./ui";
 
 const root = document.getElementById("root")!;
@@ -49,6 +50,10 @@ type State = {
   watch?: boolean;
   /** On a Ledger: approved on the device, never with a password. */
   ledger?: boolean;
+  /** How long Tera stays unlocked after the password (stay.ts); 0 asks every time. */
+  stayMinutes: Stay;
+  /** Set while it's unlocked: when it locks again. */
+  unlockedUntil: number | null;
   sites: { origin: string; connectedAt: number }[];
   signatures: Signed[];
   transactions: Sent[];
@@ -297,6 +302,7 @@ function homeView() {
             "Watch-only: Tera shows this wallet's balances and activity, and can't send, swap or sign for it.",
           )
         : null,
+      unlockedLine(),
       ...homeActions(),
     ),
     h(
@@ -338,6 +344,32 @@ function homeView() {
     ),
   ];
 }
+
+/** While Tera stays unlocked: until when, and a way to lock it now. */
+function unlockedLine() {
+  if (!state.unlockedUntil) return null;
+  return h(
+    "div",
+    { class: "row unlocked" },
+    h("span", { class: "muted small grow" }, `Unlocked until ${clock(state.unlockedUntil)}`),
+    h(
+      "button",
+      {
+        class: "small",
+        type: "button",
+        onclick: async () => {
+          await ask({ type: "lock" });
+          state.unlockedUntil = null;
+          draw();
+        },
+      },
+      "Lock",
+    ),
+  );
+}
+
+const clock = (at: number) =>
+  new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
 // ---------------------------------------------------------------- send ----
 
@@ -1114,20 +1146,59 @@ function settingsView() {
       h("strong", {}, `Connected sites${sites.length ? ` (${sites.length})` : ""}`),
       list,
     ),
-    h(
-      "p",
-      { class: "note" },
-      state.ledger
-        ? "Every transaction and signature is approved on your Ledger. The key never leaves it."
-        : "Tera never stays unlocked: every transaction and signature asks for your password, and the key is opened only for that one step.",
-    ),
+    state.ledger
+      ? h(
+          "p",
+          { class: "note" },
+          "Every transaction and signature is approved on your Ledger. The key never leaves it.",
+        )
+      : state.watch
+        ? null
+        : staySection(),
     removeSection(state.address!),
     h(
       "p",
       { class: "muted small" },
       `Tera Wallet ${chrome.runtime.getManifest().version} for Robinhood Chain`,
     ),
-  ];
+  ].filter((part): part is HTMLElement => part !== null);
+}
+
+/** How long Tera stays unlocked after the password, from "every time" to an hour. */
+function staySection() {
+  const pick = (minutes: Stay) =>
+    h(
+      "button",
+      {
+        type: "button",
+        class: state.stayMinutes === minutes ? "on" : "",
+        "aria-pressed": String(state.stayMinutes === minutes),
+        onclick: async () => {
+          const answer = await ask({ type: "stay:set", minutes });
+          if (answer?.error) return;
+          render();
+        },
+      },
+      stayLabel(minutes),
+    );
+  return h(
+    "section",
+    { class: "card" },
+    h("strong", {}, "Ask for my password"),
+    h(
+      "div",
+      { class: "seg four", role: "group", "aria-label": "Stay unlocked" },
+      ...STAY_CHOICES.map(pick),
+    ),
+    h(
+      "p",
+      { class: "muted small" },
+      state.stayMinutes === 0
+        ? "Every transaction and signature asks for your password, and the key is opened only for that one step."
+        : `After you enter your password, Tera stays unlocked for ${stayLabel(state.stayMinutes)}, then locks. It also locks when you lock your computer, close Chrome, or tap Lock. Every request still opens a window for you to confirm.`,
+    ),
+    state.unlockedUntil ? unlockedLine() : null,
+  );
 }
 
 function removeSection(address: string) {

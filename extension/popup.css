@@ -621,6 +621,17 @@ ol.steps {
   background: linear-gradient(135deg, var(--gold), var(--copper));
   color: var(--paper);
 }
+/* Four choices in one row (Settings → Ask for my password). */
+.seg.four button {
+  padding: 6px 4px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+/* While Tera stays unlocked (stay.ts). */
+.row.unlocked {
+  align-items: center;
+  gap: 8px;
+}
 /* Before there's a wallet (ui.ts setupPrompt). */
 .setup {
   align-items: center;

@@ -1,7 +1,7 @@
 // The window that opens when a site asks to connect, sign or send, and for
 // the owner's own sends, swaps and staking requests from the popup. The owner
 // sees who is asking and exactly what it does, in words, and approves with
-// their password.
+// their password (or a click, while Tera stays unlocked: stay.ts).
 
 import { allowLedger, NO_LEDGER } from "./ledger";
 import { ask, errorBox, h, header, setupPrompt, short } from "./ui";
@@ -52,12 +52,16 @@ type Approval = {
   address?: string | null;
   watch?: boolean;
   ledger?: boolean;
+  /** Set while Tera stays unlocked for this wallet: no password until then. */
+  unlockedUntil?: number | null;
   request?: SignRequest | SendRequest | SwapRequest | StakeSignRequest;
 };
 
 const root = document.getElementById("root")!;
 /** The wallet is on a Ledger: every request is approved there, not with a password. */
 let onLedger = false;
+/** Tera is staying unlocked until then (stay.ts): Confirm needs no password. */
+let unlockedUntil: number | null = null;
 const id = new URLSearchParams(location.search).get("id") || "";
 
 // The background worker sleeps when idle; while the owner decides, this
@@ -76,6 +80,7 @@ async function render(notice?: string) {
     return;
   }
   onLedger = Boolean(approval.ledger);
+  unlockedUntil = approval.unlockedUntil ?? null;
   if (!approval.address) {
     root.replaceChildren(header(), setupPrompt(render));
     return;
@@ -159,6 +164,7 @@ function decide(
   }) as HTMLInputElement;
   const status = h("div");
   const ledger = onLedger && !options.noPassword && type !== "approval:connect";
+  const keyless = options.noPassword || onLedger || unlockedUntil !== null;
   const go = h(
     "button",
     { class: "primary", type: "submit" },
@@ -212,6 +218,8 @@ function decide(
           status.replaceChildren();
         }
         if (answer?.expired) return render();
+        // Tera locked again while this was open: the password field comes back.
+        if (answer?.locked) return render();
         // The chain was read again and the numbers changed: shown afresh.
         if (answer?.refreshed) return render(answer.error);
         if (answer?.error) {
@@ -221,15 +229,21 @@ function decide(
         window.close();
       },
     },
-    options.noPassword || onLedger
-      ? onLedger && !options.noPassword && type !== "approval:connect"
-        ? h(
-            "p",
-            { class: "muted small" },
-            "Connect your Ledger, unlock it and open the Ethereum app.",
-          )
-        : null
-      : h("label", {}, "Password", password),
+    ledger
+      ? h(
+          "p",
+          { class: "muted small" },
+          "Connect your Ledger, unlock it and open the Ethereum app.",
+        )
+      : keyless
+        ? unlockedUntil !== null && !options.noPassword
+          ? h(
+              "p",
+              { class: "muted small unlocked" },
+              `Tera is unlocked until ${clock(unlockedUntil)}, so no password this time.`,
+            )
+          : null
+        : h("label", {}, "Password", password),
     status,
     h(
       "div",
@@ -250,6 +264,9 @@ function decide(
   );
   return { form, password };
 }
+
+const clock = (at: number) =>
+  new Date(at).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
 function renderSign(origin: string, request: SignRequest) {
   const tone =
