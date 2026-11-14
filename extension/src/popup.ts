@@ -61,7 +61,15 @@ type State = {
   signatures: Signed[];
   transactions: Sent[];
 };
-type Asset = { symbol: string; name: string; address: string; decimals: number; priceAs?: string };
+type Asset = {
+  symbol: string;
+  name: string;
+  address: string;
+  decimals: number;
+  priceAs?: string;
+  /** Added at a site's request (core/token-add.js): shown, never priced or swapped. */
+  added?: boolean;
+};
 type Balances = {
   error?: string;
   address: string;
@@ -146,13 +154,13 @@ async function render() {
   }
   draw();
   wallet = await ask<Balances>({ type: "wallet:balances" });
-  if (view === "home" || view === "send" || view === "swap") draw();
+  if (["home", "send", "swap", "settings"].includes(view)) draw();
 }
 
 /** Balances again, after something was sent or on coming back to the wallet. */
 async function refreshWallet() {
   wallet = await ask<Balances>({ type: "wallet:balances" });
-  if (view === "home" || view === "send" || view === "swap") draw();
+  if (["home", "send", "swap", "settings"].includes(view)) draw();
 }
 
 async function loadStaking() {
@@ -374,7 +382,11 @@ function homeView() {
                     "div",
                     { class: "grow" },
                     h("strong", {}, row.symbol),
-                    h("span", { class: "muted small" }, row.name),
+                    h(
+                      "span",
+                      { class: "muted small" },
+                      row.added ? `${row.name} · added by you` : row.name,
+                    ),
                   ),
                   h(
                     "div",
@@ -599,7 +611,8 @@ function swapView() {
   const back = h("button", { class: "link", type: "button", onclick: () => go("home") }, "← Back");
   if (!wallet) return [back, h("p", { class: "muted" }, "Reading your balances…")];
   if (wallet.error) return [back, errorBox(wallet.error)];
-  const choices = tradable(wallet.assets) as Asset[];
+  // Tokens added at a site's request are shown, never offered for swaps.
+  const choices = tradable(wallet.assets.filter((asset) => !asset.added)) as Asset[];
   if (!choices.length)
     return [back, errorBox("Tera's asset list couldn't be read. Try again shortly.")];
 
@@ -1204,6 +1217,7 @@ function settingsView() {
       h("strong", {}, `Connected sites${sites.length ? ` (${sites.length})` : ""}`),
       list,
     ),
+    addedSection(),
     state.ledger
       ? h(
           "p",
@@ -1220,6 +1234,51 @@ function settingsView() {
       `Tera Wallet ${chrome.runtime.getManifest().version} for Robinhood Chain`,
     ),
   ].filter((part): part is HTMLElement => part !== null);
+}
+
+/** Tokens added at sites' requests, each with a way to take it off the list. */
+function addedSection() {
+  const added = (wallet?.assets ?? []).filter((asset) => asset.added);
+  if (!added.length) return null;
+  return h(
+    "section",
+    { class: "card" },
+    h("strong", {}, `Added tokens (${added.length})`),
+    h(
+      "ul",
+      { class: "sites" },
+      ...added.map((asset) =>
+        h(
+          "li",
+          {},
+          h(
+            "span",
+            { class: "origin", title: asset.address },
+            `${asset.symbol} `,
+            h("span", { class: "mono muted small" }, short(asset.address)),
+          ),
+          h(
+            "button",
+            {
+              class: "small",
+              type: "button",
+              onclick: async () => {
+                await ask({ type: "token:remove", address: asset.address });
+                await refreshWallet();
+                draw();
+              },
+            },
+            "Remove",
+          ),
+        ),
+      ),
+    ),
+    h(
+      "p",
+      { class: "muted small" },
+      "Removing a token only hides it here. Anything you hold stays on chain.",
+    ),
+  );
 }
 
 /** The shown wallet's name, which the switcher and the approval window use. */

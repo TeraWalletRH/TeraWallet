@@ -1,8 +1,8 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-4aefe0743cea",
-  "builtAt": "2026-11-11T14:13:36.876Z",
+  "release": "r-5f21979509de",
+  "builtAt": "2026-11-14T22:01:22.110Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
@@ -74,8 +74,8 @@
     },
     {
       "path": "core/dapp-connect.js",
-      "hash": "sha256-yQ0ii9KkY3GeB6ZILtC6mjkUpSF3E2Fz6wXk4zZvih4=",
-      "bytes": 6497
+      "hash": "sha256-POmnmraMD/dJ1qDh+md5BNjRfB18YO4KbA988kk7NSs=",
+      "bytes": 6597
     },
     {
       "path": "core/dapp-directory.js",
@@ -318,6 +318,11 @@
       "bytes": 2034
     },
     {
+      "path": "core/token-add.js",
+      "hash": "sha256-EJJmRRRdqL9hF86nMhj+GUFpFV0q9sObYcNqhEK/EUg=",
+      "bytes": 7154
+    },
+    {
       "path": "core/typed-data.js",
       "hash": "sha256-7NeMlyusWOFcktUo5CRPfgSr39qcHxBoarkbNfGlXeQ=",
       "bytes": 10396
@@ -339,8 +344,8 @@
     },
     {
       "path": "core/wallet-send.js",
-      "hash": "sha256-/8sN6uTwgwFfQpdRWMUGqIbRuXlPjHomfJVDWX/Ef2w=",
-      "bytes": 6351
+      "hash": "sha256-6fLqW3ZDQWUdv+pmD1vbyjiacffjK/wixsLqdx2WUgE=",
+      "bytes": 6510
     },
     {
       "path": "core/wallet-swap.js",
@@ -498,5 +503,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-Su/gdDzq8uLoYFdC5GGlO3zmF+U4p0dVs3KPJu3ZyW4="
+  "filesHash": "sha256-XyGXlQnec7f+EyhMLAcAU0uKBIuqXy/QlK1lqpYzucI="
 }

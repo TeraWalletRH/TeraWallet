@@ -107,6 +107,8 @@ const OWN = {
   eth_chainId: "chain",
   wallet_switchEthereumChain: "switch",
   wallet_addEthereumChain: "add",
+  // Showing a token the site names: core/token-add.js has the rules.
+  wallet_watchAsset: "asset",
   eth_sendTransaction: "send",
 };
 

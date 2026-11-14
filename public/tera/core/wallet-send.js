@@ -57,6 +57,8 @@ export function cleanRegistry(entries, pinned = []) {
  * What the wallet holds, ready to list.
  * balances: { address: base units (string) | null when it couldn't be read }
  * Returns [{ ...asset, balance, amount (decimal string) | null, value (USD) | null }].
+ * Empty balances are left out, except ETH, USDG and tokens the owner added
+ * (core/token-add.js), which they asked to see.
  */
 export function holdings(assets, balances = {}, prices = {}) {
   const always = new Set([NATIVE, "0x5fc5360d0400a0fd4f2af552add042d716f1d168"]);
@@ -70,7 +72,10 @@ export function holdings(assets, balances = {}, prices = {}) {
         amount !== null && Number.isFinite(price) && price >= 0 ? Number(amount) * price : null;
       return { ...asset, balance: balance === null ? null : balance.toString(), amount, value };
     })
-    .filter((row) => always.has(row.address) || (row.balance !== null && row.balance !== "0"))
+    .filter(
+      (row) =>
+        always.has(row.address) || row.added || (row.balance !== null && row.balance !== "0"),
+    )
     .sort((a, b) => (b.value ?? -1) - (a.value ?? -1) || a.symbol.localeCompare(b.symbol));
 }
 

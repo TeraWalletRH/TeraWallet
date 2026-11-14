@@ -69,6 +69,16 @@ test("ETH and USDG always show; anything else once it has a balance, by value", 
   assert.equal(unread.find((r) => r.symbol === "USDG").amount, null);
 });
 
+test("a token the owner added shows even while it's empty", () => {
+  const GOLD = "0x1111111111111111111111111111111111111111";
+  const assets = [
+    ...pinned,
+    { symbol: "GOLD", name: "Gold", address: GOLD, decimals: 18, added: true },
+  ];
+  const rows = holdings(assets, { [USDG]: "0", [NATIVE]: "0", [GOLD]: "0" }, {});
+  assert.deepEqual(rows.map((r) => r.symbol).sort(), ["ETH", "GOLD", "USDG"]);
+});
+
 test("amounts: plain decimals, within the asset's decimals, above zero", () => {
   assert.equal(toUnits("1.5", 6).units, 1500000n);
   assert.equal(toUnits(".25", 18).units, 250000000000000000n);

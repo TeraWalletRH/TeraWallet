@@ -28,6 +28,16 @@ import {
   switchChain,
 } from "../../public/tera/core/dapp-connect.js";
 import { SIGNABLE, refusal, signRequest } from "../../public/tera/core/dapp-sign.js";
+import {
+  SELECTORS,
+  addToken,
+  checkToken,
+  cleanAdded,
+  decodeAbiString,
+  decodeDecimals,
+  readWatchAsset,
+  removeToken,
+} from "../../public/tera/core/token-add.js";
 import * as phishing from "./phishing";
 import {
   describe,
@@ -136,7 +146,12 @@ type StakeSignRequest = {
   message: string;
   submit: { path: string; body: Record<string, unknown> };
 };
-type AnyRequest = SignRequest | SendRequest | SwapRequest | StakeSignRequest;
+// A token a site asked Tera to show, as its contract describes itself.
+type AssetRequest = {
+  asset: { address: string; symbol: string; name: string; decimals: number };
+  warnings: string[];
+};
+type AnyRequest = SignRequest | SendRequest | SwapRequest | StakeSignRequest | AssetRequest;
 type Sent = {
   hash: string;
   at: number;
@@ -152,7 +167,15 @@ type Sent = {
 
 // What explanations name: the tokens and contracts Tera knows. Tokens are
 // the wallet's own (USDG, ETH) plus Tera's registry once it has been read.
-type Asset = { symbol: string; name: string; address: string; decimals: number; priceAs?: string };
+type Asset = {
+  symbol: string;
+  name: string;
+  address: string;
+  decimals: number;
+  priceAs?: string;
+  /** Added by the owner at a site's request (core/token-add.js). */
+  added?: boolean;
+};
 const PINNED: Asset[] = sources.map((s) => ({
   symbol: s.symbol,
   name: s.symbol === "ETH" ? "Ether" : "Global Dollar",
@@ -166,6 +189,22 @@ const tokenMap = (assets: Asset[]) =>
       .map((a) => [a.address, { symbol: a.symbol, decimals: a.decimals }]),
   );
 const tokens = async () => tokenMap(await registry());
+
+/** What a contract says about itself as a token; each null if it doesn't answer. */
+async function tokenFacts(address: string) {
+  const call = (data: string) =>
+    read("eth_call", [{ to: address, data }, "latest"]).catch(() => null) as Promise<string | null>;
+  const [symbol, name, decimals] = await Promise.all([
+    call(SELECTORS.symbol),
+    call(SELECTORS.name),
+    call(SELECTORS.decimals),
+  ]);
+  return {
+    symbol: symbol ? decodeAbiString(symbol) : null,
+    name: name ? decodeAbiString(name) : null,
+    decimals: decimals ? decodeDecimals(decimals) : null,
+  };
+}
 const SPENDERS = Object.fromEntries(
   Object.entries(KNOWN_SPENDERS).map(([address, [en]]) => [address, en]),
 );
@@ -308,6 +347,29 @@ async function handle(origin: string, request: { method: string; params?: unknow
       );
     case "read":
       return read(method, Array.isArray(params) ? params : []);
+    case "asset": {
+      const named = readWatchAsset(params);
+      if (named.error) throw named.error;
+      const token = named.token!;
+      const listed = await registry();
+      // Already shown: nothing to ask.
+      if (listed.some((asset) => asset.address === token.address)) return true;
+      cooling(origin);
+      oneAtATime(origin);
+      preparing.add(origin);
+      let checked: { error?: RpcErr; asset?: AssetRequest["asset"]; warnings?: string[] };
+      try {
+        checked = checkToken({
+          token,
+          onChain: await tokenFacts(token.address),
+          listed: listed.filter((asset) => !asset.added) as never[],
+        });
+      } finally {
+        preparing.delete(origin);
+      }
+      if (checked.error) throw checked.error;
+      return ask("asset", origin, { asset: checked.asset!, warnings: checked.warnings! });
+    }
     case "signing": {
       if (!SIGNABLE.has(method)) throw refusal(method);
       const request = signRequest(method, params, {
@@ -343,7 +405,7 @@ async function handle(origin: string, request: { method: string; params?: unknow
 // ------------------------------------------------------------ approvals ----
 
 type Approval = {
-  kind: "connect" | "sign" | "send" | "swap" | "stake-sign";
+  kind: "connect" | "sign" | "send" | "swap" | "stake-sign" | "asset";
   origin: string;
   request?: AnyRequest;
   /** The wallet that signs it. A connection request picks one instead. */
@@ -973,6 +1035,27 @@ async function page(message: PageMessage) {
         return outcome.hash ? { ok: true } : { error: outcome.error?.message };
       });
     }
+    case "approval:asset": {
+      const id = String(message.id);
+      const approval = approvals.get(id);
+      if (!approval || approval.kind !== "asset" || !approval.request) return { expired: true };
+      const { asset } = approval.request as AssetRequest;
+      try {
+        const { addedTokens } = await chrome.storage.local.get("addedTokens");
+        await chrome.storage.local.set({ addedTokens: addToken(addedTokens, asset) });
+      } catch (error) {
+        return { error: String((error as Error).message || error) };
+      }
+      finish(id, true);
+      return { ok: true };
+    }
+    case "token:remove": {
+      const { addedTokens } = await chrome.storage.local.get("addedTokens");
+      await chrome.storage.local.set({
+        addedTokens: removeToken(addedTokens, String(message.address ?? "")),
+      });
+      return { ok: true };
+    }
     case "approval:reject":
       finish(String(message.id), undefined, rpcError(ERRORS.rejected, "The request was declined."));
       return { ok: true };
@@ -1276,8 +1359,21 @@ async function api(path: string, body?: unknown) {
 
 const HOUR = 3_600_000;
 
-/** The assets the wallet lists: its own, then the registry's (refreshed hourly, kept if Tera is down). */
+/**
+ * The assets the wallet lists: its own, then the registry's (refreshed hourly,
+ * kept if Tera is down), then the tokens the owner added at sites' request.
+ */
 async function registry(): Promise<Asset[]> {
+  const listed = await tera();
+  const { addedTokens } = await chrome.storage.local.get("addedTokens");
+  const added = (cleanAdded(addedTokens) as Asset[]).filter(
+    (token) => !listed.some((asset) => asset.address === token.address),
+  );
+  return [...listed, ...added];
+}
+
+/** Tera's own list: the wallet's assets and the registry's. */
+async function tera(): Promise<Asset[]> {
   const { registry: cached } = (await chrome.storage.local.get("registry")) as {
     registry?: { at: number; entries: unknown[] };
   };
@@ -1398,7 +1494,9 @@ const units = (text: unknown, decimals: number) => toUnits(text, decimals);
 /** Ask Tera for a swap, check it on this device, and describe it. */
 async function prepareSwap(owner: string, params: SwapRequest["params"]): Promise<SwapRequest> {
   const assets = await registry();
-  const asset = tradable(assets).find((a: Asset) => a.address === params.asset);
+  const asset = tradable(assets.filter((a) => !a.added)).find(
+    (a: Asset) => a.address === params.asset,
+  );
   if (!asset) throw new Error("Pick an asset to swap.");
   const pair = swapPair(asset, params.side, assets);
   if (!pair) throw new Error("This swap isn't offered.");

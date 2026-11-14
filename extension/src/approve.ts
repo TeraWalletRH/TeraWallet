@@ -45,9 +45,13 @@ type SwapRequest = {
   blocked?: string;
 };
 type StakeSignRequest = { title: string; rows: [string, string][]; message: string };
+type AssetRequest = {
+  asset: { address: string; symbol: string; name: string; decimals: number };
+  warnings: string[];
+};
 type Approval = {
   expired?: boolean;
-  kind?: "connect" | "sign" | "send" | "swap" | "stake-sign";
+  kind?: "connect" | "sign" | "send" | "swap" | "stake-sign" | "asset";
   origin?: string;
   address?: string | null;
   watch?: boolean;
@@ -61,7 +65,7 @@ type Approval = {
     kind: "key" | "watch" | "ledger";
     unlockedUntil: number | null;
   }[];
-  request?: SignRequest | SendRequest | SwapRequest | StakeSignRequest;
+  request?: SignRequest | SendRequest | SwapRequest | StakeSignRequest | AssetRequest;
 };
 
 const root = document.getElementById("root")!;
@@ -102,6 +106,8 @@ async function render(notice?: string) {
     return renderSwap(approval.request as SwapRequest, notice);
   if (approval.kind === "stake-sign" && approval.request)
     return renderStakeSign(approval.request as StakeSignRequest);
+  if (approval.kind === "asset" && approval.request)
+    return renderAsset(approval.origin!, approval.request as AssetRequest);
   const origin = approval.origin!;
   const wallets = approval.wallets ?? [];
   const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
@@ -660,4 +666,47 @@ function renderStakeSign(request: StakeSignRequest) {
     form,
   );
   password.focus();
+}
+
+/** A site asking Tera to show a token: what the token says it is, and the caveats. */
+function renderAsset(origin: string, request: AssetRequest) {
+  const { asset } = request;
+  const { form } = decide("Add token", "approval:asset", undefined, { noPassword: true });
+  root.replaceChildren(
+    header(),
+    h("h1", {}, `Add ${asset.symbol} to Tera?`),
+    h(
+      "section",
+      { class: "card" },
+      h(
+        "div",
+        { class: "row" },
+        h("span", { class: "muted small grow" }, "Asked by"),
+        h("span", { class: "site" }, originLabel(origin)),
+      ),
+    ),
+    h("ul", { class: "warnings" }, ...request.warnings.map((w) => h("li", {}, w))),
+    h(
+      "section",
+      { class: "card" },
+      h(
+        "dl",
+        { class: "rows" },
+        h("dt", {}, "Symbol"),
+        h("dd", {}, asset.symbol),
+        h("dt", {}, "Name"),
+        h("dd", {}, asset.name),
+        h("dt", {}, "Decimals"),
+        h("dd", {}, String(asset.decimals)),
+        h("dt", {}, "Contract"),
+        h("dd", { class: "mono" }, asset.address),
+      ),
+      h(
+        "p",
+        { class: "muted small" },
+        "Read from the token's contract on Robinhood Chain, not from the site. Adding it moves nothing and signs nothing; you can remove it in Settings.",
+      ),
+    ),
+    form,
+  );
 }
