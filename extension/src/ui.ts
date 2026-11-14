@@ -50,7 +50,7 @@ export const errorBox = (text: string) => h("p", { class: "error", role: "alert"
  */
 export function setupPrompt(done: () => void) {
   const listener = (changes: Record<string, unknown>, area: string) => {
-    if (area !== "local" || !("vault" in changes)) return;
+    if (area !== "local" || !("wallets" in changes)) return;
     chrome.storage.onChanged.removeListener(listener);
     done();
   };

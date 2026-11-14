@@ -627,6 +627,37 @@ ol.steps {
   font-size: 12px;
   white-space: nowrap;
 }
+/* Home's wallet switcher (wallets.ts) and the name field in Settings. */
+.row.switcher,
+.row.name {
+  align-items: center;
+  gap: 8px;
+}
+.row.switcher select,
+.row.name input {
+  flex: 1;
+  min-width: 0;
+}
+/* Which wallet a connection gets (approve.ts). */
+.pick {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pick label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--raised);
+  cursor: pointer;
+}
+.pick input {
+  width: auto;
+  margin: 0;
+}
 /* While Tera stays unlocked (stay.ts). */
 .row.unlocked {
   align-items: center;

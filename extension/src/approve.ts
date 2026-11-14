@@ -54,6 +54,13 @@ type Approval = {
   ledger?: boolean;
   /** Set while Tera stays unlocked for this wallet: no password until then. */
   unlockedUntil?: number | null;
+  /** A connection: the wallets to pick from. */
+  wallets?: {
+    address: string;
+    name: string;
+    kind: "key" | "watch" | "ledger";
+    unlockedUntil: number | null;
+  }[];
   request?: SignRequest | SendRequest | SwapRequest | StakeSignRequest;
 };
 
@@ -62,6 +69,8 @@ const root = document.getElementById("root")!;
 let onLedger = false;
 /** Tera is staying unlocked until then (stay.ts): Confirm needs no password. */
 let unlockedUntil: number | null = null;
+/** The wallet picked for a connection. */
+let chosen = "";
 const id = new URLSearchParams(location.search).get("id") || "";
 
 // The background worker sleeps when idle; while the owner decides, this
@@ -94,15 +103,73 @@ async function render(notice?: string) {
   if (approval.kind === "stake-sign" && approval.request)
     return renderStakeSign(approval.request as StakeSignRequest);
   const origin = approval.origin!;
+  const wallets = approval.wallets ?? [];
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const picked =
+    wallets.find((w) => same(w.address, chosen)) ??
+    wallets.find((w) => same(w.address, approval.address!)) ??
+    wallets[0];
+  chosen = picked?.address ?? approval.address;
+  // What the password field needs follows the wallet picked.
+  if (picked) {
+    onLedger = picked.kind === "ledger";
+    unlockedUntil = picked.unlockedUntil;
+  }
+  const watching = picked ? picked.kind === "watch" : Boolean(approval.watch);
   const { form, password } = decide("Connect", "approval:connect", undefined, {
-    noPassword: approval.watch,
+    noPassword: watching,
+    extra: () => ({ address: chosen }),
   });
+  const pick =
+    wallets.length > 1
+      ? h(
+          "section",
+          { class: "card" },
+          h("strong", {}, "Connect with"),
+          h(
+            "div",
+            { class: "pick", role: "radiogroup", "aria-label": "Wallet" },
+            ...wallets.map((w) =>
+              h(
+                "label",
+                {},
+                h("input", {
+                  type: "radio",
+                  name: "wallet",
+                  value: w.address,
+                  checked: same(w.address, chosen),
+                  onchange: () => {
+                    chosen = w.address;
+                    void render();
+                  },
+                }),
+                h(
+                  "span",
+                  { class: "grow" },
+                  h("strong", {}, w.name),
+                  " ",
+                  h("span", { class: "mono muted small" }, short(w.address)),
+                ),
+                w.kind === "key"
+                  ? null
+                  : h("span", { class: "badge" }, w.kind === "watch" ? "Watching" : "Ledger"),
+              ),
+            ),
+          ),
+          h(
+            "p",
+            { class: "muted small" },
+            "The site sees only this wallet, even when you switch wallets in Tera.",
+          ),
+        )
+      : null;
   const local = origin.startsWith("http://");
 
   const parts: (HTMLElement | null)[] = [
     header(),
     h("h1", {}, "Connect to this site?"),
     h("section", { class: "card" }, h("span", { class: "site" }, origin)),
+    pick,
     local
       ? h(
           "p",
@@ -117,7 +184,7 @@ async function render(notice?: string) {
       h(
         "ul",
         { class: "facts" },
-        h("li", {}, "See your address ", h("span", { class: "mono" }, short(approval.address))),
+        h("li", {}, "See your address ", h("span", { class: "mono" }, short(chosen))),
         h("li", {}, "See your balances and activity on Robinhood Chain (public anyway)"),
         h(
           "li",
@@ -128,7 +195,7 @@ async function render(notice?: string) {
       h("strong", {}, "It won't be able to"),
       h("ul", { class: "facts" }, h("li", {}, "Move funds or sign anything on its own")),
     ),
-    approval.watch
+    watching
       ? h(
           "p",
           { class: "note" },

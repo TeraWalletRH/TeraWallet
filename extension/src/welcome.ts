@@ -8,6 +8,10 @@
 //           → I already have a wallet → Recovery phrase | Private key
 //                                     → Create a password → You're all set
 //
+// From the popup's Add a wallet (welcome.html?add=1) the same steps add
+// another wallet beside the ones there (wallets.ts), and a new sealed wallet
+// takes the password Tera already has instead of a new one.
+//
 // The secret lives in this page's memory only between the step it's typed in
 // and the password step, which hands it to the background worker to seal
 // (wallet:add) and drops it. Going back to the start drops it too.
@@ -70,9 +74,19 @@ let watching = false;
 let onLedger = false;
 let ledgerScheme: "live" | "standard" = "live";
 let ledgerList: { path: string; address: string }[] = [];
+/** Adding a wallet beside the ones already here (welcome.html?add=1). */
+let adding = new URLSearchParams(location.search).get("add") === "1";
+/** A wallet here already has a password, which new ones share. */
+let hasPassword = false;
 
 function go(next: Step) {
   if (next === "welcome" || next === "import" || next === "create") secret = "";
+  if (next === "password" && !hasPassword)
+    return void refreshPassword().then(() => {
+      step = next;
+      draw();
+      root.querySelector<HTMLElement>("[data-focus]")?.focus();
+    });
   step = next;
   draw();
   root.querySelector<HTMLElement>("[data-focus]")?.focus();
@@ -127,11 +141,13 @@ const option = (icon: string, title: string, line: string, onclick: () => void) 
 function welcome() {
   return panel(
     mark(),
-    h("h1", { class: "hero" }, "Welcome to Tera"),
+    h("h1", { class: "hero" }, adding ? "Add a wallet" : "Welcome to Tera"),
     h(
       "p",
       { class: "lede" },
-      "The wallet for Robinhood Chain, in your browser. Hold, send and swap tokenized stocks and crypto, and connect to sites on your terms.",
+      adding
+        ? "Make a new one or bring in another. Each keeps its own address and balances, and you switch between them at the top of the Tera popup."
+        : "The wallet for Robinhood Chain, in your browser. Hold, send and swap tokenized stocks and crypto, and connect to sites on your terms.",
     ),
     h(
       "div",
@@ -147,15 +163,17 @@ function welcome() {
         "I already have a wallet",
       ),
     ),
-    h(
-      "p",
-      { class: "fine" },
-      "By continuing you agree to Tera's ",
-      h("a", { href: TERMS_URL, target: "_blank", rel: "noopener" }, "Terms"),
-      " and ",
-      h("a", { href: PRIVACY_URL, target: "_blank", rel: "noopener" }, "Privacy Policy"),
-      ".",
-    ),
+    adding
+      ? null
+      : h(
+          "p",
+          { class: "fine" },
+          "By continuing you agree to Tera's ",
+          h("a", { href: TERMS_URL, target: "_blank", rel: "noopener" }, "Terms"),
+          " and ",
+          h("a", { href: PRIVACY_URL, target: "_blank", rel: "noopener" }, "Privacy Policy"),
+          ".",
+        ),
   );
 }
 
@@ -662,6 +680,7 @@ function password() {
     queueMicrotask(() => go("import"));
     return [];
   }
+  if (hasPassword) return existingPassword();
   const first = h("input", {
     type: "password",
     autocomplete: "new-password",
@@ -739,6 +758,68 @@ function password() {
   ];
 }
 
+/** A second sealed wallet: sealed under the password Tera already has. */
+function existingPassword() {
+  const field = h("input", {
+    type: "password",
+    autocomplete: "current-password",
+    "data-focus": "",
+  }) as HTMLInputElement;
+  const status = h("div", { class: "status" });
+  const submit = h(
+    "button",
+    { class: "primary big", type: "submit", disabled: true },
+    "Add this wallet",
+  ) as HTMLButtonElement;
+  field.addEventListener("input", () => (submit.disabled = !field.value));
+  return [
+    topBar(from, 3),
+    panel(
+      h("div", { class: "glyph", "aria-hidden": "true" }, "⚷"),
+      h("h1", {}, "Enter your Tera password"),
+      h(
+        "p",
+        { class: "lede" },
+        "New wallets use the password you already have, so one password unlocks all of them.",
+      ),
+      address
+        ? h(
+            "p",
+            { class: "found" },
+            from === "create" ? "Your new wallet is here · " : "Adding · ",
+            h("span", { class: "mono" }, short(address)),
+          )
+        : null,
+      h(
+        "form",
+        {
+          class: "fields",
+          onsubmit: async (event: Event) => {
+            event.preventDefault();
+            status.replaceChildren();
+            submit.disabled = true;
+            submit.textContent = "Sealing your wallet…";
+            const answer = await ask({ type: "wallet:add", secret, password: field.value });
+            if (answer?.error) {
+              submit.disabled = false;
+              submit.textContent = "Add this wallet";
+              field.select();
+              return status.append(errorBox(answer.error));
+            }
+            secret = "";
+            field.value = "";
+            address = answer.address;
+            go("done");
+          },
+        },
+        h("label", {}, "Password", field),
+        status,
+        submit,
+      ),
+    ),
+  ];
+}
+
 /** Whether Tera is pinned to the toolbar, where Chrome lets an extension ask (116+ always does). */
 async function pinned() {
   try {
@@ -791,7 +872,11 @@ function done(again = false) {
 
   return panel(
     h("div", { class: "glyph ok", "aria-hidden": "true" }, "✓"),
-    h("h1", { class: "hero" }, again ? "Tera is already set up" : "You're all set"),
+    h(
+      "h1",
+      { class: "hero" },
+      again ? "Tera is already set up" : adding ? "Wallet added" : "You're all set",
+    ),
     h(
       "p",
       { class: "lede" },
@@ -810,11 +895,24 @@ function done(again = false) {
       "div",
       { class: "choices" },
       h("button", { class: "primary big", type: "button", onclick: openTera }, "Open Tera"),
-      h(
-        "button",
-        { class: "big", type: "button", onclick: () => window.close() },
-        "Close this tab",
-      ),
+      again
+        ? h(
+            "button",
+            {
+              class: "big",
+              type: "button",
+              onclick: () => {
+                adding = true;
+                go("welcome");
+              },
+            },
+            "Add another wallet",
+          )
+        : h(
+            "button",
+            { class: "big", type: "button", onclick: () => window.close() },
+            "Close this tab",
+          ),
     ),
   );
 }
@@ -847,15 +945,20 @@ function draw() {
 
 async function start() {
   const state = await ask<{ address: string | null }>({ type: "state" });
-  if (state?.address) {
+  await refreshPassword();
+  const wanted = new URLSearchParams(location.search).get("start");
+  if (state?.address && !adding) {
     address = state.address;
     step = "ready";
-  } else {
-    const wanted = new URLSearchParams(location.search).get("start");
-    if (wanted === "create" || wanted === "import") step = wanted;
-  }
+  } else if (wanted === "create" || wanted === "import") step = wanted;
   draw();
   root.querySelector<HTMLElement>("[data-focus]")?.focus();
+}
+
+/** Whether a wallet here already has a password (asked again before each password step). */
+async function refreshPassword() {
+  const state = await ask<{ hasPassword?: boolean }>({ type: "state" });
+  hasPassword = Boolean(state?.hasPassword);
 }
 
 void start();

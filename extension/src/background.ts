@@ -83,6 +83,17 @@ import {
   type Vault,
 } from "./vault";
 import { OWN } from "./shared";
+import {
+  addWallet,
+  checkName,
+  entryFor as walletEntry,
+  firstSealed,
+  listWallets,
+  migrate,
+  removeWallet,
+  same,
+  type Entry,
+} from "./wallets";
 import { drop, heldSecret, hold, isStay, shorten, type Held, type Stay } from "./stay";
 import { isSealed } from "../../android/src/handoff";
 
@@ -163,20 +174,48 @@ const SPENDERS = Object.fromEntries(
 // never for content scripts running inside websites.
 void chrome.storage.local.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" });
 
+// The wallets (wallets.ts) and which one the popup shows. `vault` is that
+// one's; a site's requests use the wallet the site connected to instead.
 const load = async () => {
-  const {
-    vault = null,
-    sites = {},
-    failures = 0,
-    failedAt = 0,
-  } = await chrome.storage.local.get(["vault", "sites", "failures", "failedAt"]);
+  const stored = await chrome.storage.local.get([
+    "vault",
+    "wallets",
+    "active",
+    "sites",
+    "failures",
+    "failedAt",
+  ]);
+  const { wallets, active } = migrate(stored);
+  // 0.11.0 and before: the one wallet becomes the first in the list.
+  if (stored.vault && !stored.wallets) {
+    await chrome.storage.local.set({ wallets, active });
+    await chrome.storage.local.remove("vault");
+  }
   return {
-    vault: vault as Vault | null,
-    sites: sites as Sites,
-    failures: failures as number,
-    failedAt: failedAt as number,
+    wallets,
+    vault: walletEntry(wallets, active)?.vault ?? null,
+    sites: (stored.sites ?? {}) as Sites,
+    failures: (stored.failures ?? 0) as number,
+    failedAt: (stored.failedAt ?? 0) as number,
   };
 };
+
+/** The wallet at `address`, or the one shown when no address is given. */
+async function walletAt(address?: string | null) {
+  const { wallets, vault } = await load();
+  return address ? (walletEntry(wallets, address)?.vault ?? null) : vault;
+}
+
+/** Add a wallet and show it. The first one also starts the password count afresh. */
+async function addEntry(vault: Vault) {
+  const { wallets } = await load();
+  const next = addWallet(wallets, vault);
+  await chrome.storage.local.set({
+    ...next,
+    ...(wallets.length ? {} : { failures: 0, failedAt: 0 }),
+  });
+  return vault.address;
+}
 
 // ---------------------------------------------------------------- sites ----
 
@@ -229,11 +268,12 @@ async function handle(origin: string, request: { method: string; params?: unknow
   const invalid = checkRequest(request);
   if (invalid) throw invalid;
   const { method, params } = request;
-  const { sites, vault } = await load();
+  const { sites, wallets, vault } = await load();
   // A watched wallet connects and reads like any other, and refuses to sign
-  // before any window opens.
+  // before any window opens. The wallet is the one this site connected to.
   const kind = classify(method);
-  if ((kind === "signing" || kind === "send") && isWatch(vault))
+  const siteWallet = walletEntry(wallets, accountsFor(sites, origin)[0])?.vault ?? vault;
+  if ((kind === "signing" || kind === "send") && isWatch(siteWallet))
     throw rpcError(ERRORS.unauthorized, WATCH_ONLY);
   switch (kind) {
     case "chain":
@@ -293,7 +333,7 @@ async function handle(origin: string, request: { method: string; params?: unknow
       } finally {
         preparing.delete(origin);
       }
-      return ask("send", origin, prepared);
+      return ask("send", origin, prepared, prepared.tx.from);
     }
     default:
       throw rpcError(ERRORS.unsupported, `Tera Wallet doesn't support ${method}.`);
@@ -306,6 +346,8 @@ type Approval = {
   kind: "connect" | "sign" | "send" | "swap" | "stake-sign";
   origin: string;
   request?: AnyRequest;
+  /** The wallet that signs it. A connection request picks one instead. */
+  address?: string;
   resolve: (value: unknown) => void;
   reject: (error: RpcErr) => void;
   promise: Promise<unknown>;
@@ -331,7 +373,7 @@ function cooling(origin: string) {
     );
 }
 
-function ask(kind: Approval["kind"], origin: string, request?: AnyRequest) {
+function ask(kind: Approval["kind"], origin: string, request?: AnyRequest, address?: string) {
   const id = crypto.randomUUID();
   let resolve!: Approval["resolve"];
   let reject!: Approval["reject"];
@@ -339,7 +381,7 @@ function ask(kind: Approval["kind"], origin: string, request?: AnyRequest) {
     resolve = res;
     reject = rej;
   });
-  const approval: Approval = { kind, origin, request, resolve, reject, promise };
+  const approval: Approval = { kind, origin, request, address, resolve, reject, promise };
   approvals.set(id, approval);
   void openWindow(id).then((windowId) => {
     if (windowId === undefined)
@@ -384,7 +426,7 @@ function oneAtATime(origin: string) {
 function askToSign(origin: string, request: SignRequest) {
   cooling(origin);
   oneAtATime(origin);
-  return ask("sign", origin, request);
+  return ask("sign", origin, request, request.address);
 }
 
 async function openWindow(id: string) {
@@ -499,8 +541,10 @@ type Refused = { ok: false; error: string; locked?: boolean };
 
 async function tryPassword(
   password: string,
+  address?: string,
 ): Promise<{ ok: true; vault: Vault; secret: string } | Refused> {
-  const { vault, failures, failedAt } = await load();
+  const { failures, failedAt } = await load();
+  const vault = await walletAt(address);
   if (!vault) return { ok: false, error: "There's no wallet in this browser yet." };
   if (isWatch(vault)) return { ok: false, error: WATCH_ONLY };
   // No password at all: the window thought Tera was unlocked, and it locked
@@ -529,14 +573,15 @@ type Account = ReturnType<typeof signer> | LedgerAccount;
 
 async function unlock(
   password: string,
+  address?: string,
 ): Promise<{ ok: true; vault: Vault; account: Account } | Refused> {
-  const { vault } = await load();
+  const vault = await walletAt(address);
   if (isLedger(vault))
     return { ok: true, vault, account: ledgerAccount(vault.path, vault.address) };
   // Still unlocked from a password a few minutes ago: no password this time.
   const kept = vault && heldSecret(await held(), vault.address, Date.now());
   if (vault && kept) return { ok: true, vault, account: signer(kept) };
-  const tried = await tryPassword(password);
+  const tried = await tryPassword(password, address);
   return tried.ok ? { ok: true, vault: tried.vault, account: signer(tried.secret) } : tried;
 }
 
@@ -565,7 +610,6 @@ chrome.runtime.onMessageExternal.addListener((message, sender, reply) => {
       return reply({
         error: "Tera for Chrome isn't waiting for this wallet. Start again from the extension.",
       });
-    if ((await load()).vault) return reply({ error: "Tera for Chrome already has a wallet." });
     await chrome.storage.session.set({ handoff: message.sealed });
     reply({ ok: true });
   })().catch(() => reply({ error: "Tera for Chrome couldn't take the wallet. Try again." }));
@@ -608,6 +652,7 @@ type PageMessage = {
   lockId?: unknown;
   consent?: unknown;
   minutes?: unknown;
+  name?: unknown;
 };
 
 const NEEDS_KEY = new Set(["wallet:send", "wallet:swap", "wallet:stake", "wallet:stake-sign"]);
@@ -619,32 +664,51 @@ async function page(message: PageMessage) {
     case "ping":
       return { ok: true };
     case "state": {
-      const { vault, sites } = await load();
+      const { vault, wallets, sites } = await load();
       const { signatures } = await chrome.storage.local.get("signatures");
+      // Activity is the shown wallet's (entries from before 0.4 have no sender).
+      const mine = (address?: string) => !address || same(address, vault?.address);
       return {
         address: vault?.address ?? null,
+        wallets: listWallets(wallets),
+        hasPassword: Boolean(firstSealed(wallets)),
         watch: isWatch(vault),
         ledger: isLedger(vault),
         stayMinutes: await stayMinutes(),
         unlockedUntil: await unlockedUntil(vault?.address),
         sites: listSites(sites),
-        signatures: ((signatures as { items?: unknown[] } | undefined)?.items ?? []).slice(0, 10),
-        transactions: (await refreshSent()).slice(0, 10),
+        signatures: ((signatures as { items?: { address?: string }[] } | undefined)?.items ?? [])
+          .filter((entry) => mine(entry.address))
+          .slice(0, 10),
+        transactions: (await refreshSent()).filter((sent) => mine(sent.from)).slice(0, 10),
       };
     }
     case "wallet:add": {
-      if ((await load()).vault)
-        return { error: "This browser already has a wallet. Remove it first." };
-      const vault = await createVault(String(message.secret ?? ""), String(message.password ?? ""));
-      await chrome.storage.local.set({ vault, failures: 0, failedAt: 0 });
-      return { address: vault.address };
+      const password = String(message.password ?? "");
+      const secret = String(message.secret ?? "").trim();
+      // One password for every wallet: a new one is sealed only under the
+      // password that already opens Tera.
+      const sealed = firstSealed((await load()).wallets);
+      if (sealed) {
+        if (!password) return { error: "Enter your Tera password." };
+        const tried = await tryPassword(password, sealed.address);
+        if (!tried.ok) return { error: tried.error };
+      }
+      try {
+        const vault = await createVault(secret, password);
+        await addEntry(vault);
+        await keep(hold(await held(), vault.address, secret, await stayMinutes(), Date.now()));
+        return { address: vault.address };
+      } catch (error) {
+        return { error: String((error as Error).message || error) };
+      }
     }
     case "wallet:watch": {
-      if ((await load()).vault)
-        return { error: "This browser already has a wallet. Remove it first." };
-      const vault = watchVault(String(message.address ?? ""));
-      await chrome.storage.local.set({ vault, failures: 0, failedAt: 0 });
-      return { address: vault.address };
+      try {
+        return { address: await addEntry(watchVault(String(message.address ?? ""))) };
+      } catch (error) {
+        return { error: String((error as Error).message || error) };
+      }
     }
     case "ledger:accounts": {
       try {
@@ -655,43 +719,86 @@ async function page(message: PageMessage) {
       }
     }
     case "wallet:ledger": {
-      if ((await load()).vault)
-        return { error: "This browser already has a wallet. Remove it first." };
       const path = String(message.path ?? "");
       try {
         // Read again from the device, and shown on its screen to confirm.
         const address = await ledgerAddress(path, true);
         if (address.toLowerCase() !== String(message.address ?? "").toLowerCase())
           return { error: "The Ledger gave a different address. Try again." };
-        await chrome.storage.local.set({
-          vault: { v: 1, ledger: true, address, path },
-          failures: 0,
-          failedAt: 0,
-        });
-        return { address };
+        return { address: await addEntry({ v: 1, ledger: true, address, path }) };
       } catch (error) {
         return { error: String((error as Error).message || error) };
       }
     }
     case "wallet:remove": {
       // A watched wallet has no password, nor does a Ledger's: the key isn't here.
-      const removing = (await load()).vault;
+      const { vault: removing, wallets, sites } = await load();
+      if (!removing) return { error: "There's no wallet in this browser yet." };
       if (!isWatch(removing) && !isLedger(removing)) {
         // Always the password: staying unlocked never covers taking a wallet out.
         if (!message.password) return { error: "Enter your password." };
         const tried = await tryPassword(String(message.password ?? ""));
         if (!tried.ok) return { error: tried.error };
       }
-      if (removing) await keep(drop(await held(), removing.address, Date.now()));
-      await chrome.storage.local.remove([
-        "vault",
-        "sites",
-        "failures",
-        "failedAt",
-        "signatures",
-        "transactions",
-      ]);
-      broadcast(null, "accountsChanged", []);
+      await keep(drop(await held(), removing.address, Date.now()));
+      const left = removeWallet(wallets, removing.address);
+      if (!left.wallets.length) {
+        await chrome.storage.local.remove([
+          "vault",
+          "wallets",
+          "active",
+          "sites",
+          "failures",
+          "failedAt",
+          "signatures",
+          "transactions",
+        ]);
+        broadcast(null, "accountsChanged", []);
+        return { ok: true };
+      }
+      // The other wallets stay. Sites connected to this one are disconnected,
+      // and its activity goes with it.
+      let nextSites = sites;
+      for (const origin of Object.keys(sites))
+        if (accountsFor(sites, origin).some((a) => same(a, removing.address))) {
+          nextSites = revoke(nextSites, origin);
+          broadcast(origin, "accountsChanged", []);
+        }
+      const { signatures } = await chrome.storage.local.get("signatures");
+      const log = signatures as { items?: { address?: string }[] } | undefined;
+      await chrome.storage.local.set({
+        ...left,
+        sites: nextSites,
+        transactions: (await loadSent()).filter((sent) => !same(sent.from, removing.address)),
+        ...(log?.items
+          ? {
+              signatures: {
+                ...log,
+                items: log.items.filter((entry) => !same(entry.address, removing.address)),
+              },
+            }
+          : {}),
+      });
+      return { ok: true };
+    }
+    case "wallet:switch": {
+      const { wallets } = await load();
+      const entry = walletEntry(wallets, String(message.address ?? ""));
+      if (!entry) return { error: "That wallet isn't in Tera." };
+      await chrome.storage.local.set({ active: entry.vault.address });
+      return { ok: true };
+    }
+    case "wallet:rename": {
+      const { wallets } = await load();
+      const address = String(message.address ?? "");
+      if (!walletEntry(wallets, address)) return { error: "That wallet isn't in Tera." };
+      const checked = checkName(wallets, address, message.name);
+      if (checked.error) return { error: checked.error };
+      await chrome.storage.local.set({
+        wallets: wallets.map((entry: Entry) =>
+          same(entry.vault.address, address) ? { ...entry, name: checked.name! } : entry,
+        ),
+      });
       return { ok: true };
     }
     case "lock":
@@ -735,7 +842,7 @@ async function page(message: PageMessage) {
         return { expired: true };
       return exclusively(id, approval, async () => {
         const request = approval.request as StakeSignRequest;
-        const tried = await unlock(String(message.password ?? ""));
+        const tried = await unlock(String(message.password ?? ""), approval.address);
         if (!tried.ok) return { error: tried.error, locked: tried.locked };
         let signature: string;
         try {
@@ -753,30 +860,51 @@ async function page(message: PageMessage) {
       });
     }
     case "approval:get": {
-      const approval = approvals.get(String(message.id));
+      const id = String(message.id);
+      const approval = approvals.get(id);
       if (!approval) return { expired: true };
-      const { vault } = await load();
+      const { wallets } = await load();
+      const vault = await walletAt(approval.address);
+      // The wallet that would sign this was taken out while the window was open.
+      if (approval.address && !vault) {
+        finish(id, undefined, rpcError(ERRORS.unauthorized, "That wallet was removed."));
+        return { expired: true };
+      }
+      const unlocked = async (v: Vault | null) =>
+        !v || isWatch(v) || isLedger(v) ? null : await unlockedUntil(v.address);
       return {
         kind: approval.kind,
         origin: approval.origin,
         address: vault?.address ?? null,
+        name: walletEntry(wallets, vault?.address)?.name ?? null,
         watch: isWatch(vault),
         ledger: isLedger(vault),
-        unlockedUntil:
-          isWatch(vault) || isLedger(vault) ? null : await unlockedUntil(vault?.address),
+        unlockedUntil: await unlocked(vault),
+        // A connection picks which wallet the site gets.
+        wallets:
+          approval.kind === "connect"
+            ? await Promise.all(
+                listWallets(wallets).map(async (w, i) => ({
+                  ...w,
+                  unlockedUntil: await unlocked(wallets[i].vault),
+                })),
+              )
+            : undefined,
         request: approval.request,
       };
     }
     case "approval:connect": {
       const approval = approvals.get(String(message.id));
       if (!approval || approval.kind !== "connect") return { expired: true };
-      // Connecting a watched wallet shares only its address, so no password.
-      const { vault } = await load();
+      // The wallet picked in the window, or the one shown. Connecting a
+      // watched or Ledger wallet shares only its address, so no password.
+      const vault = await walletAt(message.address ? String(message.address) : null);
+      if (!vault) return { error: "That wallet isn't in Tera any more." };
       let accounts: string[];
       if (isWatch(vault) || isLedger(vault)) accounts = [vault.address];
-      else if (vault && (await unlockedUntil(vault.address))) accounts = [vault.address];
+      else if (await unlockedUntil(vault.address)) accounts = [vault.address];
       else {
-        const tried = await tryPassword(String(message.password ?? ""));
+        const tried = await tryPassword(String(message.password ?? ""), vault.address);
         if (!tried.ok) return { error: tried.error, locked: tried.locked };
         accounts = [tried.vault.address];
       }
@@ -796,7 +924,7 @@ async function page(message: PageMessage) {
           finish(id, undefined, rpcError(ERRORS.unauthorized, "The site was disconnected."));
           return { expired: true };
         }
-        const tried = await unlock(String(message.password ?? ""));
+        const tried = await unlock(String(message.password ?? ""), approval.address);
         if (!tried.ok) return { error: tried.error, locked: tried.locked };
         const request = approval.request as SignRequest;
         let signature: string;
@@ -835,10 +963,11 @@ async function page(message: PageMessage) {
             };
           request = fresh;
         }
-        const tried = await unlock(String(message.password ?? ""));
+        const tried = await unlock(String(message.password ?? ""), approval.address);
         if (!tried.ok) return { error: tried.error, locked: tried.locked };
         const outcome = await send(tried.account, approval.origin, request);
-        if (outcome.hash && request.stake) await rememberStake(request.stake, outcome.hash);
+        if (outcome.hash && request.stake)
+          await rememberStake(request.stake, outcome.hash, request.tx.from);
         if (outcome.hash) finish(id, outcome.hash);
         else finish(id, undefined, outcome.error);
         return outcome.hash ? { ok: true } : { error: outcome.error?.message };
@@ -1258,7 +1387,7 @@ async function walletSend(message: PageMessage) {
       "You haven't sent to this address from this browser before. Check it against where you got it, all the way through.",
     );
   // The review window decides; the popup has usually closed by then.
-  ask("send", OWN, prepared).catch(() => {});
+  ask("send", OWN, prepared, vault.address).catch(() => {});
   return { ok: true };
 }
 
@@ -1363,7 +1492,7 @@ async function walletSwap(message: PageMessage) {
   } finally {
     preparing.delete(OWN);
   }
-  ask("swap", OWN, request).catch(() => {});
+  ask("swap", OWN, request, vault.address).catch(() => {});
   return { ok: true };
 }
 
@@ -1388,8 +1517,9 @@ async function runSwap(id: string, approval: Approval, message: PageMessage) {
   if (request.blocked) return { error: request.blocked };
   if (request.review.consent && message.consent !== true)
     return { error: "Tick that you accept the price impact first." };
-  const { vault } = await load();
-  if (!vault) return { error: "There's no wallet in this browser yet." };
+  // The wallet the swap was asked for, even if the popup shows another now.
+  const vault = await walletAt(approval.address);
+  if (!vault) return { error: "That wallet was removed." };
   // A quote over 90 seconds old is fetched again and shown before anything is signed.
   if (Date.now() - request.preparedAt > QUOTE_LIFE) {
     try {
@@ -1402,7 +1532,7 @@ async function runSwap(id: string, approval: Approval, message: PageMessage) {
       error: "The quote expired, so here's a fresh one. Check the numbers and confirm again.",
     };
   }
-  const tried = await unlock(String(message.password ?? ""));
+  const tried = await unlock(String(message.password ?? ""), vault.address);
   if (!tried.ok) return { error: tried.error, locked: tried.locked };
   // Checked again at the moment of signing: the quote's age and every byte.
   try {
@@ -1492,11 +1622,14 @@ async function staking() {
   }
 }
 
-async function rememberStake(stake: NonNullable<SendRequest["stake"]>, hash: string) {
-  const { vault } = await load();
+async function rememberStake(
+  stake: NonNullable<SendRequest["stake"]>,
+  hash: string,
+  owner: string,
+) {
   const { stakingPending } = await chrome.storage.local.get("stakingPending");
   await chrome.storage.local.set({
-    stakingPending: addPending(stakingPending, { ...stake, txHash: hash, owner: vault?.address }),
+    stakingPending: addPending(stakingPending, { ...stake, txHash: hash, owner }),
   });
   void creditAll(20);
 }
@@ -1617,7 +1750,7 @@ async function walletStake(message: PageMessage) {
     prepared.stake = fixed
       ? { kind: "fixed", termDays: Number(term), amount: amount.units!.toString() }
       : { kind: "flexible", epochId: epoch.id, amount: amount.units!.toString() };
-    ask("send", OWN, prepared).catch(() => {});
+    ask("send", OWN, prepared, owner).catch(() => {});
     return { ok: true };
   } catch (error) {
     return { error: String((error as Error).message || error) };
@@ -1709,7 +1842,7 @@ async function walletStakeSign(message: PageMessage) {
         submit: { path: "/api/staking/payouts", body },
       };
     }
-    ask("stake-sign", OWN, request).catch(() => {});
+    ask("stake-sign", OWN, request, owner).catch(() => {});
     return { ok: true };
   } catch (error) {
     return { error: String((error as Error).message || error) };

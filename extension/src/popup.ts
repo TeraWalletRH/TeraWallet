@@ -1,6 +1,7 @@
 // The toolbar popup: the wallet itself. Home shows what it holds and what
 // that's worth; Send and Receive move funds; Activity lists what was sent and
-// signed; Settings has the connected sites and taking the wallet out.
+// signed; Settings has the connected sites and taking the wallet out. The
+// switcher at the top of Home picks which of the wallets (wallets.ts) is shown.
 //
 // Nothing here holds a key or decides anything. A send is checked and
 // prepared by the background worker and confirmed, with the password, in the
@@ -44,8 +45,10 @@ type Sent = {
   recipient: string;
   status: string;
 };
+type WalletItem = { address: string; name: string; kind: "key" | "watch" | "ledger" };
 type State = {
   address: string | null;
+  wallets: WalletItem[];
   /** Watch-only: an address with no key (vault.ts WatchVault). */
   watch?: boolean;
   /** On a Ledger: approved on the device, never with a password. */
@@ -54,7 +57,7 @@ type State = {
   stayMinutes: Stay;
   /** Set while it's unlocked: when it locks again. */
   unlockedUntil: number | null;
-  sites: { origin: string; connectedAt: number }[];
+  sites: { origin: string; connectedAt: number; accounts: string[] }[];
   signatures: Signed[];
   transactions: Sent[];
 };
@@ -266,6 +269,52 @@ function homeActions() {
   ];
 }
 
+const sameAddress = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+const walletName = (address: string) =>
+  state.wallets.find((w) => sameAddress(w.address, address))?.name ?? short(address);
+
+/** Which wallet Home shows, and the way to add another. */
+function switcher() {
+  const KIND = { key: "", watch: " · watching", ledger: " · Ledger" };
+  const select = h(
+    "select",
+    {
+      "aria-label": "Wallet",
+      onchange: async (event: Event) => {
+        const address = (event.target as HTMLSelectElement).value;
+        await ask({ type: "wallet:switch", address });
+        wallet = null;
+        stakeState = null;
+        draft = {};
+        await remember();
+        render();
+      },
+    },
+    ...state.wallets.map((w) =>
+      h("option", { value: w.address }, `${w.name} · ${short(w.address)}${KIND[w.kind]}`),
+    ),
+  ) as HTMLSelectElement;
+  select.value = state.wallets.find((w) => sameAddress(w.address, state.address!))?.address ?? "";
+  return h(
+    "div",
+    { class: "row switcher" },
+    select,
+    h(
+      "button",
+      {
+        class: "small",
+        type: "button",
+        title: "Add a wallet",
+        onclick: async () => {
+          await chrome.tabs.create({ url: chrome.runtime.getURL("welcome.html?add=1") });
+          window.close();
+        },
+      },
+      "+ Add",
+    ),
+  );
+}
+
 function homeView() {
   const list = rows();
   const total = totalValue(
@@ -275,6 +324,7 @@ function homeView() {
   const reading = !wallet;
   const failed = wallet?.error;
   return [
+    switcher(),
     h(
       "section",
       { class: "card hero" },
@@ -1117,7 +1167,14 @@ function settingsView() {
           h(
             "li",
             {},
-            h("span", { class: "origin", title: site.origin }, originLabel(site.origin)),
+            h(
+              "span",
+              { class: "origin", title: site.origin },
+              originLabel(site.origin),
+              state.wallets.length > 1 && site.accounts?.[0]
+                ? h("span", { class: "muted small" }, ` · ${walletName(site.accounts[0])}`)
+                : null,
+            ),
             h(
               "button",
               {
@@ -1139,6 +1196,7 @@ function settingsView() {
         "No sites connected. When a site asks, Tera opens a window so you can decide.",
       );
   return [
+    nameSection(),
     h("section", { class: "card" }, h("strong", {}, "Appearance"), themePicker()),
     h(
       "section",
@@ -1162,6 +1220,36 @@ function settingsView() {
       `Tera Wallet ${chrome.runtime.getManifest().version} for Robinhood Chain`,
     ),
   ].filter((part): part is HTMLElement => part !== null);
+}
+
+/** The shown wallet's name, which the switcher and the approval window use. */
+function nameSection() {
+  const address = state.address!;
+  const field = h("input", {
+    value: walletName(address),
+    maxlength: 24,
+    autocomplete: "off",
+    "aria-label": "Wallet name",
+  }) as HTMLInputElement;
+  const status = h("div");
+  const save = h("button", { class: "small", type: "submit" }, "Save") as HTMLButtonElement;
+  return h(
+    "form",
+    {
+      class: "card",
+      onsubmit: async (event: Event) => {
+        event.preventDefault();
+        status.replaceChildren();
+        const answer = await ask({ type: "wallet:rename", address, name: field.value });
+        if (answer?.error) return status.append(errorBox(answer.error));
+        render();
+      },
+    },
+    h("strong", {}, "This wallet"),
+    h("div", { class: "row name" }, field, save),
+    h("span", { class: "mono muted small" }, address),
+    status,
+  );
 }
 
 /** How long Tera stays unlocked after the password, from "every time" to an hour. */
@@ -1234,9 +1322,13 @@ function removeSection(address: string) {
             h(
               "p",
               { class: "small" },
-              watch
-                ? `Stops watching ${short(address)} and removes every site connection from this browser.`
-                : `Removes ${short(address)} and every site connection from this browser. Your funds stay on chain; your recovery phrase brings them back anywhere.`,
+              `${
+                watch
+                  ? `Stops watching ${walletName(address)} (${short(address)})`
+                  : `Removes ${walletName(address)} (${short(address)}) from this browser`
+              }, and disconnects the sites it's connected to.${
+                state.wallets.length > 1 ? " Your other wallets stay." : ""
+              }${watch ? "" : " Your funds stay on chain; your recovery phrase brings them back anywhere."}`,
             ),
             keyless ? null : h("label", {}, "Password", password),
             status,
