@@ -305,6 +305,7 @@ function switcher() {
         wallet = null;
         stakeState = null;
         draft = {};
+        swapDraft = {};
         await remember();
         render();
       },
@@ -1421,6 +1422,7 @@ function removeSection(address: string) {
                 if (answer?.error) return status.replaceChildren(errorBox(answer.error));
                 view = "home";
                 draft = {};
+                swapDraft = {};
                 await remember();
                 render();
               },
