@@ -776,6 +776,20 @@ function Wallet() {
   const reduceMotion = useReducedMotion();
   const [language, setLanguage] = useState<"en" | "zh">("en");
   const t = (en: string, zh: string) => (language === "zh" ? zh : en);
+  // An intent's actionType is always this bare English enum -- translating
+  // it once here, rather than at each of the handful of places it's shown
+  // raw, is what keeps a Chinese screen from having one English word stuck
+  // in the middle of it.
+  const actionLabel = (actionType: string) =>
+    actionType === "TRANSFER"
+      ? t("Transfer", "转账")
+      : actionType === "BUY"
+        ? t("Buy", "买入")
+        : actionType === "SELL"
+          ? t("Sell", "卖出")
+          : actionType === "REVOKE"
+            ? t("Revoke", "撤销授权")
+            : actionType;
   const [theme, setTheme] = useState<"light" | "dark">("dark");
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
@@ -4447,7 +4461,7 @@ function Wallet() {
     if (q) check(q.decimalsOut === (i.actionType === "BUY" ? asset.decimals : teraTrade ? 18 : 6));
     const isBatch = i.actionType === "TRANSFER" && Array.isArray(i.transfers) && i.transfers.length > 1;
     const rows: [string, string][] = [
-      [t("Action", "操作"), isBatch ? t("Batch Transfer (Multicall3)", "批量转账 (Multicall3)") : i.actionType],
+      [t("Action", "操作"), isBatch ? t("Batch Transfer (Multicall3)", "批量转账 (Multicall3)") : actionLabel(i.actionType)],
       [t("Send", "发送"), `${formatUnits(BigInt(i.amount), input.decimals)} ${input.symbol}`],
       usdReviewRow(input.symbol, formatUnits(BigInt(i.amount), input.decimals)),
       [t("Recipient", "收款地址"), isBatch ? t(`${i.transfers.length} recipients (Multicall3)`, `${i.transfers.length} 位收款人 (Multicall3)`) : (i.recipient || owner)],
@@ -7065,7 +7079,7 @@ function Wallet() {
               {data.drafts.map((d) => (
                 <View style={s.panel} key={d.createdAt}>
                   <Text style={s.text}>
-                    {d.intent?.actionType} ·{" "}
+                    {d.intent?.actionType ? actionLabel(d.intent.actionType) : ""} ·{" "}
                     {
                       assets.find(
                         (a) => a.address.toLowerCase() === d.intent?.assetAddress?.toLowerCase(),
