@@ -13472,7 +13472,7 @@ function Wallet() {
                         const url = URL.createObjectURL(blob);
                         const link = document.createElement("a");
                         link.href = url;
-                        link.setAttribute("download", `terrawallet-activity-standard-${Date.now()}.csv`);
+                        link.setAttribute("download", `terawallet-activity-standard-${Date.now()}.csv`);
                         document.body.appendChild(link);
                         link.click();
                         document.body.removeChild(link);
@@ -13500,7 +13500,7 @@ function Wallet() {
                         const url = URL.createObjectURL(blob);
                         const link = document.createElement("a");
                         link.href = url;
-                        link.setAttribute("download", `terrawallet-activity-koinly-${Date.now()}.csv`);
+                        link.setAttribute("download", `terawallet-activity-koinly-${Date.now()}.csv`);
                         document.body.appendChild(link);
                         link.click();
                         document.body.removeChild(link);
@@ -13528,7 +13528,7 @@ function Wallet() {
                         const url = URL.createObjectURL(blob);
                         const link = document.createElement("a");
                         link.href = url;
-                        link.setAttribute("download", `terrawallet-activity-cointracker-${Date.now()}.csv`);
+                        link.setAttribute("download", `terawallet-activity-cointracker-${Date.now()}.csv`);
                         document.body.appendChild(link);
                         link.click();
                         document.body.removeChild(link);
