@@ -11537,33 +11537,57 @@ function Wallet() {
                 )}
               </Text>
             ) : lb.state === "ready" ? (
-              lb.entries.map((item) => (
-                <View
-                  key={item.tag}
-                  style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 12 }}
-                >
-                  <Image
-                    accessibilityLabel={item.tag}
-                    source={{
-                      uri: `https://api.dicebear.com/9.x/thumbs/png?seed=${encodeURIComponent(item.tag)}&size=76`,
-                    }}
+              lb.entries.map((item) => {
+                const mine = Boolean(myTag) && item.tag.toLowerCase() === myTag!.toLowerCase();
+                return (
+                  <View
+                    key={item.tag}
                     style={[
-                      { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.raised },
-                      item.rank <= 3 && {
-                        borderWidth: 2,
-                        borderColor: item.rank === 1 ? colors.yellow : colors.green,
+                      {
+                        flexDirection: "row",
+                        alignItems: "center",
+                        gap: 12,
+                        paddingVertical: 12,
+                        paddingHorizontal: mine ? 10 : 0,
+                        borderRadius: 10,
+                      },
+                      mine && {
+                        backgroundColor: colors.tint,
+                        borderLeftWidth: 3,
+                        borderLeftColor: colors.green,
                       },
                     ]}
-                  />
-                  <View style={{ flex: 1 }}>
-                    <Text style={s.label}>{item.tag}</Text>
-                    <Text style={s.small}>{item.tier}</Text>
+                  >
+                    <Image
+                      accessibilityLabel={item.tag}
+                      source={{
+                        uri: `https://api.dicebear.com/9.x/thumbs/png?seed=${encodeURIComponent(item.tag)}&size=76`,
+                      }}
+                      style={[
+                        { width: 38, height: 38, borderRadius: 19, backgroundColor: colors.raised },
+                        item.rank <= 3 && {
+                          borderWidth: 2,
+                          borderColor: item.rank === 1 ? colors.yellow : colors.green,
+                        },
+                      ]}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <View style={{ flexDirection: "row", alignItems: "center", gap: 6 }}>
+                        <Text style={s.label}>{item.tag}</Text>
+                        {mine && (
+                          <Text style={[s.small, { color: colors.green, fontWeight: "700" }]}>
+                            {t("YOU", "你")}
+                          </Text>
+                        )}
+                      </View>
+                      <Text style={s.small}>{item.tier}</Text>
+                    </View>
+                    <Text style={[s.label, { color: colors.green }]}>
+                      {t(`${item.points} pts`, `${item.points} 分`)}
+                    </Text>
                   </View>
-                  <Text style={[s.label, { color: colors.green }]}>
-                    {t(`${item.points} pts`, `${item.points} 分`)}
-                  </Text>
-                </View>
-              ))
+                );
+              })
             ) : null}
           </Group>
         </>
