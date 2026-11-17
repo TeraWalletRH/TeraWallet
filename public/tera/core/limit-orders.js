@@ -387,26 +387,43 @@ export function slippageForLimit(quoteOut, minimumOut, userBps, minBps = 10) {
 // ---- Presentation -----------------------------------------------------------
 
 /** "Buy TERA with 50 USDG at $0.40 or lower" */
-export function describeOrder(order) {
+export function describeOrder(order, language = "en") {
+  const zh = language === "zh";
   if (order.kind === "stop")
-    return `Stop-loss: sell ${order.amount} ${order.asset} if it falls to $${order.limit}`;
+    return zh
+      ? `止损：若 ${order.asset} 跌至 $${order.limit} 则卖出 ${order.amount} ${order.asset}`
+      : `Stop-loss: sell ${order.amount} ${order.asset} if it falls to $${order.limit}`;
   if (order.kind === "take")
-    return `Take-profit: sell ${order.amount} ${order.asset} if it rises to $${order.limit}`;
-  return order.side === "buy"
-    ? `Buy ${order.asset} with ${order.amount} ${order.pair} at $${order.limit} or lower`
+    return zh
+      ? `止盈：若 ${order.asset} 涨至 $${order.limit} 则卖出 ${order.amount} ${order.asset}`
+      : `Take-profit: sell ${order.amount} ${order.asset} if it rises to $${order.limit}`;
+  if (order.side === "buy")
+    return zh
+      ? `当 ${order.asset} 价格降至 $${order.limit} 或更低时，用 ${order.amount} ${order.pair} 买入 ${order.asset}`
+      : `Buy ${order.asset} with ${order.amount} ${order.pair} at $${order.limit} or lower`;
+  return zh
+    ? `当 ${order.asset} 价格升至 $${order.limit} 或更高时，卖出 ${order.amount} ${order.asset}`
     : `Sell ${order.amount} ${order.asset} at $${order.limit} or higher`;
 }
 
 /** The notification when an order becomes ready. */
-export function readyText(order) {
+export function readyText(order, language = "en") {
+  const zh = language === "zh";
   const now = Number.isFinite(order.readyPrice) ? ` (now $${order.readyPrice})` : "";
+  const nowZh = Number.isFinite(order.readyPrice) ? `（现价 $${order.readyPrice}）` : "";
   if (order.kind === "stop")
-    return `${order.asset} fell to your $${order.limit} stop-loss${now}. Your sell is ready to sign.`;
+    return zh
+      ? `${order.asset} 已跌至你设置的止损价 $${order.limit}${nowZh}。卖出已就绪，可签名。`
+      : `${order.asset} fell to your $${order.limit} stop-loss${now}. Your sell is ready to sign.`;
   if (order.kind === "take")
-    return `${order.asset} reached your $${order.limit} take-profit${now}. Your sell is ready to sign.`;
+    return zh
+      ? `${order.asset} 已达到你设置的止盈价 $${order.limit}${nowZh}。卖出已就绪，可签名。`
+      : `${order.asset} reached your $${order.limit} take-profit${now}. Your sell is ready to sign.`;
   const verb = order.side === "buy" ? "buy" : "sell";
-  const price = Number.isFinite(order.readyPrice) ? ` (now $${order.readyPrice})` : "";
-  return `${order.asset} reached your $${order.limit} target${price}. Your ${verb} is ready to sign.`;
+  const verbZh = order.side === "buy" ? "买入" : "卖出";
+  return zh
+    ? `${order.asset} 已达到你设置的目标价 $${order.limit}${nowZh}。${verbZh}已就绪，可签名。`
+    : `${order.asset} reached your $${order.limit} target${now}. Your ${verb} is ready to sign.`;
 }
 
 /** Orders for a list the owner scans: ready, then open, then finished, newest first within each. */

@@ -1982,7 +1982,7 @@ function Wallet() {
     if (!result.changed) return;
     void store({ ...dataRef.current, limitOrders: result.orders }).catch(() => {});
     for (const order of result.ready) {
-      const body = limitCore.readyText(order);
+      const body = limitCore.readyText(order, language);
       const title =
         order.kind === "stop"
           ? t("Stop-loss reached", "已触及止损")
@@ -2349,11 +2349,11 @@ function Wallet() {
         evaluated.status === "ready"
           ? t(
               `${limitCore.describeOrder(evaluated)}. The price is already there, so it's ready to sign now.`,
-              `${limitCore.describeOrder(evaluated)}。价格已达到，可立即签名。`,
+              `${limitCore.describeOrder(evaluated, "zh")}。价格已达到，可立即签名。`,
             )
           : t(
               `${limitCore.describeOrder(evaluated)}. You'll be told when the price gets there, and you sign it then.`,
-              `${limitCore.describeOrder(evaluated)}。价格到达时会通知你，届时由你签名。`,
+              `${limitCore.describeOrder(evaluated, "zh")}。价格到达时会通知你，届时由你签名。`,
             ),
       tone: "success",
     });
@@ -2547,7 +2547,7 @@ function Wallet() {
       title: t("Holding protected", "已设置保护"),
       body: t(
         `${result.created.map((order: any) => limitCore.describeOrder(order)).join(". ")}.${result.created.length === 2 ? " Whichever is reached first cancels the other." : ""} You'll be told when one is ready, and you sign the sale.`,
-        `${result.created.map((order: any) => limitCore.describeOrder(order)).join("。")}。${result.created.length === 2 ? "先触发的一方会自动取消另一方。" : ""}就绪时会通知你，卖出由你签名。`,
+        `${result.created.map((order: any) => limitCore.describeOrder(order, "zh")).join("。")}。${result.created.length === 2 ? "先触发的一方会自动取消另一方。" : ""}就绪时会通知你，卖出由你签名。`,
       ),
       tone: "success",
     });
@@ -8440,7 +8440,7 @@ function Wallet() {
                         `${readyOrders.length} 个限价单已就绪`,
                       )}
                     </Text>
-                    <Text style={s.small}>{limitCore.readyText(readyOrders[0])}</Text>
+                    <Text style={s.small}>{limitCore.readyText(readyOrders[0], language)}</Text>
                   </View>
                   <Icon name="chevron-right" size={18} color={colors.lime} />
                 </Pressable>
@@ -12051,7 +12051,7 @@ function Wallet() {
                       {t(...statusLabel[order.status])}
                     </Text>
                   </View>
-                  <Text style={s.small}>{limitCore.describeOrder(order)}</Text>
+                  <Text style={s.small}>{limitCore.describeOrder(order, language)}</Text>
                   <Row
                     label={order.kind === "stop" ? t("Stop", "止损价") : t("Target", "目标价")}
                     value={`$${order.limit} ${order.side === "buy" || order.kind === "stop" ? t("or lower", "或更低") : t("or higher", "或更高")}`}

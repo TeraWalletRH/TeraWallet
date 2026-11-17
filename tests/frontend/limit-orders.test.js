@@ -43,6 +43,16 @@ test("an order is read from the form, with its pair and expiry", () => {
     describeOrder(order({ side: "sell", amount: "2" })),
     "Sell 2 SPCX at $400 or higher",
   );
+  // Every description reads in Chinese too, not just English -- the rest of
+  // the screen it sits on already does.
+  assert.equal(
+    describeOrder(buy, "zh"),
+    "当 SPCX 价格降至 $400 或更低时，用 100 USDG 买入 SPCX",
+  );
+  assert.equal(
+    describeOrder(order({ side: "sell", amount: "2" }), "zh"),
+    "当 SPCX 价格升至 $400 或更高时，卖出 2 SPCX",
+  );
   for (const [bad, reason] of [
     [{ side: "hold" }, /buy or sell/],
     [{ asset: "USDG" }, /other than USDG/],
@@ -84,6 +94,7 @@ test("once touched an order stays ready, and expiry ends it either way", () => {
   );
   assert.equal(result.orders[0].readyPrice, 395);
   assert.match(readyText(result.orders[0]), /SPCX reached your \$400 target \(now \$395\)/);
+  assert.match(readyText(result.orders[0], "zh"), /SPCX 已达到你设置的目标价 \$400（现价 \$395）/);
   list = result.orders;
   // The price goes back up: still ready, and not announced again.
   result = evaluate(list, { SPCX: 450, TERA: 0.5 }, NOW + 3000);
@@ -269,6 +280,7 @@ test("whichever linked order becomes ready first cancels the other", async () =>
     ["stop"],
   );
   assert.match(readyText(result.ready[0]), /TERA fell to your \$0.36 stop-loss \(now \$0.35\)/);
+  assert.match(readyText(result.ready[0], "zh"), /TERA 已跌至你设置的止损价 \$0.36（现价 \$0.35）/);
   assert.deepEqual(
     result.cancelledLinked.map((o) => o.kind),
     ["take"],
