@@ -8714,6 +8714,11 @@ function Wallet() {
       );
     }
     if (page === "tag") {
+      // Only an owned tag is actually claimed and verified -- a name typed
+      // into the field below, or the "astra" placeholder shown before
+      // anything's typed, is still just a preview of the card, not proof of
+      // ownership, and must not be labelled or shared as though it were.
+      const tagClaimed = Boolean(myTag);
       const activeTag = myTag ? String(myTag).replace(/^@+/, "") : (claimInput && tags.isTag(claimInput) ? claimInput.replace(/^@+/, "") : "astra");
       let cardData = {
         handle: "@" + activeTag,
@@ -8770,21 +8775,29 @@ function Wallet() {
               </View>
               <View
                 style={{
-                  backgroundColor: "#00c85322",
-                  borderColor: colors.green,
+                  backgroundColor: tagClaimed ? "#00c85322" : colors.wash,
+                  borderColor: tagClaimed ? colors.green : colors.line,
                   borderWidth: 1,
                   borderRadius: 999,
                   paddingHorizontal: 8,
                   paddingVertical: 3,
                 }}
               >
-                <Text style={{ color: colors.lime, fontWeight: "700", fontSize: 10 }}>✓ VERIFIED TAG</Text>
+                <Text
+                  style={{
+                    color: tagClaimed ? colors.lime : colors.muted,
+                    fontWeight: "700",
+                    fontSize: 10,
+                  }}
+                >
+                  {tagClaimed ? "✓ VERIFIED TAG" : t("PREVIEW", "预览")}
+                </Text>
               </View>
             </View>
 
             <View style={{ marginVertical: 8 }}>
               <Text style={{ color: colors.faint, fontSize: 10, fontWeight: "700", letterSpacing: 0.8 }}>
-                CLAIMED IDENTITY
+                {tagClaimed ? "CLAIMED IDENTITY" : t("NOT CLAIMED YET", "尚未领取")}
               </Text>
               <Text style={{ color: "#ffffff", fontSize: 32, fontWeight: "800", marginTop: 2 }}>
                 {cardData.handle}
@@ -8795,53 +8808,57 @@ function Wallet() {
             </View>
 
             <Text style={{ color: colors.muted, fontSize: 11 }}>
-              {t("Scan or send directly via @tags on Robinhood Chain", "在 Robinhood Chain 上通过 @标签 直接扫码或付款")}
+              {tagClaimed
+                ? t("Scan or send directly via @tags on Robinhood Chain", "在 Robinhood Chain 上通过 @标签 直接扫码或付款")
+                : t("This is a preview. Claim a tag below to get your own card.", "这只是预览。请在下方领取标签以获取专属卡片。")}
             </Text>
 
-            <View style={{ flexDirection: "row", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => void Linking.openURL(cardData.intentUrl)}
-                style={{
-                  backgroundColor: "#000",
-                  borderColor: colors.line,
-                  borderWidth: 1,
-                  borderRadius: 12,
-                  paddingHorizontal: 14,
-                  paddingVertical: 9,
-                  flexDirection: "row",
-                  alignItems: "center",
-                  gap: 6,
-                }}
-              >
-                <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>Share to X ↗</Text>
-              </Pressable>
+            {tagClaimed && (
+              <View style={{ flexDirection: "row", gap: 10, marginTop: 4, flexWrap: "wrap" }}>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => void Linking.openURL(cardData.intentUrl)}
+                  style={{
+                    backgroundColor: "#000",
+                    borderColor: colors.line,
+                    borderWidth: 1,
+                    borderRadius: 12,
+                    paddingHorizontal: 14,
+                    paddingVertical: 9,
+                    flexDirection: "row",
+                    alignItems: "center",
+                    gap: 6,
+                  }}
+                >
+                  <Text style={{ color: "#fff", fontWeight: "700", fontSize: 12 }}>Share to X ↗</Text>
+                </Pressable>
 
-              <Pressable
-                accessibilityRole="button"
-                onPress={() =>
-                  void Clipboard.setStringAsync(cardData.paymentUrl).then(() =>
-                    setNotice({
-                      title: t("Payment link copied", "收款链接已复制"),
-                      body: cardData.paymentUrl,
-                      tone: "success",
-                    }),
-                  )
-                }
-                style={{
-                  backgroundColor: colors.tint,
-                  borderColor: colors.green,
-                  borderWidth: 1,
-                  borderRadius: 12,
-                  paddingHorizontal: 14,
-                  paddingVertical: 9,
-                }}
-              >
-                <Text style={{ color: colors.green, fontWeight: "700", fontSize: 12 }}>
-                  {t("Copy payment link", "复制收款链接")}
-                </Text>
-              </Pressable>
-            </View>
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() =>
+                    void Clipboard.setStringAsync(cardData.paymentUrl).then(() =>
+                      setNotice({
+                        title: t("Payment link copied", "收款链接已复制"),
+                        body: cardData.paymentUrl,
+                        tone: "success",
+                      }),
+                    )
+                  }
+                  style={{
+                    backgroundColor: colors.tint,
+                    borderColor: colors.green,
+                    borderWidth: 1,
+                    borderRadius: 12,
+                    paddingHorizontal: 14,
+                    paddingVertical: 9,
+                  }}
+                >
+                  <Text style={{ color: colors.green, fontWeight: "700", fontSize: 12 }}>
+                    {t("Copy payment link", "复制收款链接")}
+                  </Text>
+                </Pressable>
+              </View>
+            )}
           </View>
 
           <Field
