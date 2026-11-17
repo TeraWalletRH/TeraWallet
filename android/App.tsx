@@ -9017,6 +9017,26 @@ function Wallet() {
               tone: "success",
             });
           })}
+          {action(
+            "Share address",
+            "分享地址",
+            async () => {
+              const outcome = await shareText({
+                title: t("Tera Wallet Address", "Tera 钱包地址"),
+                text: owner,
+              });
+              if (outcome === "copied")
+                setNotice({
+                  title: t("Address copied", "地址已复制"),
+                  body: t(
+                    "No share sheet here, so your Robinhood Chain wallet address went to your clipboard instead.",
+                    "此处没有分享菜单，你的 Robinhood Chain 钱包地址已改为复制到剪贴板。",
+                  ),
+                  tone: "success",
+                });
+            },
+            false,
+          )}
         </>
       );
     if (page === "private") {
