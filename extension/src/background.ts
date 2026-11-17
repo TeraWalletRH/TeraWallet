@@ -188,7 +188,7 @@ const tokenMap = (assets: Asset[]) =>
       .filter((a) => a.address !== NATIVE)
       .map((a) => [a.address, { symbol: a.symbol, decimals: a.decimals }]),
   );
-const tokens = async () => tokenMap(await registry());
+const tokens = async (address?: string) => tokenMap(await registry(address));
 
 /** What a contract says about itself as a token; each null if it doesn't answer. */
 async function tokenFacts(address: string) {
@@ -351,7 +351,7 @@ async function handle(origin: string, request: { method: string; params?: unknow
       const named = readWatchAsset(params);
       if (named.error) throw named.error;
       const token = named.token!;
-      const listed = await registry();
+      const listed = await registry(siteWallet?.address);
       // Already shown: nothing to ask.
       if (listed.some((asset) => asset.address === token.address)) return true;
       cooling(origin);
@@ -368,14 +368,19 @@ async function handle(origin: string, request: { method: string; params?: unknow
         preparing.delete(origin);
       }
       if (checked.error) throw checked.error;
-      return ask("asset", origin, { asset: checked.asset!, warnings: checked.warnings! });
+      return ask(
+        "asset",
+        origin,
+        { asset: checked.asset!, warnings: checked.warnings! },
+        siteWallet?.address,
+      );
     }
     case "signing": {
       if (!SIGNABLE.has(method)) throw refusal(method);
       const request = signRequest(method, params, {
         origin,
         accounts: accountsFor(sites, origin),
-        tokens: await tokens(),
+        tokens: await tokens(siteWallet?.address),
         spenders: SPENDERS,
       });
       if ("error" in request) throw request.error;
@@ -1039,10 +1044,15 @@ async function page(message: PageMessage) {
       const id = String(message.id);
       const approval = approvals.get(id);
       if (!approval || approval.kind !== "asset" || !approval.request) return { expired: true };
+      // The wallet the site connected to is the one that gets the token --
+      // not whichever wallet the popup happens to be showing right now.
+      if (!approval.address) return { error: "No wallet to add this token to." };
       const { asset } = approval.request as AssetRequest;
       try {
-        const { addedTokens } = await chrome.storage.local.get("addedTokens");
-        await chrome.storage.local.set({ addedTokens: addToken(addedTokens, asset) });
+        await setAddedTokensFor(
+          approval.address,
+          addToken(await addedTokensFor(approval.address), asset),
+        );
       } catch (error) {
         return { error: String((error as Error).message || error) };
       }
@@ -1050,10 +1060,12 @@ async function page(message: PageMessage) {
       return { ok: true };
     }
     case "token:remove": {
-      const { addedTokens } = await chrome.storage.local.get("addedTokens");
-      await chrome.storage.local.set({
-        addedTokens: removeToken(addedTokens, String(message.address ?? "")),
-      });
+      const { vault } = await load();
+      if (!vault) return { error: "There's no wallet in this browser yet." };
+      await setAddedTokensFor(
+        vault.address,
+        removeToken(await addedTokensFor(vault.address), String(message.address ?? "")),
+      );
       return { ok: true };
     }
     case "approval:reject":
@@ -1359,14 +1371,34 @@ async function api(path: string, body?: unknown) {
 
 const HOUR = 3_600_000;
 
-/**
- * The assets the wallet lists: its own, then the registry's (refreshed hourly,
- * kept if Tera is down), then the tokens the owner added at sites' request.
- */
-async function registry(): Promise<Asset[]> {
-  const listed = await tera();
+/** Added tokens, kept one list per wallet (stored as { [address]: Asset[] }). */
+export async function addedTokensFor(address?: string): Promise<unknown[]> {
+  if (!address) return [];
   const { addedTokens } = await chrome.storage.local.get("addedTokens");
-  const added = (cleanAdded(addedTokens) as Asset[]).filter(
+  const byWallet = addedTokens as Record<string, unknown> | undefined;
+  const mine = byWallet?.[address.toLowerCase()];
+  return Array.isArray(mine) ? mine : [];
+}
+export async function setAddedTokensFor(address: string, list: unknown[]) {
+  const { addedTokens } = await chrome.storage.local.get("addedTokens");
+  const byWallet = (addedTokens && typeof addedTokens === "object" ? addedTokens : {}) as Record<
+    string,
+    unknown
+  >;
+  await chrome.storage.local.set({
+    addedTokens: { ...byWallet, [address.toLowerCase()]: list },
+  });
+}
+
+/**
+ * The assets `address`'s wallet lists: Tera's own (refreshed hourly, kept if
+ * Tera is down), then the tokens that wallet's owner added at a site's
+ * request -- each wallet keeps its own, the same way its signatures and
+ * sent transactions already do.
+ */
+export async function registry(address?: string): Promise<Asset[]> {
+  const listed = await tera();
+  const added = (cleanAdded(await addedTokensFor(address)) as Asset[]).filter(
     (token) => !listed.some((asset) => asset.address === token.address),
   );
   return [...listed, ...added];
@@ -1421,7 +1453,7 @@ async function balances() {
   const { vault } = await load();
   if (!vault) return { error: "There's no wallet in this browser yet." };
   const owner = vault.address;
-  const assets = await registry();
+  const assets = await registry(owner);
   const [amounts, priced, block, tip] = await Promise.all([
     Promise.all(assets.map((asset) => balanceOf(asset, owner))),
     prices(),
@@ -1446,7 +1478,7 @@ async function walletSend(message: PageMessage) {
   const { vault } = await load();
   if (!vault) return { error: "There's no wallet in this browser yet." };
   const wanted = String(message.asset ?? "").toLowerCase();
-  const asset = (await registry()).find((a) => a.address === wanted);
+  const asset = (await registry(vault.address)).find((a) => a.address === wanted);
   if (!asset) return { error: "Pick an asset to send." };
   const recipient = checkRecipient(message.to, { owner: vault.address, asset });
   if (recipient.error) return { error: recipient.error };
@@ -1493,7 +1525,7 @@ const units = (text: unknown, decimals: number) => toUnits(text, decimals);
 
 /** Ask Tera for a swap, check it on this device, and describe it. */
 async function prepareSwap(owner: string, params: SwapRequest["params"]): Promise<SwapRequest> {
-  const assets = await registry();
+  const assets = await registry(owner);
   const asset = tradable(assets.filter((a) => !a.added)).find(
     (a: Asset) => a.address === params.asset,
   );
@@ -1704,7 +1736,7 @@ async function staking() {
       api("/api/staking/config").catch(() => null),
     ]);
     const epoch = activeEpoch(epochs.epochs);
-    const tera = (await registry()).find((a) => a.symbol === "TERA");
+    const tera = (await registry(owner)).find((a) => a.symbol === "TERA");
     return {
       positions: positions.positions ?? [],
       locks: locks.locks ?? [],
@@ -1779,7 +1811,7 @@ async function walletStake(message: PageMessage) {
     ]);
     if (!config?.poolAddress || !config?.tokenAddress)
       return { error: "Staking is unavailable right now." };
-    const tera = (await registry()).find(
+    const tera = (await registry(owner)).find(
       (a) => a.address === String(config.tokenAddress).toLowerCase(),
     );
     if (!tera) return { error: "TERA isn't in Tera's asset list right now." };
