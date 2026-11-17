@@ -11147,9 +11147,11 @@ function Wallet() {
                     ? t("Amount exceeds your on-chain balance", "金额超过链上余额")
                     : `${t("Available:", "可用:")} ${
                         balance?.[selectedSource.symbol]
-                          ? formatUnits(
-                              BigInt(balance[selectedSource.symbol]),
-                              selectedSource.decimals,
+                          ? shortAmount(
+                              formatUnits(
+                                BigInt(balance[selectedSource.symbol]),
+                                selectedSource.decimals,
+                              ),
                             )
                           : "0"
                       } ${selectedSource.symbol}`}
