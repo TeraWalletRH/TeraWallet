@@ -14945,8 +14945,8 @@ function Wallet() {
               {contactQuery
                 ? t("No contact matches that search.", "没有匹配的联系人。")
                 : t(
-                    "No saved addresses yet. After you send to an address, you can save it here.",
-                    "还没有保存的地址。向某个地址发送后即可在此保存。",
+                    "No saved addresses yet. Tap + to add one directly, or save one after you send to it.",
+                    "还没有保存的地址。点击 + 可直接添加，或在发送后保存该地址。",
                   )}
             </Text>
           )}
