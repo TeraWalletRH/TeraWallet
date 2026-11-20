@@ -18081,8 +18081,11 @@ function Wallet() {
                     style={[s.panel, { flexDirection: "row", alignItems: "center", gap: 12 }]}
                   >
                     <TokenIcon symbol={a.symbol} size={32} />
-                    <Text style={[s.text, { flex: 1, fontWeight: "600" }]}>{a.symbol}</Text>
-                    {assetSymbol === a.symbol && (
+                    <View style={{ flex: 1 }}>
+                      <Text style={[s.text, { fontWeight: "600" }]}>{a.name || a.symbol}</Text>
+                      <Text style={s.small}>{a.symbol}</Text>
+                    </View>
+                    {assetSymbol === a.symbol && trade === "BUY" && (
                       <Icon name="check" size={20} color={colors.green} />
                     )}
                   </Pressable>
