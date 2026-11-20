@@ -54,9 +54,9 @@ export const payAssetFor = (asset) => (asset === "TERA" ? "ETH" : "USDG");
 
 /** How often a schedule repeats. Days between payments, or monthly by date. */
 export const FREQUENCIES = {
-  weekly: { label: "Every week", days: 7 },
-  biweekly: { label: "Every 2 weeks", days: 14 },
-  monthly: { label: "Every month", days: 0 },
+  weekly: { label: "Every week", labelZh: "每周", days: 7 },
+  biweekly: { label: "Every 2 weeks", labelZh: "每两周", days: 14 },
+  monthly: { label: "Every month", labelZh: "每月", days: 0 },
 };
 
 const ADDRESS = /^0x[0-9a-f]{40}$/;
@@ -185,14 +185,20 @@ const ORDINAL = (n) => {
   return `${n}${{ 1: "st", 2: "nd", 3: "rd" }[n % 10] || "th"}`;
 };
 const WEEKDAYS = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+const WEEKDAYS_ZH = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
 
 /** "Every month on the 1st", "Every 2 weeks on Friday". */
-export function describeFrequency(schedule) {
+export function describeFrequency(schedule, language = "en") {
   const start = parseDay(schedule.start);
   const frequency = FREQUENCIES[schedule.frequency];
   if (!start || !frequency) return "";
-  if (!frequency.days) return `${frequency.label} on the ${ORDINAL(start.day)}`;
-  return `${frequency.label} on ${WEEKDAYS[new Date(toUtc(start)).getUTCDay()]}`;
+  const zh = language === "zh";
+  if (!frequency.days)
+    return zh ? `${frequency.labelZh}${start.day}日` : `${frequency.label} on the ${ORDINAL(start.day)}`;
+  const weekday = new Date(toUtc(start)).getUTCDay();
+  return zh
+    ? `${frequency.labelZh}的${WEEKDAYS_ZH[weekday]}`
+    : `${frequency.label} on ${WEEKDAYS[weekday]}`;
 }
 
 /** A label with invisible characters removed and spacing collapsed. */
@@ -508,10 +514,18 @@ export function buyProgress(schedule) {
 }
 
 /** One line for a reminder: "Rent: 500 USDG to @landlord is due today." */
-export function reminderText(due, on, recipientName = "") {
+export function reminderText(due, on, recipientName = "", language = "en") {
   const { schedule, date, count } = due;
   const who = recipientName || (schedule.tag ? `@${schedule.tag}` : short(schedule.recipient));
   const days = daysUntil(date, on);
+  const zh = language === "zh";
+  if (zh) {
+    const when = days === 0 ? "今天到期" : days === -1 ? "昨天已到期" : `已于 ${date} 到期`;
+    const more = count > 1 ? `，另有 ${count - 1} 笔也已到期` : "";
+    return schedule.kind === "buy"
+      ? `${schedule.label}：用 ${schedule.amount} ${schedule.payAsset} 买入 ${schedule.asset}，${when}${more}。`
+      : `${schedule.label}：向 ${who} 支付 ${schedule.amount} ${schedule.asset}，${when}${more}。`;
+  }
   const when =
     days === 0 ? "is due today" : days === -1 ? "was due yesterday" : `was due on ${date}`;
   const more =

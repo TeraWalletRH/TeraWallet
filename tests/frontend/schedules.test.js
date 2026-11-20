@@ -89,6 +89,11 @@ test("weekly and two-weekly payments keep their weekday", () => {
   assert.equal(describeFrequency(make({ start: "2026-11-01" })), "Every month on the 1st");
   assert.equal(describeFrequency(make({ start: "2026-11-12" })), "Every month on the 12th");
   assert.equal(describeFrequency(make({ start: "2026-11-22" })), "Every month on the 22nd");
+  // Every bit of this reads in Chinese too, not just English -- the rest of
+  // the screen it sits on already does.
+  assert.equal(describeFrequency(biweekly, "zh"), "每两周的周五");
+  assert.equal(describeFrequency(make({ start: "2026-11-01" }), "zh"), "每月1日");
+  assert.equal(describeFrequency(make({ start: "2026-11-22" }), "zh"), "每月22日");
 });
 
 test("the form refuses what cannot be paid, and says why", () => {
@@ -261,6 +266,8 @@ test("reminders name the payee and when it fell due", () => {
   const [due] = duePayments([s], "2026-10-05");
   assert.equal(reminderText(due, "2026-10-05"), "Rent: 500 USDG to @landlord is due today.");
   assert.equal(reminderText(due, "2026-10-06"), "Rent: 500 USDG to @landlord was due yesterday.");
+  assert.equal(reminderText(due, "2026-10-05", "", "zh"), "Rent：向 @landlord 支付 500 USDG，今天到期。");
+  assert.equal(reminderText(due, "2026-10-06", "", "zh"), "Rent：向 @landlord 支付 500 USDG，昨天已到期。");
   const [plain] = duePayments([make({ start: "2026-10-05" })], "2026-10-05");
   assert.match(reminderText(plain, "2026-10-05"), /to 0xaaaa…aaaa is due today/);
   assert.match(reminderText(plain, "2026-10-05", "Mum"), /to Mum is due today/);
@@ -331,6 +338,7 @@ test("buys add up exactly, and a receipt replaces the quoted amount once", () =>
   const id = list[0].id;
   const [due] = duePayments(list, "2026-10-05");
   assert.equal(reminderText(due, "2026-10-05"), "DCA: buy SPCX with 50 USDG is due today.");
+  assert.equal(reminderText(due, "2026-10-05", "", "zh"), "DCA：用 50 USDG 买入 SPCX，今天到期。");
 
   list = settle(list, id, "2026-10-05", {
     status: "paid",

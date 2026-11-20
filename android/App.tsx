@@ -2234,7 +2234,7 @@ function Wallet() {
         due.schedule.kind === "buy"
           ? t("Recurring buy due", "定期买入到期")
           : t("Scheduled payment due", "定期付款到期"),
-        schedulesCore.reminderText(due, scheduleToday, scheduleName(due.schedule)),
+        schedulesCore.reminderText(due, scheduleToday, scheduleName(due.schedule), language),
         key,
         () => setPage("scheduled"),
       );
@@ -2305,7 +2305,7 @@ function Wallet() {
           : t("Payment scheduled", "已设置定期付款"),
       body: t(
         `${result.schedule.label}: ${schedulesCore.describeFrequency(result.schedule).toLowerCase()}, first on ${result.schedule.start}. You'll be reminded when it's due, and you sign each payment.`,
-        `${result.schedule.label}：首次付款日期 ${result.schedule.start}。到期时会提醒你，每笔付款都需你签名。`,
+        `${result.schedule.label}：${schedulesCore.describeFrequency(result.schedule, "zh")}，首次付款日期 ${result.schedule.start}。到期时会提醒你，每笔付款都需你签名。`,
       ),
       tone: "success",
     });
@@ -8524,7 +8524,7 @@ function Wallet() {
                       })()}
                     </Text>
                     <Text style={s.small}>
-                      {schedulesCore.reminderText(dueScheduled[0], scheduleToday, scheduleName(dueScheduled[0].schedule))}
+                      {schedulesCore.reminderText(dueScheduled[0], scheduleToday, scheduleName(dueScheduled[0].schedule), language)}
                     </Text>
                   </View>
                   <Icon name="chevron-right" size={18} color={colors.lime} />
@@ -12802,7 +12802,7 @@ function Wallet() {
                   </View>
                   <Text style={s.small}>
                     {schedule.kind === "buy" ? t("Recurring buy · ", "定期买入 · ") : ""}
-                    {schedulesCore.describeFrequency(schedule)}
+                    {schedulesCore.describeFrequency(schedule, language)}
                   </Text>
                   {schedule.kind === "buy" ? (
                     (() => {
