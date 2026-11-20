@@ -792,6 +792,16 @@ function swapView() {
 
 const tera = (units: string | bigint) => `${formatUnits(units, 18)} TERA`;
 
+// Same wording the main app's own staking screen already uses for the same
+// backend statuses, so a payout reads the same whether it's seen here or there.
+const PAYOUT_STATUS_LABEL: Record<string, string> = {
+  requested: "Requested",
+  signed: "Sending",
+  broadcast: "Sending",
+  confirmed: "Paid",
+  failed: "Failed",
+};
+
 function stakeView() {
   const back = h("button", { class: "link", type: "button", onclick: () => go("home") }, "← Back");
   if (!stakeState) {
@@ -1028,7 +1038,7 @@ function stakeView() {
                 h(
                   "span",
                   { class: "muted small" },
-                  `${p.status} · ${when(Date.parse(p.created_at))}`,
+                  `${PAYOUT_STATUS_LABEL[p.status] || p.status} · ${when(Date.parse(p.created_at))}`,
                 ),
               ),
             ),
