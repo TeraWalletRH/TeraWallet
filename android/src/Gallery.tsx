@@ -184,7 +184,9 @@ export function Gallery({
                   }}
                 >
                   <Text style={[s.small, { textAlign: "center" }]}>
-                    {t("Picture shows on the web wallet.", "图片可在网页版钱包中查看。")}
+                    {uri
+                      ? t("Picture shows on the web wallet.", "图片可在网页版钱包中查看。")
+                      : t("No picture available.", "暂无图片。")}
                   </Text>
                 </View>
               )}
