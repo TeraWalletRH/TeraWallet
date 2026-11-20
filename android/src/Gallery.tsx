@@ -137,7 +137,7 @@ export function Gallery({
           // message that claimed the opposite ("shows on the web wallet").
           const svg =
             Platform.OS !== "web" && /\.svg(?:$|[?#])|^data:image\/svg\+xml/i.test(uri);
-          const label = nft.tokenLabel(token, token.metadata);
+          const label = nft.tokenLabel(token, token.metadata, t("Token", "代币"));
           const isOpen = keyOf(token) === open;
           return (
             <Pressable
@@ -211,7 +211,7 @@ export function Gallery({
       {selected ? (
         <View style={[s.panel, { gap: 14 }]}>
           <Text style={[s.text, { fontWeight: "700" }]}>
-            {t("Send", "发送")} {nft.tokenLabel(selected, selected.metadata)}
+            {t("Send", "发送")} {nft.tokenLabel(selected, selected.metadata, t("Token", "代币"))}
           </Text>
           {selected.metadata?.description ? (
             <Text numberOfLines={3} style={s.small}>

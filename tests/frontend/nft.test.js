@@ -142,3 +142,12 @@ test("review guard refuses changed contract, token, recipient, or value", () => 
   ])
     assert.throws(() => nft.checkTransfer(changed, token, owner, recipient), /does not match/i);
 });
+
+test("tokenLabel's fallback word is the caller's to translate, not baked in", () => {
+  const token = { standard: nft.ERC721, contract, tokenId: "1234" };
+  assert.equal(nft.tokenLabel(token), "Token #1234");
+  assert.equal(nft.tokenLabel(token, null, "代币"), "代币 #1234");
+  // A real name or collection always wins over the fallback either way.
+  assert.equal(nft.tokenLabel(token, { name: "Cool Cat #1" }, "代币"), "Cool Cat #1");
+  assert.equal(nft.tokenLabel({ ...token, collection: "Cool Cats" }, null, "代币"), "Cool Cats #1234");
+});

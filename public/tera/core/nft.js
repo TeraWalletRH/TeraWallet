@@ -605,14 +605,17 @@ export function checkTransfer(tx, token, from, to) {
 }
 
 /**
- * A short, stable label for a token.
+ * A short, stable label for a token. `fallback` names what to call it when
+ * there's no collection name either -- a word the caller supplies so this
+ * module doesn't need to know what language the screen showing it is in.
  * @param {any} token
  * @param {any} [metadata]
+ * @param {string} [fallback]
  */
-export function tokenLabel(token, metadata = null) {
+export function tokenLabel(token, metadata = null, fallback = "Token") {
   const id =
     token.tokenId.length > 12
       ? `${token.tokenId.slice(0, 6)}…${token.tokenId.slice(-4)}`
       : token.tokenId;
-  return metadata?.name || `${token.collection || "Token"} #${id}`;
+  return metadata?.name || `${token.collection || fallback} #${id}`;
 }

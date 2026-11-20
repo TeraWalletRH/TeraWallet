@@ -1,8 +1,8 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-6bbd005213dc",
-  "builtAt": "2026-11-20T14:16:58.717Z",
+  "release": "r-49e1ef991293",
+  "builtAt": "2026-11-20T14:31:45.400Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
@@ -174,8 +174,8 @@
     },
     {
       "path": "core/nft.js",
-      "hash": "sha256-YDquuil9zAiulVDhrDEG3hlf6bTUYugqPMkFZMGSwlA=",
-      "bytes": 23440
+      "hash": "sha256-s8/k7c3awX+uFnQBoF9EYmy6FZLki7+hkPMUpIqq0y4=",
+      "bytes": 23678
     },
     {
       "path": "core/notes.js",
@@ -503,5 +503,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-a70AUhPcCLiM9Gj8hpUmRwQB7UsbleVSAmOu13QhTzY="
+  "filesHash": "sha256-SeHvmRKTScbtO30ZEshZixi46wR3KsDtpZT628TZBK4="
 }
