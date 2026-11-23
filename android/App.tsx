@@ -2084,6 +2084,7 @@ function Wallet() {
       name: watchForm.name,
       tag,
       own: [owner, ...accounts.map((entry) => entry.address)].filter(Boolean),
+      language,
     });
     if (!result.ok) {
       setWatchError(result.reason);
@@ -6790,6 +6791,7 @@ function Wallet() {
       address: sheet.fixed ? sheet.address : contactAddress,
       name: contactName,
       owner,
+      language,
     });
     const saved = result.contact;
     if (!result.ok || !saved) {

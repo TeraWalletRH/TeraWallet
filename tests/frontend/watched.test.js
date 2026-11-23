@@ -44,11 +44,25 @@ test("bad addresses and names are refused with a reason", () => {
   );
 });
 
+test("the same refusals read in Chinese when asked", () => {
+  assert.equal(
+    watch([], { address: "0x123", name: "X", language: "zh" }).reason,
+    "请输入有效的 Robinhood Chain 地址。",
+  );
+  assert.match(
+    watch([], { address: mine, name: "Mine", own: [mine], language: "zh" }).reason,
+    /自己的钱包/,
+  );
+  assert.equal(watch([], { address: cold, name: "", language: "zh" }).reason, "请输入名称。");
+});
+
 test("two watched wallets cannot share a name; watching again renames", () => {
   let list = watch([], { address: cold, name: "Treasury", now: 1 }).list;
   const clash = watch(list, { address: other, name: " treasury " });
   assert.equal(clash.ok, false);
   assert.match(clash.reason, /already watch a wallet called "Treasury"/);
+  const clashZh = watch(list, { address: other, name: " treasury ", language: "zh" });
+  assert.match(clashZh.reason, /名为"Treasury"/);
   const renamed = watch(list, { address: cold, name: "Company treasury", now: 9 });
   assert.ok(renamed.ok);
   assert.equal(renamed.list.length, 1);
@@ -68,6 +82,10 @@ test("the list is capped and cleaned on read", () => {
   const full = watch(list, { address: other, name: "One more" });
   assert.equal(full.ok, false);
   assert.match(full.reason, /up to 20/);
+  assert.match(
+    watch(list, { address: other, name: "One more", language: "zh" }).reason,
+    /最多可观察 20 个钱包/,
+  );
   assert.deepEqual(
     cleanWatched([
       { address: cold, name: "Ok", tag: "astra", addedAt: 3 },

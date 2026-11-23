@@ -46,6 +46,16 @@ test("invisible and direction-changing characters are removed", () => {
   assert.equal(parseName("​​").ok, false);
 });
 
+test("a refused name reads in Chinese too, not just English", () => {
+  assert.equal(parseName("   ", "zh").reason, "请输入名称。");
+  assert.equal(parseName("@astra", "zh").reason, "名称不能以 @ 开头，这是 Tera 标签的书写方式。");
+  assert.equal(
+    parseName("pay 0xABCD here", "zh").reason,
+    "名称不能包含地址，地址会在旁边显示。",
+  );
+  assert.match(parseName("x".repeat(LIMITS.maxLength + 1), "zh").reason, /个字符/);
+});
+
 test("saving stores the lowercase address and the name", () => {
   const result = saveContact([], { address: MUM, name: "Mum", owner: OWNER, now: 5 });
   assert.equal(result.ok, true);
@@ -71,11 +81,22 @@ test("two addresses may not share a name, ignoring case and spacing", () => {
   assert.equal(clash.ok, false);
   assert.match(clash.reason, /already the name of 0x5b27…9f05/);
   assert.equal(clash.book.length, 1);
+  const clashZh = saveContact(book, { address: SHOP, name: " m U m ", now: 2, language: "zh" });
+  assert.match(clashZh.reason, /0x5b27…9f05 的名称/);
 });
 
 test("the owner's own wallet and a malformed address are refused", () => {
   assert.equal(saveContact([], { address: OWNER, name: "Me", owner: OWNER }).ok, false);
   assert.equal(saveContact([], { address: "0x123", name: "Short" }).ok, false);
+  // Same refusals, in Chinese when asked.
+  assert.equal(
+    saveContact([], { address: OWNER, name: "Me", owner: OWNER, language: "zh" }).reason,
+    "这是您自己的钱包，无需设置联系人名称。",
+  );
+  assert.equal(
+    saveContact([], { address: "0x123", name: "Short", language: "zh" }).reason,
+    "请输入有效地址。",
+  );
 });
 
 test("the book passed in is never changed", () => {

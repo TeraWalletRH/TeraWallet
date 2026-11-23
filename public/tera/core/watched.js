@@ -52,27 +52,41 @@ export function cleanWatched(list) {
  * owner's, and watching one would show the same money twice.
  *
  * @param {any[] | undefined} list
- * @param {{ address: string, name: string, tag?: string, own?: string[], now?: number }} input
+ * @param {{ address: string, name: string, tag?: string, own?: string[], now?: number, language?: string }} input
  * @returns {{ ok: boolean, list: any[], entry: any, reason: string }}
  */
-export function watch(list, { address, name, tag = "", own = [], now = Date.now() }) {
+export function watch(list, { address, name, tag = "", own = [], now = Date.now(), language = "en" }) {
+  const zh = language === "zh";
   const current = cleanWatched(list);
   const fail = (reason) => ({ ok: false, list: current, entry: null, reason });
   const target = normaliseAddress(address);
-  if (!target) return fail("Enter a valid Robinhood Chain address.");
+  if (!target)
+    return fail(zh ? "请输入有效的 Robinhood Chain 地址。" : "Enter a valid Robinhood Chain address.");
   if (own.some((mine) => normaliseAddress(mine) === target))
-    return fail("This is one of your own wallets. It is already in your wallet list.");
-  const parsed = parseName(name);
+    return fail(
+      zh
+        ? "这是您自己的钱包之一，已在您的钱包列表中。"
+        : "This is one of your own wallets. It is already in your wallet list.",
+    );
+  const parsed = parseName(name, language);
   if (!parsed.ok) return fail(parsed.reason);
   const key = parsed.name.toLowerCase().replace(/\s+/g, "");
   const clash = current.find(
     (entry) => entry.address !== target && entry.name.toLowerCase().replace(/\s+/g, "") === key,
   );
   if (clash)
-    return fail(`You already watch a wallet called "${clash.name}". Use a different name.`);
+    return fail(
+      zh
+        ? `您已有一个名为"${clash.name}"的观察钱包，请使用其他名称。`
+        : `You already watch a wallet called "${clash.name}". Use a different name.`,
+    );
   const existing = current.find((entry) => entry.address === target);
   if (!existing && current.length >= LIMITS.maxWatched)
-    return fail(`You can watch up to ${LIMITS.maxWatched} wallets. Stop watching one first.`);
+    return fail(
+      zh
+        ? `最多可观察 ${LIMITS.maxWatched} 个钱包，请先停止观察一个。`
+        : `You can watch up to ${LIMITS.maxWatched} wallets. Stop watching one first.`,
+    );
   const entry = {
     address: target,
     name: parsed.name,

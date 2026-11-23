@@ -62,19 +62,23 @@ export const nameKey = (name) =>
  * Returns `{ ok, name, reason }` rather than throwing, because it runs as the
  * owner types. The reason is written to be shown as it is.
  */
-export function parseName(input) {
+export function parseName(input, language = "en") {
+  const zh = language === "zh";
   const name = String(input ?? "")
     .normalize("NFKC")
     .replace(INVISIBLE, "")
     .replace(/\s+/g, " ")
     .trim();
 
-  if (name.length < LIMITS.minLength) return { ok: false, name: "", reason: "Enter a name." };
+  if (name.length < LIMITS.minLength)
+    return { ok: false, name: "", reason: zh ? "请输入名称。" : "Enter a name." };
   if (name.length > LIMITS.maxLength)
     return {
       ok: false,
       name: "",
-      reason: `A name is at most ${LIMITS.maxLength} characters.`,
+      reason: zh
+        ? `名称最多 ${LIMITS.maxLength} 个字符。`
+        : `A name is at most ${LIMITS.maxLength} characters.`,
     };
   if (name.startsWith("@"))
     return {
@@ -82,13 +86,17 @@ export function parseName(input) {
       name: "",
       // A saved name that reads as a tag would claim Tera's register vouched
       // for it. It did not, so the name may not look as if it had.
-      reason: "A name cannot start with @. That is how Tera tags are written.",
+      reason: zh
+        ? "名称不能以 @ 开头，这是 Tera 标签的书写方式。"
+        : "A name cannot start with @. That is how Tera tags are written.",
     };
   if (/0x[0-9a-f]{4,}/i.test(name))
     return {
       ok: false,
       name: "",
-      reason: "A name cannot contain an address. The address is shown beside it anyway.",
+      reason: zh
+        ? "名称不能包含地址，地址会在旁边显示。"
+        : "A name cannot contain an address. The address is shown beside it anyway.",
     };
   return { ok: true, name, reason: "" };
 }
@@ -130,18 +138,27 @@ export const nameFor = (book, address) => contactFor(book, address)?.name ?? "";
  * Returns `{ ok, book, contact, reason }`. The book passed in is not changed.
  * `owner` is the wallet doing the saving: its own address is not a contact.
  */
-export function saveContact(book, { address, name, owner = "", now = Date.now() }) {
+export function saveContact(book, { address, name, owner = "", now = Date.now(), language = "en" }) {
+  const zh = language === "zh";
   const current = cleanBook(book);
   const target = normaliseAddress(address);
-  if (!target) return { ok: false, book: current, contact: null, reason: "Enter a valid address." };
+  if (!target)
+    return {
+      ok: false,
+      book: current,
+      contact: null,
+      reason: zh ? "请输入有效地址。" : "Enter a valid address.",
+    };
   if (target === normaliseAddress(owner))
     return {
       ok: false,
       book: current,
       contact: null,
-      reason: "This is your own wallet. It does not need a contact name.",
+      reason: zh
+        ? "这是您自己的钱包，无需设置联系人名称。"
+        : "This is your own wallet. It does not need a contact name.",
     };
-  const parsed = parseName(name);
+  const parsed = parseName(name, language);
   if (!parsed.ok) return { ok: false, book: current, contact: null, reason: parsed.reason };
 
   const key = nameKey(parsed.name);
@@ -151,7 +168,9 @@ export function saveContact(book, { address, name, owner = "", now = Date.now() 
       ok: false,
       book: current,
       contact: null,
-      reason: `"${clash.name}" is already the name of ${short(clash.address)}. Use a different name.`,
+      reason: zh
+        ? `"${clash.name}" 已是 ${short(clash.address)} 的名称，请使用其他名称。`
+        : `"${clash.name}" is already the name of ${short(clash.address)}. Use a different name.`,
     };
 
   const existing = current.find((entry) => entry.address === target);
@@ -160,7 +179,9 @@ export function saveContact(book, { address, name, owner = "", now = Date.now() 
       ok: false,
       book: current,
       contact: null,
-      reason: `You can save up to ${LIMITS.maxContacts} addresses. Remove one first.`,
+      reason: zh
+        ? `最多可保存 ${LIMITS.maxContacts} 个地址，请先移除一个。`
+        : `You can save up to ${LIMITS.maxContacts} addresses. Remove one first.`,
     };
 
   const contact = { address: target, name: parsed.name, savedAt: existing?.savedAt || now };
