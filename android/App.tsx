@@ -13056,6 +13056,16 @@ function Wallet() {
     if (page === "notifications") {
       const items = data.alerts?.items || [];
       const readAt = notificationsReadAt.current;
+      // Same formatting the Signature Log screen already uses, so a
+      // notification's time reads the same clean way everywhere it shows up.
+      const when = (at: number) =>
+        new Date(at).toLocaleString(data.language === "zh" ? "zh-CN" : undefined, {
+          year: "numeric",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
       const openItem = (hash: string) => {
         const row = allHistory.find((h) => String(h.hash || "").toLowerCase() === hash);
         if (row) {
@@ -13142,7 +13152,7 @@ function Wallet() {
                     <Text style={s.small} numberOfLines={item.warning ? 3 : 1}>
                       {item.body}
                     </Text>
-                    <Text style={s.small}>{new Date(item.at).toLocaleString()}</Text>
+                    <Text style={s.small}>{when(item.at)}</Text>
                   </View>
                   {item.at > readAt ? (
                     <View
