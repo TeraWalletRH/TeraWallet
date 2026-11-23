@@ -10780,7 +10780,7 @@ function Wallet() {
                           {alert.condition === "above" ? "≥" : "≤"} ${Number(alert.targetPrice).toLocaleString()}
                         </Text>
                         <Text style={s.small}>
-                          {new Date(alert.createdAt).toLocaleDateString()}
+                          {new Date(alert.createdAt).toLocaleDateString(language === "zh" ? "zh-CN" : undefined)}
                         </Text>
                       </View>
                       <Pressable
@@ -14749,7 +14749,7 @@ function Wallet() {
                                 {Number(alert.targetPrice).toLocaleString()}
                               </Text>
                               <Text style={s.small}>
-                                {new Date(alert.createdAt).toLocaleDateString()}
+                                {new Date(alert.createdAt).toLocaleDateString(language === "zh" ? "zh-CN" : undefined)}
                                 {contract ? ` · ${t("floor price", "地板价")}` : ""}
                               </Text>
                             </View>
