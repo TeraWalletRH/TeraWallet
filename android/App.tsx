@@ -6411,7 +6411,19 @@ function Wallet() {
                     setActiveAnswerSlot(-1);
                     goSetup(handoffInvite ? "handoff" : "password");
                   } else
-                    setError(t("Those words do not match. Try again.", "单词不匹配，请重试。"));
+                    // setNotice directly, not setError: a plain string set to
+                    // the same value twice in a row (two wrong attempts with
+                    // the exact same stock message) doesn't change React
+                    // state, so the effect that turns `error` into a notice
+                    // never reruns and the second wrong attempt would show
+                    // nothing at all -- worst possible place for that, on
+                    // the one screen meant to reassure a backup was done
+                    // right.
+                    setNotice({
+                      title: t("Couldn’t complete that", "无法完成操作"),
+                      body: t("Those words do not match. Try again.", "单词不匹配，请重试。"),
+                      tone: "error",
+                    });
                 }}
               >
                 {t("Confirm backup", "确认备份")}
@@ -6604,14 +6616,20 @@ function Wallet() {
                 }
                 goSetup("password");
               } catch {
-                setError(
-                  byKey
+                // setNotice directly, same reasoning as the backup-check
+                // screen: a repeated identical setError(msg) doesn't change
+                // React state, so a second wrong attempt in a row would
+                // otherwise show nothing.
+                setNotice({
+                  title: t("Couldn’t complete that", "无法完成操作"),
+                  body: byKey
                     ? t(
                         "That is not a private key. It is 64 characters of 0–9 and a–f, with or without 0x.",
                         "这不是有效的私钥。私钥由 64 个 0–9 和 a–f 字符组成，可带 0x 前缀。",
                       )
                     : t("Check the phrase and word order.", "请检查助记词及顺序。"),
-                );
+                  tone: "error",
+                });
               }
             }}
           >
