@@ -2483,7 +2483,7 @@ function Wallet() {
           ? [t("Guaranteed reward", "保证奖励"), `${tera(reward)} TERA`]
           : [t("Current rate (variable)", "当前利率（浮动）"), apr === null ? "—" : `≈ ${apr.toFixed(2)}% / yr`],
         ...(fixed
-          ? [[t("Unlocks", "解锁时间"), new Date(Date.now() + Number(stakeTerm) * 86_400_000).toLocaleDateString()] as [string, string]]
+          ? [[t("Unlocks", "解锁时间"), new Date(Date.now() + Number(stakeTerm) * 86_400_000).toLocaleDateString(language === "zh" ? "zh-CN" : undefined)] as [string, string]]
           : []),
         [t("Sent to", "发送至"), config.poolAddress],
       ],
@@ -9550,7 +9550,7 @@ function Wallet() {
                   {(stakeData.payouts || []).slice(0, 6).map((payout: any) => (
                     <Row
                       key={payout.id}
-                      label={`${payout.kind === "claim" ? t("Claim", "领取") : t("Unstake", "解押")} · ${new Date(payout.created_at).toLocaleDateString()}`}
+                      label={`${payout.kind === "claim" ? t("Claim", "领取") : t("Unstake", "解押")} · ${new Date(payout.created_at).toLocaleDateString(language === "zh" ? "zh-CN" : undefined)}`}
                       value={`${shownValue(`${tera(BigInt(payout.principal_amount || "0") + BigInt(payout.reward_amount || "0"))} TERA`)} · ${t(...(statusLabel[payout.status] || ["—", "—"]))}`}
                     />
                   ))}
@@ -9667,7 +9667,7 @@ function Wallet() {
                         )
                       : t(
                           `Guaranteed ${tera(reward ?? 0n)} TERA reward. Locked for ${stakeTerm} days with no early unlock; principal and reward are claimable on ${new Date(Date.now() + Number(stakeTerm) * 86_400_000).toLocaleDateString()}.`,
-                          `保证奖励 ${tera(reward ?? 0n)} TERA。锁定 ${stakeTerm} 天，不可提前解锁；本金与奖励于 ${new Date(Date.now() + Number(stakeTerm) * 86_400_000).toLocaleDateString()} 可领取。`,
+                          `保证奖励 ${tera(reward ?? 0n)} TERA。锁定 ${stakeTerm} 天，不可提前解锁；本金与奖励于 ${new Date(Date.now() + Number(stakeTerm) * 86_400_000).toLocaleDateString("zh-CN")} 可领取。`,
                         )}
                   </Text>
                   {action("Review stake", "审核质押", stakeNow)}
