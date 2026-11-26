@@ -12138,14 +12138,18 @@ function Wallet() {
                   {live && (
                     <Row
                       label={t("Expires", "到期")}
-                      value={order.expiresAt ? new Date(order.expiresAt).toLocaleString() : t("Until cancelled", "直到取消")}
+                      value={
+                        order.expiresAt
+                          ? new Date(order.expiresAt).toLocaleString(language === "zh" ? "zh-CN" : undefined)
+                          : t("Until cancelled", "直到取消")
+                      }
                     />
                   )}
                   {order.status === "ready" && order.readyAt ? (
                     <Text style={s.small}>
                       {t(
-                        `Reached ${Number.isFinite(order.readyPrice) ? valueCore.format(order.readyPrice) : "your target"} at ${new Date(order.readyAt).toLocaleString()}.${Number.isFinite(price) && !limitCore.meetsLimit(order, price) ? " The price has since moved away; your limit still applies when you sign." : ""}`,
-                        `于 ${new Date(order.readyAt).toLocaleString()} 达到 ${Number.isFinite(order.readyPrice) ? valueCore.format(order.readyPrice) : "目标价"}。${Number.isFinite(price) && !limitCore.meetsLimit(order, price) ? "此后价格已偏离；签名时仍按你的限价执行。" : ""}`,
+                        `Reached ${Number.isFinite(order.readyPrice) ? valueCore.format(order.readyPrice) : "your target"} at ${new Date(order.readyAt).toLocaleString(language === "zh" ? "zh-CN" : undefined)}.${Number.isFinite(price) && !limitCore.meetsLimit(order, price) ? " The price has since moved away; your limit still applies when you sign." : ""}`,
+                        `于 ${new Date(order.readyAt).toLocaleString(language === "zh" ? "zh-CN" : undefined)} 达到 ${Number.isFinite(order.readyPrice) ? valueCore.format(order.readyPrice) : "目标价"}。${Number.isFinite(price) && !limitCore.meetsLimit(order, price) ? "此后价格已偏离；签名时仍按你的限价执行。" : ""}`,
                       )}
                     </Text>
                   ) : null}
@@ -13842,7 +13846,7 @@ function Wallet() {
                 <Row label={t("Block", "区块")} value={`#${detailSpeed.block.toLocaleString()}`} />
                 <Row
                   label={t("Included", "打包时间")}
-                  value={new Date(detailSpeed.timestamp * 1000).toLocaleString()}
+                  value={new Date(detailSpeed.timestamp * 1000).toLocaleString(language === "zh" ? "zh-CN" : undefined)}
                 />
                 <Row
                   label={t("Network fee", "网络手续费")}
