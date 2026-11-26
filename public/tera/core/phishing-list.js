@@ -18,9 +18,21 @@ export function hostnameOf(origin) {
   }
 }
 
-/** Whether a hostname is on a blocklist. `list` may be an array or a Set. */
+/**
+ * Whether a hostname is on a blocklist. `list` may be an array or a Set.
+ *
+ * Checks the hostname itself and each of its parent domains (but never a
+ * bare TLD on its own) -- phishing operators routinely stand up a fresh
+ * subdomain of an already-blocklisted domain, and the dataset this checks
+ * against (see extension/src/phishing.ts) expects that suffix match.
+ */
 export function isListed(hostname, list) {
   if (!hostname) return false;
   const set = list instanceof Set ? list : new Set(Array.isArray(list) ? list : []);
-  return set.has(hostname);
+  const labels = hostname.split(".");
+  const minLabels = labels.length > 1 ? 2 : 1;
+  for (let i = 0; i <= labels.length - minLabels; i++) {
+    if (set.has(labels.slice(i).join("."))) return true;
+  }
+  return false;
 }

@@ -18,3 +18,11 @@ test("isListed checks a hostname against an array or a Set", () => {
   assert.equal(isListed("evil.io", undefined), false);
   assert.equal(isListed("evil.io", null), false);
 });
+
+test("isListed also catches a subdomain of a listed domain", () => {
+  assert.equal(isListed("sub.evil.io", ["evil.io"]), true);
+  assert.equal(isListed("claim.evil.io", ["evil.io"]), true);
+  assert.equal(isListed("deep.sub.evil.io", ["evil.io"]), true);
+  assert.equal(isListed("evilio.com", ["evil.io"]), false);
+  assert.equal(isListed("io", ["evil.io"]), false);
+});

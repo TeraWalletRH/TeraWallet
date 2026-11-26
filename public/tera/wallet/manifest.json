@@ -1,8 +1,8 @@
 {
   "manifest": "Tera wallet build manifest",
   "version": 1,
-  "release": "r-d249497a1f32",
-  "builtAt": "2026-11-23T06:32:42.994Z",
+  "release": "r-086e615ed8bf",
+  "builtAt": "2026-11-26T22:33:42.232Z",
   "algorithm": "sha256",
   "base": "/tera/",
   "note": "Hashes of the modules this site serves, under /tera/. Paths beginning core/ are the shared feature logic the Android app imports too; wallet/ is what only a browser runs. Verify them yourself against the public source; the page's own check cannot be trusted if the page itself was replaced.",
@@ -209,8 +209,8 @@
     },
     {
       "path": "core/phishing-list.js",
-      "hash": "sha256-Uo0JCuNHhqEBFxLdDmO+Hhkq//Q851QNir+l4z0/Qok=",
-      "bytes": 1048
+      "hash": "sha256-UxVkII11+wEep+ekIIBJYfcj8i5q7xnPHdl5d4kY8Ag=",
+      "bytes": 1538
     },
     {
       "path": "core/phrase-check.js",
@@ -503,5 +503,5 @@
       "bytes": 6930
     }
   ],
-  "filesHash": "sha256-0klJeh8yKdrYpAjz2Bi/B68qc07/1JPQvNejWSSe/e4="
+  "filesHash": "sha256-CG5hXti/zTfNxVtjNyqnFPM3RHAfOlr2BGCrUsfxzCQ="
 }
