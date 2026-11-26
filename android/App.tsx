@@ -8698,7 +8698,7 @@ function Wallet() {
                             {activityTitle(r)}
                           </Text>
                           <Text style={s.small}>
-                            {r.createdAt ? new Date(r.createdAt).toLocaleString() : t("On-chain transaction", "链上交易")}
+                            {r.createdAt ? new Date(r.createdAt).toLocaleString(language === "zh" ? "zh-CN" : undefined) : t("On-chain transaction", "链上交易")}
                           </Text>
                         </View>
                         <View
@@ -12736,7 +12736,7 @@ function Wallet() {
                   <View key={item.hash} style={{ gap: 2 }}>
                     <Text style={[s.text, { color: item.direction === "receive" ? colors.green : colors.ink }]}>{item.title}</Text>
                     <Text style={s.small}>
-                      {new Date(item.timestamp).toLocaleString()}
+                      {new Date(item.timestamp).toLocaleString(language === "zh" ? "zh-CN" : undefined)}
                       {item.status === "failed" ? t(" · failed", " · 失败") : ""}
                     </Text>
                   </View>
@@ -13512,7 +13512,7 @@ function Wallet() {
                   </View>
                   <View style={{ flex: 1, gap: 3 }}>
                     <Text style={s.label} numberOfLines={1}>{activityTitle(r)}</Text>
-                    <Text style={s.small}>{r.createdAt ? new Date(r.createdAt).toLocaleString() : t("On-chain transaction", "链上交易")}</Text>
+                    <Text style={s.small}>{r.createdAt ? new Date(r.createdAt).toLocaleString(language === "zh" ? "zh-CN" : undefined) : t("On-chain transaction", "链上交易")}</Text>
                     {notesCore.noteFor(txNotes, r.hash) ? (
                       <View style={{ flexDirection: "row", alignItems: "center", gap: 5 }}>
                         <Icon name="pencil" size={12} color={colors.muted} />
@@ -13661,7 +13661,7 @@ function Wallet() {
             </View>
             <Text style={[s.label, { fontSize: 17, textAlign: "center" }]}>{activityTitle(r)}</Text>
             {r.createdAt ? (
-              <Text style={s.small}>{new Date(r.createdAt).toLocaleString()}</Text>
+              <Text style={s.small}>{new Date(r.createdAt).toLocaleString(language === "zh" ? "zh-CN" : undefined)}</Text>
             ) : null}
             <View
               style={{
