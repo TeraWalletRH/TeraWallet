@@ -3350,9 +3350,17 @@ function Wallet() {
       setBalancesFailed(false);
     } else setBalancesFailed(true);
     if (balanceResult.status !== "fulfilled")
-      setError(
-        t("Could not refresh balances. Pull again when connected.", "无法刷新余额，请联网后重试。"),
-      );
+      // setNotice directly, not setError: pull-to-refresh repeats this exact
+      // same message on every offline attempt, and a plain string set to the
+      // same value twice in a row doesn't change React state, so the effect
+      // that turns `error` into a notice would only ever fire on the first
+      // pull -- every pull after that would silently do nothing, which looks
+      // like the app simply stopped telling you.
+      setNotice({
+        title: t("Couldn’t complete that", "无法完成操作"),
+        body: t("Could not refresh balances. Pull again when connected.", "无法刷新余额，请联网后重试。"),
+        tone: "error",
+      });
     if (pricesResult.status === "fulfilled") {
       // A found token is priced by the explorer for that exact contract, not
       // by a symbol another token may share.
