@@ -4494,7 +4494,7 @@ function Wallet() {
         t("Auto-Expires", "自动过期"),
         isExp
           ? t("Expired", "已过期")
-          : `${expDate.toLocaleTimeString()} (${Math.max(1, Math.round((expDate.getTime() - Date.now()) / 3600000))}h)`,
+          : `${expDate.toLocaleTimeString(language === "zh" ? "zh-CN" : undefined)} (${Math.max(1, Math.round((expDate.getTime() - Date.now()) / 3600000))}h)`,
       ]);
     }
     const swapSlippage = i.slippageBps ?? slippageCore.DEFAULT_SLIPPAGE_BPS;
@@ -5119,7 +5119,7 @@ function Wallet() {
           t("Minimum received", "最低收到"),
           `${formatUnits(BigInt(quote.minimumAmountOut), output.decimals)} ${output.symbol}`,
         ],
-        [t("Expires", "到期时间"), new Date(quote.expiresAt).toLocaleTimeString()],
+        [t("Expires", "到期时间"), new Date(quote.expiresAt).toLocaleTimeString(language === "zh" ? "zh-CN" : undefined)],
       ],
       steps: [{ to: tx.to, data: tx.data, value: BigInt(tx.value).toString(), chainId: chain.id }],
       verify: () => {
@@ -5188,7 +5188,7 @@ function Wallet() {
           t("Minimum received", "最低收到"),
           `${formatUnits(BigInt(quote.minimumAmountOut), output.decimals)} ${output.symbol}`,
         ],
-        [t("Expires", "到期时间"), new Date(quote.expiresAt).toLocaleTimeString()],
+        [t("Expires", "到期时间"), new Date(quote.expiresAt).toLocaleTimeString(language === "zh" ? "zh-CN" : undefined)],
       ],
     });
   }
@@ -7149,8 +7149,8 @@ function Wallet() {
                       </View>
                       <Text style={[s.small, { color: colors.muted }]}>
                         {t(
-                          `Window: 24h · ${new Date(d.expiresAt).toLocaleTimeString()}`,
-                          `窗口: 24小时 · ${new Date(d.expiresAt).toLocaleTimeString()}`,
+                          `Window: 24h · ${new Date(d.expiresAt).toLocaleTimeString(language === "zh" ? "zh-CN" : undefined)}`,
+                          `窗口: 24小时 · ${new Date(d.expiresAt).toLocaleTimeString(language === "zh" ? "zh-CN" : undefined)}`,
                         )}
                       </Text>
                     </View>
@@ -11721,7 +11721,7 @@ function Wallet() {
             </Text>
             {r ? (
               <Text style={s.small}>
-                {t(`Checked ${new Date(r.at).toLocaleTimeString()}`, `检测于 ${new Date(r.at).toLocaleTimeString()}`)}
+                {t(`Checked ${new Date(r.at).toLocaleTimeString(language === "zh" ? "zh-CN" : undefined)}`, `检测于 ${new Date(r.at).toLocaleTimeString(language === "zh" ? "zh-CN" : undefined)}`)}
               </Text>
             ) : null}
           </View>
